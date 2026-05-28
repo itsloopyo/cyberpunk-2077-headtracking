@@ -1,0 +1,77 @@
+[workspace]
+name = "cyberpunk-head-tracking"
+description = "Head tracking mod for Cyberpunk 2077 using OpenTrack"
+license = "MIT"
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64"]
+
+[tasks]
+
+[target.win-64.tasks]
+# Fetch/refresh submodules (CameraUnlock standard task)
+sync = { cmd = "git submodule update --init --recursive" }
+
+# Restore/setup any prerequisites (alias of sync for this project; no package dependencies)
+setup = { depends-on = ["sync"] }
+restore = { depends-on = ["sync"] }
+
+# Build native RED4ext C++ plugin
+build-native = { cmd = "native\\build.bat" }
+build = { depends-on = ["build-native"] }
+
+# Deploy to CET mods folder (Windows only). Depends on `build` so the native
+# RED4ext DLL is rebuilt before copying - otherwise `pixi run install` would
+# silently ship a stale DLL with the Lua changes, which is exactly how the
+# TCP-port-mismatch bug slipped through.
+deploy = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1", depends-on = ["build"] }
+install = { depends-on = ["deploy"] }
+
+# Uninstall the deployed mod
+uninstall = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/uninstall.ps1" }
+
+# Validate release readiness (run before tagging)
+validate-release = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/validate-release.ps1" }
+
+# Package release ZIPs (installer + Nexus). Depends on `build` so the
+# bundled native DLL is always rebuilt before zipping - this is the chain
+# described in cameraunlock-core/AGENTS.md (`package` -> `build` ->
+# vendoring; this mod has no vendored loader).
+package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build"] }
+
+# Automated release workflow
+release = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/release.ps1" }
+
+# Clean build artifacts
+clean = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/clean.ps1" }
+
+# No vendored loaders (native RED4ext plugin, no BepInEx/MelonLoader/etc to refresh)
+update-deps = { cmd = "powershell -NoProfile -Command \"Write-Host 'No vendored dependencies to update (native RED4ext plugin).'\"" }
+
+[target.linux-64.tasks]
+# Fetch/refresh submodules
+sync = { cmd = "git submodule update --init --recursive" }
+setup = { depends-on = ["sync"] }
+restore = { depends-on = ["sync"] }
+
+# Deploy is not available on Linux (game runs on Windows only)
+deploy = { cmd = "echo 'Deploy is only available on Windows (Cyberpunk 2077 is a Windows game)' && exit 0" }
+install = { depends-on = ["deploy"] }
+uninstall = { cmd = "echo 'Uninstall is only available on Windows' && exit 0" }
+
+# Validate mod structure (CI/CD compatible)
+validate-release = { cmd = "bash scripts/validate.sh" }
+
+# Package release ZIP
+package = { cmd = "bash scripts/package-release.sh" }
+
+# Release workflow
+release = { cmd = "bash scripts/release.sh" }
+
+# Clean build artifacts
+clean = { cmd = "rm -rf dist release native/build native/out && echo 'Build artifacts cleaned'" }
+
+# No vendored loaders (native RED4ext plugin, no BepInEx/MelonLoader/etc to refresh)
+update-deps = { cmd = "echo 'No vendored dependencies to update (native RED4ext plugin).'" }
+
+[dependencies]
+# No pixi dependencies needed - Lua mod uses CET runtime

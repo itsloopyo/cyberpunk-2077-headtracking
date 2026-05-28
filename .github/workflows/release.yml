@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+            Write-Host "::error::Tag format invalid. Use semantic versioning: v1.2.3 (got: $tag)"
+            exit 1
+          }
+          $version = $matches[1]
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Tag: $tag"
+          Write-Host "Version: $version"
+
+      - name: Validate version matches scripts/install.cmd MOD_VERSION
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $installCmd = 'scripts/install.cmd'
+          if (-not (Test-Path $installCmd)) {
+            Write-Host "::error::Canonical version source not found: $installCmd"
+            exit 1
+          }
+          $installRaw = Get-Content -Raw $installCmd
+          if ($installRaw -notmatch 'set "MOD_VERSION=([^"]+)"') {
+            Write-Host "::error::MOD_VERSION line not found in $installCmd"
+            exit 1
+          }
+          $cmdVersion = $matches[1]
+          if ($cmdVersion -ne $env:VERSION) {
+            Write-Host "::error::Tag version ($env:VERSION) does not match MOD_VERSION in ${installCmd} ($cmdVersion)"
+            exit 1
+          }
+          Write-Host "OK MOD_VERSION in $installCmd matches tag: $env:VERSION"
+
+      - name: Package release
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          Write-Host "Packaging release ZIPs..." -ForegroundColor Cyan
+          powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Version $env:VERSION
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Packaging failed"
+            exit 1
+          }
+
+      - name: Generate release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $artifactPaths = @(
+            'init.lua',
+            'modules',
+            'native/src',
+            'native/CMakeLists.txt',
+            'cameraunlock-core',
+            'scripts/install.cmd',
+            'scripts/uninstall.cmd'
+          )
+          & cameraunlock-core/scripts/generate-release-notes.ps1 `
+            -Version $env:VERSION `
+            -ArtifactPaths $artifactPaths `
+            -ProjectName "Cyberpunk 2077 HeadTracking"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Release notes generation failed"
+            exit 1
+          }
+
+      - name: Find release ZIPs
+        id: zips
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $installer = "release/HeadTracking-v$env:VERSION-installer.zip"
+          $nexus     = "release/HeadTracking-v$env:VERSION-nexus.zip"
+          if (-not (Test-Path $installer)) {
+            Write-Host "::error::Installer ZIP missing: $installer"
+            exit 1
+          }
+          if (-not (Test-Path $nexus)) {
+            Write-Host "::error::Nexus ZIP missing: $nexus"
+            exit 1
+          }
+          Write-Host "OK $installer"
+          Write-Host "OK $nexus"
+          "installer=$installer" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "nexus=$nexus"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          INSTALLER_ZIP: ${{ steps.zips.outputs.installer }}
+          NEXUS_ZIP: ${{ steps.zips.outputs.nexus }}
+        shell: pwsh
+        run: |
+          Write-Host "Creating GitHub Release for $env:TAG..." -ForegroundColor Cyan
+          gh release create $env:TAG `
+            --title "Cyberpunk 2077 HeadTracking $env:TAG" `
+            --notes-file release-notes.txt `
+            $env:INSTALLER_ZIP `
+            $env:NEXUS_ZIP
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Failed to create GitHub release"
+            exit 1
+          }
+          Write-Host "Release created: https://github.com/${{ github.repository }}/releases/tag/$env:TAG" -ForegroundColor Green

@@ -1,0 +1,185 @@
+#pragma once
+#include <windows.h>
+#include <cstdint>
+
+// Shared state structure - must match CET Lua FFI definition exactly.
+// Field order, sizes and padding must be identical in aim.lua's ffi.cdef.
+//
+// Three logical sections:
+//   1. Lua -> native (processed pose): Lua writes the smoothed, recentered,
+//      clamped, signed head rotation that it would otherwise feed to
+//      cam:SetLocalOrientation. When the C++ camera hook is live, it picks
+//      up the rotation from these fields and injects it into the view
+//      matrix at render time; Lua stops writing to cam.localOrientation.
+//   2. native -> Lua (raw UDP pose): the C++ UDP receiver writes raw
+//      OpenTrack values as they arrive. Lua reads these only if it wants
+//      to apply its own processing pipeline.
+//   3. native -> Lua (camera hook status): the C++ camera hook publishes
+//      whether it successfully attached. Lua reads this to decide whether
+//      it still needs to do the SetLocalOrientation fallback.
+struct HeadTrackingState {
+    // ------------------------------------------------------------------
+    // Section 1: Lua -> native (processed pose)
+    // ------------------------------------------------------------------
+    float yaw;                  // processed yaw, degrees (sign matches camera application)
+    float pitch;                // processed pitch, degrees
+    float roll;                 // processed roll, degrees
+    bool  enabled;              // tracking allowed this frame (gates compensation + view injection)
+    bool  is_ads;               // weapon aim-down-sights state
+    bool  camera_hook_inject;   // Lua asks C++ to inject head rotation into this frame's view matrix
+    uint8_t pad0;
+    uint32_t frame;             // incremented each Lua write (sync / liveness)
+    float ads_scale;            // reserved ADS effect multiplier
+
+    // Head rotation as a quaternion (i,j,k,r). Lua writes this so C++ can
+    // apply it directly to the view matrix without recomputing from Euler
+    // (avoids any axis-convention drift between the two sides). Expected
+    // to be unit-length; zero quaternion means "no data yet - skip".
+    float quat_i;
+    float quat_j;
+    float quat_k;
+    float quat_r;
+    uint32_t applied_frame;     // bumps when Lua updates the quat fields above
+
+    // ------------------------------------------------------------------
+    // Section 2: native -> Lua (raw UDP-received pose from OpenTrack)
+    // ------------------------------------------------------------------
+    float    raw_yaw;
+    float    raw_pitch;
+    float    raw_roll;
+    float    raw_x;              // OpenTrack lateral, cm (positive = right)
+    float    raw_y;              // OpenTrack vertical, cm (positive = up)
+    float    raw_z;              // OpenTrack longitudinal, cm (positive = forward)
+    uint32_t raw_frame;          // bumps on every received UDP packet
+    uint64_t raw_timestamp_ms;   // GetTickCount64() at receive time
+
+    // ------------------------------------------------------------------
+    // Section 3: native -> Lua (camera hook status)
+    // ------------------------------------------------------------------
+    // C++ sets this to true once the view-matrix hook is attached and
+    // firing. Lua checks it every frame: when true, Lua stops calling
+    // cam:SetLocalOrientation because C++ is handling render-side
+    // injection directly. When false (offset not filled, attach failed,
+    // hook never seen fire), Lua falls back to SetLocalOrientation so
+    // users still get head tracking, just coupled to aim as before.
+    bool  camera_hook_active;
+    uint8_t pad1[3];
+    uint32_t camera_hook_fires;  // increments on every hook call (heartbeat)
+
+    // ------------------------------------------------------------------
+    // Section 4: native -> Lua (Running::OnUpdate hook status)
+    // ------------------------------------------------------------------
+    // C++ registers a RED4ext Running state OnUpdate callback. Each fire
+    // bumps this counter. Used to prove the native per-frame hook is
+    // actually firing and to time it against Lua's own onUpdate for the
+    // pre-render snap-restore work.
+    uint32_t native_running_frame;  // increments every Running::OnUpdate fire
+
+    // ------------------------------------------------------------------
+    // Section 5: Lua <-> native (SNAP-CLEAN restore hand-off)
+    // ------------------------------------------------------------------
+    // On a pistol shot Lua does SNAP-CLEAN in OnAction: saves the current
+    // head-rotated cam.localOrientation, computes the clean (no-head)
+    // orientation, writes it back, sets pending_restore=true here with the
+    // saved quat. The native side, from Running::OnUpdate, performs the
+    // restore as soon as possible. If the native call lands after the
+    // hitscan but before the frame renders, the one-frame render flash
+    // that the Lua-only tickSnapRestore cannot avoid is killed.
+    //
+    // Handshake:
+    //   Lua writes restore_quat_i/j/k/r, then sets pending_native_restore=1
+    //   and bumps restore_req_seq. (order matters; native reads pending
+    //   last so the quat is guaranteed to be coherent.)
+    //
+    //   Native consumes pending_native_restore, performs the restore,
+    //   clears pending_native_restore=0 and sets restore_ack_seq = the
+    //   req_seq it consumed. Lua reads the ack to decide whether it
+    //   still needs to run the fallback tickSnapRestore.
+    bool     pending_native_restore;
+    uint8_t  pad2[3];
+    float    restore_quat_i;
+    float    restore_quat_j;
+    float    restore_quat_k;
+    float    restore_quat_r;
+    uint32_t restore_req_seq;   // Lua bumps on every SNAP-CLEAN publish
+    uint32_t restore_ack_seq;   // native mirrors req_seq once restore is done
+    uint32_t restore_fires;     // total native-side restores performed
+    uint32_t shot_marker_seq;   // Lua bumps on fire input when native owns aim
+
+    // ------------------------------------------------------------------
+    // Section 6: native -> Lua (hitscan hook status)
+    // ------------------------------------------------------------------
+    // When the native hitscan hook is attached, it intercepts the raycast
+    // dispatch for pistol shots and rotates the ray direction by the
+    // inverse head rotation. That makes bullets land where the MOUSE
+    // points without needing Lua's SNAP-CLEAN dance, which means the
+    // cam.localOrientation can stay head-rotated for the whole frame -
+    // no more one-frame render flash.
+    //
+    // `hitscan_hook_fires` is a diagnostic counter. Lua trusts
+    // `hitscan_hook_active` once the final-vector hook is attached.
+    bool     hitscan_hook_active;
+    uint8_t  pad3[3];
+    uint32_t hitscan_hook_fires;  // total hook fires; heartbeat diag
+
+    // ------------------------------------------------------------------
+    // Section 7: Lua -> native (cam-propagator decouple gate)
+    // ------------------------------------------------------------------
+    // True when Lua is writing CLEAN (mouse-only) quat to cam.localOrientation
+    // and wants the native CamPropagatorHook to inject head rotation into
+    // the per-tick camera-state propagator at +0x1D8558. Renderer reads
+    // propagated values (gets head-rotated view), game logic / targeting
+    // reads cam+0xD0 directly (gets clean = follows mouse).
+    //
+    // When false the hook is a no-op pass-through.
+    uint32_t propagator_inject_active;
+    uint32_t propagator_hook_fires;  // heartbeat: native sandwich count
+
+    // ------------------------------------------------------------------
+    // Section 8: Lua -> native (FreezeFrameHook gate)
+    // ------------------------------------------------------------------
+    // The FreezeFrameHook normally blits the previous backbuffer over the
+    // SNAP-CLEAN frame so the snap is invisible. Set this to 0 to disable
+    // the blit (snap is rendered as-is) - used when recording video of the
+    // snap-clean for documentation. Backbuffer is still copied each frame
+    // so re-enabling has no warm-up frame. Default 1 = freeze enabled.
+    uint32_t freeze_frame_enabled;
+};
+
+// Shared memory name - must match CET Lua code
+constexpr const char* SHARED_MEM_NAME = "HeadTrackingAimState";
+constexpr size_t SHARED_MEM_SIZE = sizeof(HeadTrackingState);
+
+static_assert(sizeof(HeadTrackingState) == 152,
+    "HeadTrackingState layout changed - update modules/aim.lua cdef to match");
+
+class SharedState {
+public:
+    SharedState() = default;
+    ~SharedState();
+
+    // Initialize shared memory mapping (opens existing or creates new)
+    bool Init();
+
+    // Clean up resources
+    void Shutdown();
+
+    // Read current state from shared memory
+    // Returns default state if not available
+    HeadTrackingState Read() const;
+
+    // Direct writable pointer for the native UDP receiver. Returns nullptr if
+    // shared memory is not yet mapped. The receiver thread is the only writer
+    // of the raw_* fields; no other writer touches them.
+    HeadTrackingState* GetWritable() { return m_pState; }
+
+    // Check if shared memory is available
+    bool IsAvailable() const { return m_pState != nullptr; }
+
+private:
+    HANDLE m_hMapFile = nullptr;
+    HeadTrackingState* m_pState = nullptr;
+};
+
+// Global instance
+extern SharedState g_sharedState;

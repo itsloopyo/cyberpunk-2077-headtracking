@@ -1,0 +1,211 @@
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.millhouse/**'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.millhouse/**'
+
+jobs:
+  validate:
+    name: Validate Mod Structure
+    runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.event.head_commit.message, 'Release v') }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Validate required files exist
+        run: |
+          echo "Validating mod file structure..."
+          ERRORS=0
+
+          REQUIRED_FILES=(
+            "init.lua"
+            "modules/udp.lua"
+            "modules/camera.lua"
+            "modules/settings.lua"
+            "modules/state.lua"
+            "modules/ui.lua"
+            "modules/GameUI.lua"
+          )
+
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "OK $file"
+            else
+              echo "MISSING $file"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          if [ -d "modules" ]; then
+            MODULE_COUNT=$(find modules -name "*.lua" -type f | wc -l)
+            echo "OK modules/ directory ($MODULE_COUNT Lua files)"
+          else
+            echo "MISSING modules/ directory"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          if [ $ERRORS -gt 0 ]; then
+            echo ""
+            echo "ERROR: $ERRORS required file(s) missing"
+            exit 1
+          fi
+
+      - name: Install Lua for syntax checking
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Check Lua syntax
+        run: |
+          ERRORS=0
+          for file in init.lua modules/*.lua; do
+            if [ -f "$file" ]; then
+              if lua -e "loadfile('$file')" 2>/dev/null; then
+                echo "OK $file"
+              else
+                echo "SYNTAX ERROR $file"
+                lua -e "loadfile('$file')" 2>&1 || true
+                ERRORS=$((ERRORS + 1))
+              fi
+            fi
+          done
+          if [ $ERRORS -gt 0 ]; then
+            echo "ERROR: $ERRORS file(s) with syntax errors"
+            exit 1
+          fi
+
+      - name: Validate init.lua structure
+        run: |
+          ERRORS=0
+          if grep -q "registerForEvent.*onInit" init.lua; then
+            echo "OK registerForEvent('onInit')"
+          else
+            echo "MISSING registerForEvent('onInit')"
+            ERRORS=$((ERRORS + 1))
+          fi
+          if grep -q "registerForEvent.*onUpdate" init.lua; then
+            echo "OK registerForEvent('onUpdate')"
+          else
+            echo "MISSING registerForEvent('onUpdate')"
+            ERRORS=$((ERRORS + 1))
+          fi
+          if grep -q "registerHotkey" init.lua; then
+            HOTKEY_COUNT=$(grep -c "registerHotkey" init.lua || true)
+            echo "OK registerHotkey calls ($HOTKEY_COUNT)"
+          else
+            echo "MISSING registerHotkey calls"
+            ERRORS=$((ERRORS + 1))
+          fi
+          if [ $ERRORS -gt 0 ]; then
+            echo "ERROR: init.lua missing $ERRORS required CET registration(s)"
+            exit 1
+          fi
+
+      - name: Run settings module tests
+        run: |
+          if [ -f tests/settings_test.lua ]; then
+            echo "Running tests/settings_test.lua..."
+            lua tests/settings_test.lua
+          else
+            echo "tests/settings_test.lua not present, skipping"
+          fi
+
+  package:
+    name: Package installer
+    needs: validate
+    runs-on: windows-latest
+    if: ${{ !startsWith(github.event.head_commit.message, 'Release v') }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Verify build outputs
+        shell: pwsh
+        run: |
+          $required = @(
+            'init.lua',
+            'modules/udp.lua',
+            'modules/camera.lua',
+            'modules/settings.lua',
+            'modules/state.lua',
+            'modules/ui.lua',
+            'modules/GameUI.lua',
+            'scripts/install.cmd',
+            'scripts/uninstall.cmd',
+            'scripts/package-release.ps1',
+            'cameraunlock-core/powershell/ReleaseWorkflow.psm1',
+            'cameraunlock-core/scripts/generate-release-notes.ps1'
+          )
+          $missing = @()
+          foreach ($f in $required) {
+            if (Test-Path $f) {
+              Write-Host "OK $f"
+            } else {
+              Write-Host "MISSING $f"
+              $missing += $f
+            }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::$($missing.Count) required file(s) missing"
+            exit 1
+          }
+
+      - name: Package installer
+        shell: pwsh
+        run: |
+          Write-Host "Packaging installer ZIP..." -ForegroundColor Cyan
+          powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Packaging failed"
+            exit 1
+          }
+          Write-Host "Package created" -ForegroundColor Green
+
+      - name: Stage installer contents for artifact upload
+        shell: pwsh
+        run: |
+          $stagingDir = 'release/artifact-contents'
+          if (Test-Path $stagingDir) { Remove-Item -Recurse -Force $stagingDir }
+          New-Item -ItemType Directory -Path $stagingDir | Out-Null
+
+          $installerZip = Get-ChildItem -Path 'release' -Filter '*-installer.zip' | Select-Object -First 1
+          if (-not $installerZip) {
+            Write-Host "::error::No installer ZIP found in release/"
+            exit 1
+          }
+          Write-Host "Expanding $($installerZip.Name) into $stagingDir..."
+          Expand-Archive -Path $installerZip.FullName -DestinationPath $stagingDir -Force
+
+      - name: Compute artifact name from ref
+        id: artifact-name
+        shell: pwsh
+        run: |
+          $branch = if ($env:GITHUB_HEAD_REF) { $env:GITHUB_HEAD_REF } else { $env:GITHUB_REF_NAME }
+          $sanitized = ($branch -replace '[^A-Za-z0-9._-]', '-').Trim('-')
+          if ([string]::IsNullOrWhiteSpace($sanitized)) { $sanitized = 'unknown' }
+          $name = "Cyberpunk2077HeadTracking-$sanitized"
+          Write-Host "Artifact name: $name"
+          "name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.artifact-name.outputs.name }}
+          path: release/artifact-contents/
+          retention-days: 14
+          if-no-files-found: error

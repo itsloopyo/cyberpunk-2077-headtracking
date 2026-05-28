@@ -1,0 +1,97 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+target/
+libs/
+
+# Build outputs
+bin/
+obj/
+dist/
+build/
+release/
+native/build/
+native/build-*/
+native/build_*/
+native/out/
+*.tsbuildinfo
+*.js.map
+*.d.ts.map
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Tooling caches
+.claude/
+.pixi/
+.scratch/
+.lab/
+.mcp.json
+mcp.json
+CLAUDE.md
+AGENTS.md
+
+# Per-game install state (written by install.cmd into the game dir, but never check in if it lands here)
+.headtracking-state.json
+
+# Reverse-engineering session artifacts (kept locally under tools/re-artifacts/ if useful)
+tools/re-artifacts/
+
+# RED4ext / ASI runtime logs
+*.asi.log
+red4ext/logs/
+
+# Testing
+coverage/
+
+# Millhouse cruft (entire dir, not just transient subdirs)
+.millhouse/
+
+# Local discovery / RE scratch
+tools/
+docs/
+benchmarks/
+ARCHITECTURE.md
+CHECKPOINT.md
+DECOUPLING.md
+NEXT_STEPS.md
+
+# Environment files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# REDengine crash-info dumps the game drops into the working dir on launch
+# (e.g. Cyberpunk2077.exe-<timestamp>-<pid>-<tid>.txt). Transient, not ours.
+*.exe-*.txt
+
+# NexusMods page copy source (local only)
+NEXUS_MODS.md
+
+# OS files
+.DS_Store
+Thumbs.db
+# Environment files (added by millhouse)
+*.env
+*.env.*
+*.local
+*.secret
+*.secrets
+config.local.*
+.config.local
+*.key
+*.pem
+*.p12
+.aws/credentials
+.ssh/id_*
+

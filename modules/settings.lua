@@ -1,0 +1,533 @@
+-- Settings Module
+-- Manages persistent configuration via config.json
+-- Production-ready implementation with validation, observers, and atomic saves
+
+local Settings = {}
+Settings.__index = Settings
+
+-- Allowed yaw_mode strings. Kept as a set so :set() can validate the same
+-- way load() already does, and a bad value never reaches anywhere that
+-- branches on it (camera.lua / nativesettings.lua).
+local YAW_MODE_VALUES = { world = true, ["local"] = true }
+
+-- Validation rules for each setting
+local VALIDATION_RULES = {
+    enabled = { type = "boolean" },
+    sensitivity_yaw = { type = "number", min = 0.1, max = 5.0 },
+    sensitivity_pitch = { type = "number", min = 0.1, max = 5.0 },
+    sensitivity_roll = { type = "number", min = 0.0, max = 5.0 },
+    smoothing_factor = { type = "number", min = 0.0, max = 0.99 },
+    -- "Soft Look" rotation caps (per-axis, degrees). These are a Cyberpunk-
+    -- specific safety limit to keep head rotation from fighting the aim
+    -- system, not the CameraUnlock position limits.
+    clamp_yaw = { type = "number", min = 10.0, max = 180.0 },
+    clamp_pitch = { type = "number", min = 10.0, max = 90.0 },
+    clamp_roll = { type = "number", min = 0.0, max = 90.0 },
+    -- Per-axis deadzones (degrees). Values below the deadzone resolve to 0;
+    -- above, the deadzone amount is subtracted (smooth activation, no jump
+    -- at the threshold). Defaults eat tracker noise so the view doesn't
+    -- gradually drift on a "still" head.
+    deadzone_yaw   = { type = "number", min = 0.0, max = 10.0 },
+    deadzone_pitch = { type = "number", min = 0.0, max = 10.0 },
+    deadzone_roll  = { type = "number", min = 0.0, max = 10.0 },
+    -- Crosshair settings
+    crosshair_enabled = { type = "boolean" },
+    crosshair_fov_degrees = { type = "number", min = 30.0, max = 140.0 },
+    -- Frame-lead for the reticle. 0 = use the latest head_quat (correct at
+    -- rest, may drift during motion if rendered camera state runs ahead of
+    -- our writes). 1.0 = extrapolate forward by one full logic frame's head
+    -- delta. Tune up if reticle trails the target during head motion (drifts
+    -- in motion direction, settles correct at rest); leave at 0 if no drift.
+    crosshair_lead_factor = { type = "number", min = 0.0, max = 2.0 },
+    -- Custom ADS reticle (extra ImGui crosshair drawn only while aiming down
+    -- sights, since iron sights/scopes aren't eye-levelled under head tracking).
+    ads_reticle_enabled = { type = "boolean" },
+    ads_reticle_size    = { type = "number", min = 2.0, max = 64.0 },
+    ads_reticle_opacity = { type = "number", min = 0.0, max = 1.0 },
+    -- Position tracking placeholders (6DOF). Disabled by default until the
+    -- camera translation path is wired. Settings exist so the hotkey contract
+    -- and Native Settings UI stay complete.
+    position_enabled = { type = "boolean" },
+    position_sens_x = { type = "number", min = 0.0, max = 5.0 },
+    position_sens_y = { type = "number", min = 0.0, max = 5.0 },
+    position_sens_z = { type = "number", min = 0.0, max = 5.0 },
+    position_limit_x = { type = "number", min = 0.0, max = 0.5 },
+    position_limit_y_up = { type = "number", min = 0.0, max = 0.5 },
+    position_limit_y_down = { type = "number", min = 0.0, max = 0.5 },
+    position_limit_z_fwd = { type = "number", min = 0.0, max = 0.5 },
+    position_limit_z_back = { type = "number", min = 0.0, max = 0.5 },
+    position_smoothing = { type = "number", min = 0.0, max = 0.99 },
+    -- Yaw mode: "world" (default, horizon-locked world-space yaw) or "local"
+    -- (legacy camera-local yaw that tilts with mouse pitch). See camera.lua.
+    yaw_mode = { type = "string" },
+    -- Diagnostic: write CLEAN (mouse-only) orientation to cam.localOrientation
+    -- instead of head-rotated. Used to probe which engine systems read
+    -- cam+0xD0 for their "where is the camera pointing" answer. See
+    -- modules/camera.lua and Camera:apply().
+    decouple_diag_clean_cam = { type = "boolean" }
+}
+
+--- Validate a single value against its rule
+--- @param key string Setting key
+--- @param value any Value to validate
+--- @return boolean valid Whether value is valid
+--- @return any corrected_value Corrected value if invalid, or original if valid
+local function validateValue(key, value)
+    local rule = VALIDATION_RULES[key]
+    if not rule then
+        return false, nil
+    end
+
+    -- Type check
+    if type(value) ~= rule.type then
+        return false, nil
+    end
+
+    -- Number range validation
+    if rule.type == "number" then
+        -- NaN check
+        if value ~= value then
+            return false, nil
+        end
+
+        -- Integer check
+        if rule.integer and math.floor(value) ~= value then
+            value = math.floor(value)
+        end
+
+        -- Clamp to valid range
+        if rule.min and value < rule.min then
+            return false, rule.min
+        end
+        if rule.max and value > rule.max then
+            return false, rule.max
+        end
+    end
+
+    -- String enum validation. yaw_mode is the only string-typed setting and
+    -- camera.lua branches on it as a binary "world" / "local"; an arbitrary
+    -- third value would silently fall through the "local" branch.
+    if rule.type == "string" and key == "yaw_mode" then
+        if not YAW_MODE_VALUES[value] then
+            return false, nil
+        end
+    end
+
+    return true, value
+end
+
+--- Create a new settings instance with default values
+--- @return table Settings instance
+function Settings.new()
+    local self = setmetatable({}, Settings)
+
+    -- Default configuration values (CameraUnlock standard unless noted)
+    self.defaults = {
+        enabled = true,
+        sensitivity_yaw = 1.0,
+        sensitivity_pitch = 1.0,
+        sensitivity_roll = 1.0,
+        smoothing_factor = 0.0,                 -- 0 = minimum (0.15 floor applied internally)
+        -- "Soft Look" rotation caps (Cyberpunk-specific, not CameraUnlock position limits)
+        clamp_yaw = 120.0,
+        clamp_pitch = 80.0,
+        clamp_roll = 45.0,
+        -- Deadzones (degrees). Roll defaults higher because head-roll tracker
+        -- noise is the main source of visible "view rolling on its own" drift.
+        deadzone_yaw   = 0.5,
+        deadzone_pitch = 0.5,
+        deadzone_roll  = 1.0,
+        -- Crosshair overlay
+        crosshair_enabled = true,
+        crosshair_fov_degrees = 84.0,
+        crosshair_lead_factor = 0.0,
+        -- Custom ADS reticle overlay (our own ImGui crosshair at the true aim
+        -- point while aiming down sights).
+        ads_reticle_enabled = true,
+        ads_reticle_size    = 12,
+        ads_reticle_opacity = 0.8,
+        -- Position tracking (6DOF) - placeholders, disabled by default
+        position_enabled = true,
+        position_sens_x = 1.0,
+        position_sens_y = 1.0,
+        position_sens_z = 1.0,
+        position_limit_x = 0.30,
+        position_limit_y_up = 0.20,
+        position_limit_y_down = 0.05,
+        position_limit_z_fwd = 0.40,
+        position_limit_z_back = 0.10,
+        position_smoothing = 0.15,
+        -- Yaw mode: "world" (default) = horizon-locked yaw. Head yaw always
+        -- rotates around the world-vertical axis regardless of where the
+        -- mouse is pitched, so the horizon stays where yaw lives.
+        -- "local" = legacy camera-tilted yaw (rotates around the camera's
+        -- current local-up axis, which tilts with mouse pitch).
+        -- Toggle between them with PageDown / Ctrl+Shift+H.
+        yaw_mode = "world",
+        -- Clean-camera diagnostic path. Lua keeps cam.localOrientation
+        -- mouse-only while native experiments try to inject head rotation.
+        decouple_diag_clean_cam = false,
+        -- Native FreezeFrameHook: blits the previous backbuffer over the
+        -- SNAP-CLEAN frame so the one-frame snap is invisible. Set false to
+        -- expose the raw snap (blog/demo video capture). Backbuffer copy
+        -- keeps running so re-enabling is seamless.
+        freeze_frame_enabled = false,
+    }
+
+    -- Current values (populated by load())
+    self.values = {}
+
+    -- Observer callbacks for setting changes
+    -- Table of key -> { callback1, callback2, ... }
+    self.observers = {}
+
+    -- Config file path (relative to mod directory)
+    self.path = "config.json"
+
+    -- Track if we have unsaved changes (for batched saves)
+    self.dirty = false
+
+    -- Initialized flag
+    self.initialized = false
+
+    return self
+end
+
+--- Load settings from config.json
+--- If file is missing or corrupted, creates new file with defaults
+--- @return boolean true if file was loaded, false if defaults were used
+function Settings:load()
+    local loaded_from_file = false
+    local file = io.open(self.path, "r")
+
+    if file then
+        local content = file:read("*all")
+        file:close()
+
+        if content and #content > 0 then
+            -- Attempt to parse JSON
+            local ok, loaded = pcall(json.decode, content)
+            if ok and type(loaded) == "table" then
+                -- Drop obsolete port keys from pre-4242-unification configs.
+                -- udp_port was the old OpenTrack listen port on the Lua side;
+                -- bridge_tcp_port was the Python-bridge / native-plugin TCP
+                -- port. Both are gone now - OpenTrack UDP goes straight to the
+                -- native plugin on 4242 and the native plugin serves Lua on
+                -- TCP 4242. Users don't need to do anything; we just ignore
+                -- the stale keys so they don't fail validation.
+                if loaded.udp_port ~= nil then
+                    print("[HeadTracking] Ignoring obsolete 'udp_port' in config.json (port is hardcoded to 4242 now)")
+                    loaded.udp_port = nil
+                end
+                if loaded.bridge_tcp_port ~= nil then
+                    print("[HeadTracking] Ignoring obsolete 'bridge_tcp_port' in config.json (port is hardcoded to 4242 now)")
+                    loaded.bridge_tcp_port = nil
+                end
+                -- Drop obsolete experimental yaw modes (world_simple, world_flip
+                -- were diagnostic attempts; world_simple crashed the game). Map
+                -- anything that isn't "local" to "world".
+                if loaded.yaw_mode ~= nil and loaded.yaw_mode ~= "world" and loaded.yaw_mode ~= "local" then
+                    print("[HeadTracking] Resetting unknown yaw_mode '" .. tostring(loaded.yaw_mode) .. "' to 'world'")
+                    loaded.yaw_mode = "world"
+                end
+
+                -- Merge and validate loaded values with defaults
+                for k, default_value in pairs(self.defaults) do
+                    local loaded_value = loaded[k]
+                    if loaded_value ~= nil then
+                        local valid, corrected = validateValue(k, loaded_value)
+                        if valid then
+                            -- Use the validated value, not the raw input: for
+                            -- integer-typed settings validateValue floors it,
+                            -- and that floored value is the one we must store.
+                            self.values[k] = corrected
+                        else
+                            -- Use corrected value if available, otherwise default
+                            self.values[k] = corrected or default_value
+                            print("[HeadTracking] Invalid setting '" .. k .. "', using default: " .. tostring(self.values[k]))
+                        end
+                    else
+                        self.values[k] = default_value
+                    end
+                end
+                loaded_from_file = true
+            else
+                print("[HeadTracking] Failed to parse config.json: " .. tostring(loaded))
+            end
+        end
+    end
+
+    if not loaded_from_file then
+        -- File missing or corrupted - use defaults
+        for k, v in pairs(self.defaults) do
+            self.values[k] = v
+        end
+        -- Create default config file
+        self:save()
+    end
+
+    self.initialized = true
+    return loaded_from_file
+end
+
+--- Save current settings to config.json (atomic write)
+--- @return boolean success Whether save succeeded
+function Settings:save()
+    local ok, content = pcall(json.encode, self.values)
+    if not ok then
+        print("[HeadTracking] Failed to encode settings: " .. tostring(content))
+        return false
+    end
+
+    -- Write to temporary file first.
+    local temp_path = self.path .. ".tmp"
+    local file = io.open(temp_path, "w")
+    if not file then
+        print("[HeadTracking] Failed to open temp file for writing: " .. temp_path)
+        return false
+    end
+
+    local write_ok = file:write(content)
+    file:close()
+
+    if not write_ok then
+        print("[HeadTracking] Failed to write config data")
+        os.remove(temp_path)
+        return false
+    end
+
+    -- Crash-safe rename. The previous remove+rename pair had a window where a
+    -- crash between the two left the user with no config (and no backup).
+    -- Now: rotate the existing file to .bak first, attempt the rename, and on
+    -- failure restore from .bak so the user always ends up with either the
+    -- new file or their previous one - never nothing.
+    local backup_path = self.path .. ".bak"
+    -- Probe existence without holding a handle: on Windows an open read
+    -- handle prevents os.rename of the same path, which would silently
+    -- fail the backup rotation below.
+    local probe = io.open(self.path, "r")
+    local original_existed = probe ~= nil
+    if probe then probe:close() end
+    if original_existed then
+        os.remove(backup_path)  -- discard previous backup
+        local backup_ok = os.rename(self.path, backup_path)
+        if not backup_ok then
+            print("[HeadTracking] Failed to rotate previous config to backup; aborting save")
+            os.remove(temp_path)
+            return false
+        end
+    end
+
+    local rename_ok = os.rename(temp_path, self.path)
+    if not rename_ok then
+        print("[HeadTracking] Failed to rename temp config file")
+        if original_existed then
+            -- Restore the previous config so the user isn't left empty-handed.
+            os.rename(backup_path, self.path)
+        end
+        os.remove(temp_path)
+        return false
+    end
+
+    self.dirty = false
+    return true
+end
+
+--- Get a setting value
+--- @param key string Setting key name
+--- @return any Setting value or nil if key doesn't exist
+function Settings:get(key)
+    if self.values[key] ~= nil then
+        return self.values[key]
+    end
+    return self.defaults[key]
+end
+
+--- Set a setting value with validation and auto-save
+--- @param key string Setting key name
+--- @param value any New value for the setting
+--- @return boolean success Whether the value was set
+function Settings:set(key, value)
+    -- Validate key exists in defaults
+    if self.defaults[key] == nil then
+        print("[HeadTracking] Unknown setting key: " .. tostring(key))
+        return false
+    end
+
+    -- Validate and potentially correct value
+    local valid, corrected = validateValue(key, value)
+    if valid then
+        -- Adopt the validated value: integer-typed settings are floored by
+        -- validateValue, and that floored result is what must be stored.
+        value = corrected
+    else
+        if corrected ~= nil then
+            value = corrected
+            print("[HeadTracking] Setting '" .. key .. "' clamped to: " .. tostring(value))
+        else
+            print("[HeadTracking] Invalid value for '" .. key .. "': " .. tostring(value))
+            return false
+        end
+    end
+
+    -- Check if value actually changed
+    local old_value = self.values[key]
+    if old_value == value then
+        return true
+    end
+
+    -- Update value
+    self.values[key] = value
+    self.dirty = true
+
+    -- Notify observers
+    self:notifyObservers(key, value, old_value)
+
+    -- Auto-save
+    self:save()
+
+    return true
+end
+
+--- Get all current setting values as a table copy
+--- @return table Copy of all current settings
+function Settings:getAll()
+    local copy = {}
+    for k, v in pairs(self.values) do
+        copy[k] = v
+    end
+    return copy
+end
+
+--- Get all default values as a table copy
+--- @return table Copy of all default settings
+function Settings:getDefaults()
+    local copy = {}
+    for k, v in pairs(self.defaults) do
+        copy[k] = v
+    end
+    return copy
+end
+
+--- Reset a specific setting to its default value
+--- @param key string Setting key to reset
+--- @return boolean success Whether reset succeeded
+function Settings:reset(key)
+    if self.defaults[key] == nil then
+        print("[HeadTracking] Unknown setting key: " .. tostring(key))
+        return false
+    end
+
+    return self:set(key, self.defaults[key])
+end
+
+--- Reset all settings to defaults
+--- @return boolean success Whether reset succeeded
+function Settings:resetAll()
+    local old_values = {}
+    for k, v in pairs(self.values) do
+        old_values[k] = v
+    end
+
+    for k, v in pairs(self.defaults) do
+        self.values[k] = v
+    end
+
+    -- Notify all observers of changes
+    for k, new_value in pairs(self.values) do
+        local old_value = old_values[k]
+        if old_value ~= new_value then
+            self:notifyObservers(k, new_value, old_value)
+        end
+    end
+
+    self.dirty = true
+    return self:save()
+end
+
+--- Register an observer callback for setting changes
+--- @param key string|"*" Setting key to watch, or "*" for all changes
+--- @param callback function Callback(key, new_value, old_value)
+--- @return function unsubscribe Function to remove this observer
+function Settings:observe(key, callback)
+    if type(callback) ~= "function" then
+        print("[HeadTracking] Observer callback must be a function")
+        return function() end
+    end
+
+    if not self.observers[key] then
+        self.observers[key] = {}
+    end
+
+    table.insert(self.observers[key], callback)
+
+    -- Return unsubscribe function
+    return function()
+        self:removeObserver(key, callback)
+    end
+end
+
+--- Remove an observer callback
+--- @param key string Setting key
+--- @param callback function Callback to remove
+function Settings:removeObserver(key, callback)
+    local observers = self.observers[key]
+    if not observers then return end
+
+    for i, cb in ipairs(observers) do
+        if cb == callback then
+            table.remove(observers, i)
+            return
+        end
+    end
+end
+
+--- Notify all observers of a setting change
+--- @param key string Setting key that changed
+--- @param new_value any New value
+--- @param old_value any Previous value
+function Settings:notifyObservers(key, new_value, old_value)
+    -- Notify key-specific observers
+    local key_observers = self.observers[key]
+    if key_observers then
+        for _, callback in ipairs(key_observers) do
+            local ok, err = pcall(callback, key, new_value, old_value)
+            if not ok then
+                print("[HeadTracking] Observer error for '" .. key .. "': " .. tostring(err))
+            end
+        end
+    end
+
+    -- Notify wildcard observers
+    local wildcard_observers = self.observers["*"]
+    if wildcard_observers then
+        for _, callback in ipairs(wildcard_observers) do
+            local ok, err = pcall(callback, key, new_value, old_value)
+            if not ok then
+                print("[HeadTracking] Observer error for '*': " .. tostring(err))
+            end
+        end
+    end
+end
+
+--- Check if a setting key is valid
+--- @param key string Setting key to check
+--- @return boolean valid Whether key exists
+function Settings:isValidKey(key)
+    return self.defaults[key] ~= nil
+end
+
+--- Get validation rules for a setting
+--- @param key string Setting key
+--- @return table|nil rules Validation rules or nil if key doesn't exist
+function Settings:getValidationRules(key)
+    return VALIDATION_RULES[key]
+end
+
+--- Check if settings have been initialized
+--- @return boolean initialized Whether load() has been called
+function Settings:isInitialized()
+    return self.initialized
+end
+
+return Settings

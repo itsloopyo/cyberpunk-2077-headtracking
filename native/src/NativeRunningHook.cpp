@@ -1,0 +1,797 @@
+#include "NativeRunningHook.hpp"
+#include "SharedState.hpp"
+#include "AimCompensation.hpp"  // LogInfo / LogWarning
+#include "HitscanHook.hpp"
+
+#include <RED4ext/RED4ext.hpp>
+#include <RED4ext/GameStates.hpp>
+#include <RED4ext/Api/v1/GameState.hpp>
+#include <RED4ext/Api/v1/GameStates.hpp>
+#include <RED4ext/Api/v1/Sdk.hpp>
+
+// Phase 2b extras: RTTI walk to call entICameraComponent::SetLocalOrientation
+// from native on the FPP camera of the local player. Headers here must be
+// header-only (RED4EXT_HEADER_ONLY is defined in CMake) so the -inl.hpp
+// definitions are pulled in.
+#include <RED4ext/GameEngine.hpp>
+#include <RED4ext/RTTISystem.hpp>
+#include <RED4ext/Handle.hpp>
+#include <RED4ext/Scripting/Functions.hpp>
+#include <RED4ext/Scripting/Stack.hpp>
+#include <RED4ext/Scripting/Natives/ScriptGameInstance.hpp>
+#include <RED4ext/Scripting/Natives/Quaternion.hpp>
+
+#include <windows.h>
+
+// NativeRunningHook.hpp now declares g_camInstance and
+// g_camOrientationOffset as extern; their single definitions live
+// at the bottom of this file.
+
+namespace {
+
+// Static storage for the callback struct. RED4ext docs say "can be
+// allocated on stack" but the pointer must stay valid for as long as
+// the callback is registered; safer to keep it in BSS.
+RED4ext::v1::GameState s_state{};
+
+uint64_t s_lastLogMs = 0;
+uint32_t s_prevLogCount = 0;
+bool     s_enterFired = false;
+
+bool OnEnter(RED4ext::CGameApplication*) {
+    s_enterFired = true;
+    LogInfo("[HeadTrackingAim] NativeRunningHook: OnEnter Running");
+    return true;
+}
+
+// -----------------------------------------------------------------------------
+// Phase 2b: CRTTI walk to call entICameraComponent::SetLocalOrientation
+// -----------------------------------------------------------------------------
+//
+// When true, ConsumePendingRestore actually invokes SetLocalOrientation
+// on the local player's FPP camera using the saved quat. When false
+// (dry-run), only the resolution pointers are logged so we can verify
+// the walk finds valid function/class handles before letting it write
+// anything. The safe default is dry-run: on first encounter with a
+// pending flag, we log the chain state, ack, and leave the Lua-side
+// Aim:tickSnapRestore as the actual restore mechanism.
+//
+// Flip to true, rebuild, redeploy. If it misbehaves (game crashes, cam
+// stuck mid-rotation, etc.) flip back - the Lua fallback picks up.
+//
+// Phase 2b finding (2026-04-21): the CRTTI walk works and SetLocalOrientation
+// does land on the correct cam, but Running::OnUpdate fires at a tick phase
+// that does NOT sit between hitscan and render. Running OnUpdate is kept as
+// a secondary path (logs and diagnostics). The primary native restore now
+// runs from the CameraHook pre-render hook, which calls NativeCamRestore_Invoke
+// directly - that lands the cam write in the post-hitscan / pre-render
+// window of the SAME frame, which is what actually kills the render flash.
+static constexpr bool kEnableNativeCamWrite = false;
+
+// Cached RTTI call chain. Lazily resolved on first ConsumePendingRestore
+// hit with a pending flag. Invalidated (set back to null) if any step of
+// a call fails, so a transient null during load screens self-heals.
+struct CamCallChain {
+    RED4ext::CBaseRTTIType* scriptGameInstanceType = nullptr;
+    RED4ext::CBaseRTTIType* quaternionType = nullptr;
+    RED4ext::CBaseRTTIType* playerPuppetRefType = nullptr;
+    RED4ext::CBaseRTTIType* fppCamRefType = nullptr;
+    RED4ext::CBaseFunction* getPlayerFn = nullptr;      // global: GetPlayer(GameInstance)
+    RED4ext::CBaseFunction* getFPPCamFn = nullptr;      // PlayerPuppet: GetFPPCameraComponent()
+    RED4ext::CBaseFunction* setLocalOrientationFn = nullptr; // entICameraComponent: SetLocalOrientation(Quaternion)
+    bool logged_once = false;
+};
+static CamCallChain s_chain;
+
+// Resolve as many parts of the call chain as possible. Returns how many
+// of the 7 slots were found; caller decides whether to proceed.
+// Never throws - every lookup is via a stable RED4ext pointer.
+static int ResolveCallChain() {
+    int resolved = 0;
+    auto rtti = RED4ext::CRTTISystem::Get();
+    if (!rtti) return 0;
+
+    if (!s_chain.scriptGameInstanceType) {
+        s_chain.scriptGameInstanceType = rtti->GetType(RED4ext::CName("ScriptGameInstance"));
+    }
+    if (s_chain.scriptGameInstanceType) ++resolved;
+
+    if (!s_chain.quaternionType) {
+        s_chain.quaternionType = rtti->GetType(RED4ext::CName("Quaternion"));
+    }
+    if (s_chain.quaternionType) ++resolved;
+
+    if (!s_chain.playerPuppetRefType) {
+        // The return type of GetPlayer is Ref<PlayerPuppet> - in RTTI that's
+        // the name "handle:PlayerPuppet". If exact name varies between patches
+        // we fall through to a generic handle type.
+        s_chain.playerPuppetRefType = rtti->GetType(RED4ext::CName("handle:PlayerPuppet"));
+    }
+    if (s_chain.playerPuppetRefType) ++resolved;
+
+    if (!s_chain.fppCamRefType) {
+        s_chain.fppCamRefType = rtti->GetType(RED4ext::CName("handle:gameFPPCameraComponent"));
+        if (!s_chain.fppCamRefType) {
+            // Modern Cyberpunk versions use entICameraComponent for the handle.
+            s_chain.fppCamRefType = rtti->GetType(RED4ext::CName("handle:entICameraComponent"));
+        }
+    }
+    if (s_chain.fppCamRefType) ++resolved;
+
+    if (!s_chain.getPlayerFn) {
+        // Global functions in RED4 RTTI are indexed by their full signature
+        // ("short;arg1;arg2"), not just short name. Try the canonical form
+        // first, then fall back to the short name for older patches.
+        static const char* kGetPlayerCandidates[] = {
+            "GetPlayer;GameInstance",
+            "GetPlayer",
+        };
+        for (auto name : kGetPlayerCandidates) {
+            s_chain.getPlayerFn = rtti->GetFunction(RED4ext::CName(name));
+            if (s_chain.getPlayerFn) break;
+        }
+    }
+    if (s_chain.getPlayerFn) ++resolved;
+
+    if (!s_chain.getFPPCamFn) {
+        auto playerCls = rtti->GetClass(RED4ext::CName("PlayerPuppet"));
+        if (playerCls) {
+            s_chain.getFPPCamFn = playerCls->GetFunction(RED4ext::CName("GetFPPCameraComponent"));
+        }
+    }
+    if (s_chain.getFPPCamFn) ++resolved;
+
+    if (!s_chain.setLocalOrientationFn) {
+        // SetLocalOrientation is defined on entIPlacedComponent (parent
+        // of all cameras) in current CP2077. Older comments wrongly
+        // placed it on entICameraComponent. Walk a set of candidates so
+        // an engine refactor doesn't silently break us.
+        static const char* kCamClassCandidates[] = {
+            "entIPlacedComponent",
+            "entICameraComponent",
+            "gameCameraComponent",
+            "gameFPPCameraComponent",
+        };
+        for (auto cls_name : kCamClassCandidates) {
+            auto cls = rtti->GetClass(RED4ext::CName(cls_name));
+            if (!cls) continue;
+            auto fn = cls->GetFunction(RED4ext::CName("SetLocalOrientation"));
+            if (fn) {
+                s_chain.setLocalOrientationFn = fn;
+                break;
+            }
+        }
+    }
+    if (s_chain.setLocalOrientationFn) ++resolved;
+
+    if (!s_chain.logged_once && resolved > 0) {
+        LogInfo("[HeadTrackingAim] Phase 2b CRTTI walk: resolved=%d/7 "
+                "{sgi=%p quat=%p pp_ref=%p cam_ref=%p GetPlayer=%p GetFPPCam=%p SetLocalOri=%p}",
+                resolved,
+                (void*)s_chain.scriptGameInstanceType,
+                (void*)s_chain.quaternionType,
+                (void*)s_chain.playerPuppetRefType,
+                (void*)s_chain.fppCamRefType,
+                (void*)s_chain.getPlayerFn,
+                (void*)s_chain.getFPPCamFn,
+                (void*)s_chain.setLocalOrientationFn);
+        if (resolved == 7) {
+            s_chain.logged_once = true;
+            LogInfo("[HeadTrackingAim] Phase 2b CRTTI walk: FULL RESOLUTION (native cam write %s)",
+                    kEnableNativeCamWrite ? "ENABLED" : "DRY-RUN");
+        }
+    }
+
+    return resolved;
+}
+
+// SEH-only helper: call fn->Execute(stack) under __try/__except. Lives in
+// a separate function because MSVC (C2712) forbids __try in a function
+// whose stack frame contains C++ objects with destructors. This helper
+// takes only pointers, so no unwinding is required. All the real objects
+// (ScriptGameInstance, Handle, CStack, Quaternion) stay in the caller.
+// Returns true on normal return, false on access violation or similar.
+static bool SehExecute(RED4ext::CBaseFunction* fn, RED4ext::CStack* stack) {
+    if (!fn || !stack) return false;
+    __try {
+        fn->Execute(stack);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
+
+// Walk the CRTTI chain to get a raw IScriptable* for the local player's
+// FPP camera. Returns null on any intermediate failure. Shares the
+// chain-resolution cache with TryNativeCamRestore. Intended to be called
+// from safe contexts (NativeRunningHook's OnUpdate); NOT from the render
+// pipeline hook where scripted dispatch has caused crashes.
+static RED4ext::IScriptable* ResolveCamInstance() {
+    if (ResolveCallChain() != 7) return nullptr;
+    auto engine = RED4ext::CGameEngine::Get();
+    if (!engine || !engine->framework || !engine->framework->gameInstance) return nullptr;
+
+    RED4ext::ScriptGameInstance sgi(engine->framework->gameInstance);
+    RED4ext::Handle<RED4ext::IScriptable> playerHandle{};
+    {
+        RED4ext::CStackType args[1];
+        args[0].type = s_chain.scriptGameInstanceType;
+        args[0].value = &sgi;
+        RED4ext::CStackType result;
+        result.type = s_chain.playerPuppetRefType;
+        result.value = &playerHandle;
+        RED4ext::CStack stack(nullptr, args, 1, &result);
+        if (!SehExecute(s_chain.getPlayerFn, &stack)) return nullptr;
+    }
+    if (!playerHandle.instance) return nullptr;
+
+    RED4ext::Handle<RED4ext::IScriptable> camHandle{};
+    {
+        RED4ext::CStackType result;
+        result.type = s_chain.fppCamRefType;
+        result.value = &camHandle;
+        RED4ext::CStack stack(playerHandle.instance, nullptr, 0, &result);
+        if (!SehExecute(s_chain.getFPPCamFn, &stack)) return nullptr;
+    }
+    return camHandle.instance;
+}
+
+// SEH-wrapped float read from a possibly-bad pointer. Returns 0.0f on
+// fault so the scan can continue past invalid regions. (The scan range
+// is 2 KB; a page fault at an invalid boundary shouldn't happen given
+// heap alignment but we defend anyway.)
+static bool SehReadFloat(const void* addr, float* out) {
+    __try {
+        *out = *reinterpret_cast<const float*>(addr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *out = 0.0f;
+        return false;
+    }
+}
+
+// Scan the first 2 KB of `cam` memory for 4 consecutive floats matching
+// (qi,qj,qk,qr) within tolerance EPS. Returns the byte offset if found,
+// or -1. Offsets 0..7 (vtable) are skipped. Steps by 4 bytes - localOrientation
+// is a Quaternion, aligned to at least 4 bytes in MSVC layout.
+//
+// This is a ONE-SHOT discovery: once we find the offset we cache it and
+// never scan again. The offset is a compile-time struct layout so
+// re-scanning is wasteful. The hardcoded offset (once known) lets the
+// render-path hook do a direct 16-byte memcpy with no scripted dispatch,
+// which is the only safe way to touch cam orientation from the render
+// pipeline.
+static int ScanOrientationOffset(void* cam, float qi, float qj, float qk, float qr) {
+    if (!cam) return -1;
+    const uint8_t* base = reinterpret_cast<const uint8_t*>(cam);
+    constexpr int kScanEnd   = 0x800;   // 2 KB
+    constexpr int kScanStart = 8;       // past vtable
+    constexpr float kEps     = 1e-4f;
+    for (int off = kScanStart; off + 16 <= kScanEnd; off += 4) {
+        float f0, f1, f2, f3;
+        if (!SehReadFloat(base + off + 0,  &f0)) continue;
+        if (!SehReadFloat(base + off + 4,  &f1)) continue;
+        if (!SehReadFloat(base + off + 8,  &f2)) continue;
+        if (!SehReadFloat(base + off + 12, &f3)) continue;
+        if (std::fabs(f0 - qi) < kEps &&
+            std::fabs(f1 - qj) < kEps &&
+            std::fabs(f2 - qk) < kEps &&
+            std::fabs(f3 - qr) < kEps) {
+            return off;
+        }
+    }
+    return -1;
+}
+
+// Byte offset of the Quaternion orientation field within the FPP cam
+// instance. Confirmed stable at +0xD0 across multiple game sessions
+// (2026-04-22). Hardcoded rather than scanned because:
+//   (a) the scan races with Lua's SNAP-CLEAN: Lua publishes saved_quat
+//       (head-rotated) but also immediately writes clean_quat into the
+//       cam's orientation field, so by the time native scans the cam
+//       memory contains `clean`, not `saved` - the scan misses;
+//   (b) it's a compile-time struct layout, stable across game runs
+//       within the same patch version. If a future patch moves it the
+//       ScanOrientationOffset() helper (still present) can re-find it.
+static constexpr int kFPPCamOrientationOffset = 0xD0;
+static int s_camOrientationOffset = kFPPCamOrientationOffset;  // pre-seeded baseline
+// Cached cam instance pointer. Null until first successful ResolveCamInstance.
+static RED4ext::IScriptable* s_camInstance = nullptr;
+
+// Attempt a native-side SetLocalOrientation on the local player's FPP cam
+// via CRTTI dispatch. Safe from NativeRunningHook's OnUpdate context; NOT
+// safe from the render-path hook (has crashed the game on launch). The
+// render hook uses direct memory write via the cached offset instead.
+//
+// Each engine Execute goes through SehExecute so a null-deref / bad-handle
+// inside RED4ext's script dispatch can't crash the game - worst case we
+// fall back to Lua's tickSnapRestore.
+static bool TryNativeCamRestore(float qi, float qj, float qk, float qr) {
+    auto* cam = ResolveCamInstance();
+    if (!cam) return false;
+
+    // Cache the cam pointer so the render hook can use it for direct
+    // memory write later. Mirror to the file-scope global that lives
+    // outside the anonymous namespace and is read by CameraHook.
+    s_camInstance = cam;
+    ::g_camInstance = cam;
+
+    RED4ext::Quaternion q(qi, qj, qk, qr);
+    RED4ext::CStackType args[1];
+    args[0].type = s_chain.quaternionType;
+    args[0].value = &q;
+    RED4ext::CStack stack(cam, args, 1, nullptr);
+    if (!SehExecute(s_chain.setLocalOrientationFn, &stack)) {
+        LogWarning("[HeadTrackingAim] Phase 2b: SetLocalOrientation Execute faulted");
+        return false;
+    }
+    return true;
+}
+
+// Consume and ack any pending SNAP-CLEAN restore request. Phase 2b+: the
+// actual cam restore is owned by CameraHook's pre-render hook now, which
+// runs in the post-hitscan/pre-render window of the same frame and is
+// therefore the hook point that actually kills the render flash.
+//
+// This path stays as a FALLBACK that only activates when
+// kEnableNativeCamWrite is true (it wasn't and isn't the default; the
+// pre-render path works better). When the flag is false we must NOT
+// consume the flag or clear it - if we did, CameraHook would miss the
+// pending request and the flash would return.
+//
+// In short: when CameraHook is the primary, this function is a silent
+// no-op for pending handling; only the frame counter and heartbeat
+// logging in OnUpdate run.
+void ConsumePendingRestore(HeadTrackingState* w) {
+    if (!w->pending_native_restore) return;
+    if (!kEnableNativeCamWrite) {
+        // Leave the flag / quat alone for CameraHook to consume. Still
+        // resolve the call chain once so the log line appears and we
+        // have a dry-run confirmation that the chain is available.
+        ResolveCallChain();
+
+        // Always (re)resolve the cam instance from SNAP-CLEAN pending
+        // events. Two reasons to do this every time:
+        //  (1) the FPP cam instance pointer can change across level
+        //      loads / deaths / vehicle transitions, so a once-cached
+        //      ptr goes stale;
+        //  (2) the offset is preseeded from a known baseline (+0xD0),
+        //      so the scan block below no longer runs; we still need a
+        //      code path that pulls the current cam ptr into the
+        //      g_camInstance global that CameraHook's hot path reads.
+        if (auto* cam = ResolveCamInstance()) {
+            s_camInstance = cam;
+            ::g_camInstance = cam;
+        }
+        // Keep the scan available as a fallback for future patches
+        // that move the field. If offset is still its preseeded default
+        // AND a mismatch ever gets detected (not detected here yet -
+        // would require verifying post-write state), we'd re-run scan.
+        // For now, skip it entirely when preseeded.
+        if (s_camOrientationOffset < 0) {
+            if (auto* cam = s_camInstance) {
+                const int off = ScanOrientationOffset(
+                    cam,
+                    w->restore_quat_i, w->restore_quat_j,
+                    w->restore_quat_k, w->restore_quat_r);
+                if (off >= 0) {
+                    s_camOrientationOffset = off;
+                    ::g_camOrientationOffset = off;
+                    LogInfo("[HeadTrackingAim] DISCOVERED cam orientation offset: +0x%X (cam=%p)",
+                            off, (void*)cam);
+                }
+            }
+        }
+
+        // Mirror the SHM pending into the pre-render atomics so the
+        // render hook can consume it WITHOUT touching SHM. Also consume
+        // the SHM flag here: once we've staged for pre-render, Lua can
+        // stop retrying (restore_ack_seq advances).
+        const uint32_t req = w->restore_req_seq;
+        if (NativePreRender_GetStagedReqSeq() != req ||
+            !g_preRenderCleanQuatValid.load(std::memory_order_acquire)) {
+            NativePreRender_Stage(w->restore_quat_i, w->restore_quat_j,
+                                  w->restore_quat_k, w->restore_quat_r,
+                                  req);
+        }
+        w->pending_native_restore = false;
+        w->restore_ack_seq = req;
+        w->restore_fires  = w->restore_fires + 1;
+        return;
+    }
+
+    // Legacy Running::OnUpdate-driven path (kEnableNativeCamWrite=true).
+    // Kept for diagnostic fallback / A-B experiments.
+    const uint32_t req = w->restore_req_seq;
+    const float qi = w->restore_quat_i;
+    const float qj = w->restore_quat_j;
+    const float qk = w->restore_quat_k;
+    const float qr = w->restore_quat_r;
+
+    const bool native_wrote = TryNativeCamRestore(qi, qj, qk, qr);
+
+    w->pending_native_restore = false;
+    if (native_wrote) {
+        w->restore_ack_seq = req;
+        w->restore_fires = w->restore_fires + 1;
+    }
+
+    LogInfo("[HeadTrackingAim] SNAP-CLEAN ack (OnUpdate): req_seq=%u ack_seq=%u native_frame=%u fires=%u "
+            "quat=(%.3f,%.3f,%.3f,%.3f) native_wrote=%d",
+            req, w->restore_ack_seq, w->native_running_frame, w->restore_fires,
+            qi, qj, qk, qr, (int)native_wrote);
+}
+
+bool OnUpdate(RED4ext::CGameApplication*) {
+    if (HeadTrackingState* w = g_sharedState.GetWritable()) {
+        w->native_running_frame++;
+        w->hitscan_hook_active = HitscanHook_IsActive();
+
+        // Mirror the current head quat into the lock-free global so the
+        // pre-render hook can rotate outMatrix's cached forward vectors
+        // on SNAP-CLEAN frames without ever touching SHM (SHM access
+        // from inside the render trampoline has crashed the game).
+        g_headQuat[0] = w->quat_i;
+        g_headQuat[1] = w->quat_j;
+        g_headQuat[2] = w->quat_k;
+        g_headQuat[3] = w->quat_r;
+
+        // Resolve the cam instance pointer periodically even without a
+        // SNAP-CLEAN publish. Needed so `g_camInstance` is populated as
+        // soon as the player is in gameplay - otherwise the Frida
+        // watchpoint tools can't find the cam pointer until the user
+        // has fired at least once, which defeats the point of watching
+        // the first hitscan read.
+        //
+        // ResolveCamInstance walks the CRTTI chain every time; it's
+        // cheap but not free, so rate-limit to once per ~30 ticks
+        // (~250ms at 120Hz).
+        {
+            static uint32_t s_resolveCounter = 0;
+            if (::g_camInstance == nullptr || (++s_resolveCounter % 30) == 0) {
+                if (auto* cam = ResolveCamInstance()) {
+                    ::g_camInstance = cam;
+                }
+            }
+        }
+
+        // Consume any pending SNAP-CLEAN restore publish from Lua. Runs
+        // before the heartbeat so the log line order reads chronologically
+        // (ack comes after pending flip, heartbeat only on summary cadence).
+        ConsumePendingRestore(w);
+
+        // Click ring-dump REMOVED 2026-05-08. The pre-render hook
+        // target was disproven as a camera function (~33k fires/s,
+        // 275/frame, every camStatePtr unique within 100ms = it's a
+        // per-renderable-entity transform builder, not per-camera).
+        // All ring data was noise. See DECOUPLING.md.
+        //
+        // The unreachable block below is left as a stub so the
+        // baseline dump (which is also dumping noise from random
+        // entity structs) and the LMB rising-edge plumbing can be
+        // pulled out cleanly when we pivot to the next probe.
+        if (false /* g_diagCamStateCaptured.load(std::memory_order_acquire) */) {
+            static bool      s_lmbDown    = false;
+            static int       s_dumpDelay  = -1;  // -1 = idle; else countdown ticks
+            static uint32_t  s_clickSeq   = 0;
+
+            const bool lmbNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+            if (lmbNow && !s_lmbDown) {
+                ++s_clickSeq;
+                s_dumpDelay = 4;  // wait 4 ticks then dump
+            }
+            s_lmbDown = lmbNow;
+
+            if (s_dumpDelay > 0) {
+                --s_dumpDelay;
+            } else if (s_dumpDelay == 0) {
+                s_dumpDelay = -1;
+                const uint64_t writeSeq = g_camRingWriteSeq.load(std::memory_order_acquire);
+                const uint64_t startSeq = writeSeq > kCamRingSize ? writeSeq - kCamRingSize : 0;
+                LogInfo("[HeadTrackingAim] CLICKRING[%u] dumping %u entries (seq %llu .. %llu)",
+                        s_clickSeq, (unsigned)(writeSeq - startSeq),
+                        (unsigned long long)startSeq, (unsigned long long)(writeSeq - 1));
+                for (uint64_t s = startSeq; s < writeSeq; ++s) {
+                    const CamRingEntry& slot = g_camRing[s % kCamRingSize];
+                    if (slot.writeSeq == 0) continue;
+                    LogInfo("[HeadTrackingAim] CLICKRING[%u] s=%llu cam=%p q014=(%+.4f,%+.4f,%+.4f,%+.4f) q028=(%+.4f,%+.4f,%+.4f,%+.4f) q154=(%+.4f,%+.4f,%+.4f,%+.4f) q1D4=(%+.4f,%+.4f,%+.4f,%+.4f) q1E8=(%+.4f,%+.4f,%+.4f,%+.4f) q394=(%+.4f,%+.4f,%+.4f,%+.4f) q3A8=(%+.4f,%+.4f,%+.4f,%+.4f) q554=(%+.4f,%+.4f,%+.4f,%+.4f) q568=(%+.4f,%+.4f,%+.4f,%+.4f) q714=(%+.4f,%+.4f,%+.4f,%+.4f) q728=(%+.4f,%+.4f,%+.4f,%+.4f)",
+                            s_clickSeq, (unsigned long long)s, slot.camStatePtr,
+                            slot.quats[0][0], slot.quats[0][1], slot.quats[0][2], slot.quats[0][3],
+                            slot.quats[1][0], slot.quats[1][1], slot.quats[1][2], slot.quats[1][3],
+                            slot.quats[2][0], slot.quats[2][1], slot.quats[2][2], slot.quats[2][3],
+                            slot.quats[3][0], slot.quats[3][1], slot.quats[3][2], slot.quats[3][3],
+                            slot.quats[4][0], slot.quats[4][1], slot.quats[4][2], slot.quats[4][3],
+                            slot.quats[5][0], slot.quats[5][1], slot.quats[5][2], slot.quats[5][3],
+                            slot.quats[6][0], slot.quats[6][1], slot.quats[6][2], slot.quats[6][3],
+                            slot.quats[7][0], slot.quats[7][1], slot.quats[7][2], slot.quats[7][3],
+                            slot.quats[8][0], slot.quats[8][1], slot.quats[8][2], slot.quats[8][3],
+                            slot.quats[9][0], slot.quats[9][1], slot.quats[9][2], slot.quats[9][3],
+                            slot.quats[10][0], slot.quats[10][1], slot.quats[10][2], slot.quats[10][3]);
+                }
+            }
+        }
+
+        // Periodic baseline dump: same offsets, every ~2s of OnUpdate
+        // ticks, so we have non-click-frame reference data to compare
+        // against CLICKDUMP. The flick source will be the offset that
+        // differs between BASELINE (head-rotated) and CLICKDUMP (clean
+        // mouse-direction) on click frames. ~120 ticks @ 60Hz =~ 2s;
+        // a bit faster on 144Hz, fine.
+        // BASELINE periodic dump REMOVED 2026-05-08 - same reason as
+        // click ring-dump above: the underlying camStatePtr is not a
+        // camera, it's per-entity. Data was noise.
+        if (false /* periodic baseline */) {
+            static uint32_t s_baselineCounter = 0;
+            if ((++s_baselineCounter % 120) == 0) {
+                void* camStatePtr = g_diagCamStatePtr.load(std::memory_order_acquire);
+                if (camStatePtr) {
+                    static uint32_t s_baselineSeq = 0;
+                    ++s_baselineSeq;
+                    const uint8_t* base = reinterpret_cast<const uint8_t*>(camStatePtr);
+                    auto dumpQuat = [&](size_t off) {
+                        const float* p = reinterpret_cast<const float*>(base + off);
+                        LogInfo("[HeadTrackingAim] BASELINE[%u] +0x%03zX: (%+.4f,%+.4f,%+.4f,%+.4f)",
+                                s_baselineSeq, off, p[0], p[1], p[2], p[3]);
+                    };
+                    dumpQuat(0x014);
+                    dumpQuat(0x028);
+                    dumpQuat(0x154);
+                    dumpQuat(0x1D4);
+                    dumpQuat(0x1E8);
+                    dumpQuat(0x394);
+                    dumpQuat(0x3A8);
+                    dumpQuat(0x554);
+                    dumpQuat(0x568);
+                    dumpQuat(0x714);
+                    dumpQuat(0x728);
+                }
+            }
+        }
+
+        // Original one-shot first-restore diag (kept for reference).
+        if (g_diagCamStateCaptured.load(std::memory_order_acquire)) {
+            static bool s_diagLogged = false;
+            if (!s_diagLogged) {
+                s_diagLogged = true;
+                void* camStatePtr = g_diagCamStatePtr.load(std::memory_order_acquire);
+                LogInfo("[HeadTrackingAim] DIAG first-restore camState ptr = %p ; g_camInstance = %p ; same? %s",
+                        camStatePtr, (void*)g_camInstance,
+                        (camStatePtr == g_camInstance) ? "YES" : "NO");
+                // Dump outMatrix - this is what the function wrote as
+                // its output. If it's a 4x4 view matrix with an
+                // orthonormal 3x3 rotation block, we know where the
+                // render-facing orientation lives and can modify it.
+                void* outMatrixPtr = g_diagOutMatrixPtr.load(std::memory_order_acquire);
+                LogInfo("[HeadTrackingAim] DIAG outMatrix ptr = %p", outMatrixPtr);
+                if (outMatrixPtr) {
+                    const float* om = reinterpret_cast<const float*>(outMatrixPtr);
+                    for (int row = 0; row < 8; ++row) {
+                        const int off = row * 16;
+                        LogInfo("[HeadTrackingAim] DIAG outMatrix[+0x%02X]: %+10.4f %+10.4f %+10.4f %+10.4f",
+                                off, om[row*4+0], om[row*4+1], om[row*4+2], om[row*4+3]);
+                    }
+                }
+
+                if (camStatePtr) {
+                    const float* cs = reinterpret_cast<const float*>(camStatePtr);
+                    // Raw 512-byte dump (same as before) for coarse layout.
+                    for (int row = 0; row < 32; ++row) {
+                        const int off = row * 16;
+                        LogInfo("[HeadTrackingAim] DIAG camState[+0x%03X]: %+10.4f %+10.4f %+10.4f %+10.4f",
+                                off, cs[row*4+0], cs[row*4+1], cs[row*4+2], cs[row*4+3]);
+                    }
+                    // Targeted scan: find all 4-consecutive-float sequences
+                    // whose magnitude is within 1% of 1.0 AND where each
+                    // component is in (-1.05, 1.05). Unit quaternions
+                    // always satisfy both. Step by 4 bytes - orientation
+                    // fields are always 4-byte aligned in MSVC layout.
+                    LogInfo("[HeadTrackingAim] DIAG camState unit-quat candidates in first 2KB:");
+                    for (int off = 0; off + 16 <= 0x800; off += 4) {
+                        const float* p = reinterpret_cast<const float*>(
+                            reinterpret_cast<const uint8_t*>(camStatePtr) + off);
+                        const float a = p[0], b = p[1], c = p[2], d = p[3];
+                        if (a < -1.05f || a > 1.05f) continue;
+                        if (b < -1.05f || b > 1.05f) continue;
+                        if (c < -1.05f || c > 1.05f) continue;
+                        if (d < -1.05f || d > 1.05f) continue;
+                        const float mag2 = a*a + b*b + c*c + d*d;
+                        if (mag2 < 0.98f || mag2 > 1.02f) continue;
+                        LogInfo("[HeadTrackingAim] DIAG   +0x%03X: (%+.4f,%+.4f,%+.4f,%+.4f) |mag|=%.4f",
+                                off, a, b, c, d, std::sqrt(mag2));
+                    }
+                }
+            }
+        }
+
+        const uint64_t now = GetTickCount64();
+        if (s_lastLogMs == 0) {
+            s_lastLogMs = now;
+            s_prevLogCount = w->native_running_frame;
+        } else if ((now - s_lastLogMs) > 3000) {
+            const uint64_t elapsedMs = now - s_lastLogMs;
+            const uint32_t delta = w->native_running_frame - s_prevLogCount;
+            const double hz = (elapsedMs > 0) ? (delta * 1000.0 / elapsedMs) : 0.0;
+            LogInfo("[HeadTrackingAim] NativeRunningHook heartbeat: frame=%u (+%u in %llums = %.1f Hz) "
+                    "restore_fires=%u hitscan_active=%d hitscan_fires=%u cam=%p cam_ori_off=+0x%X",
+                    w->native_running_frame, delta,
+                    (unsigned long long)elapsedMs, hz,
+                    w->restore_fires,
+                    (int)w->hitscan_hook_active,
+                    w->hitscan_hook_fires,
+                    (void*)::g_camInstance,
+                    ::g_camOrientationOffset);
+            s_lastLogMs = now;
+            s_prevLogCount = w->native_running_frame;
+        }
+    }
+    // RED4ext treats `true` from OnUpdate as "state done, stop calling".
+    // Docs say return value is ignored for Running, but empirically the
+    // callback stopped firing after returning true, so we return false
+    // to guarantee continuous per-frame invocation.
+    return false;
+}
+
+bool OnExit(RED4ext::CGameApplication*) {
+    LogInfo("[HeadTrackingAim] NativeRunningHook: OnExit Running");
+    return true;
+}
+
+} // namespace
+
+
+// File-scope globals mirrored from the anonymous-namespace statics
+// above. Kept in lockstep whenever the statics are updated. Exposed so
+// the render-path hook in CameraHook.cpp can read them DIRECTLY with no
+// cross-TU function call (even a tiny cross-TU call crashes the game
+// when invoked from inside that hook).
+//
+// g_camOrientationOffset: initialized to the known-stable +0xD0 baseline
+// so the render hook can start doing DirectWrites as soon as g_camInstance
+// is populated - doesn't need to wait for a (now-always-skipped) scan.
+RED4ext::IScriptable* g_camInstance = nullptr;
+int                    g_camOrientationOffset = 0xD0;
+
+bool NativeRunningHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle) {
+    if (!sdk || !sdk->gameStates) {
+        LogWarning("[HeadTrackingAim] NativeRunningHook: sdk->gameStates not available");
+        return false;
+    }
+    s_state.OnEnter  = &OnEnter;
+    s_state.OnUpdate = &OnUpdate;
+    s_state.OnExit   = &OnExit;
+
+    const bool added = sdk->gameStates->Add(handle, RED4ext::EGameStateType::Running, &s_state);
+    if (added) {
+        LogInfo("[HeadTrackingAim] NativeRunningHook: registered for Running state");
+    } else {
+        LogWarning("[HeadTrackingAim] NativeRunningHook: gameStates->Add returned false");
+    }
+    return added;
+}
+
+void NativeRunningHook_Stop(const RED4ext::v1::Sdk*, RED4ext::v1::PluginHandle) {
+    // RED4ext has no GameState::Remove. The callback struct is static, so
+    // if the plugin is unloaded the pointer becomes invalid - but RED4ext
+    // only invokes GameState callbacks while the plugin is loaded, so
+    // this is effectively self-cleaning. No-op.
+}
+
+bool NativeCamRestore_Invoke(float qi, float qj, float qk, float qr) {
+    // Unqualified name is accessible inside the TU even though
+    // TryNativeCamRestore is in an anonymous namespace above. The
+    // anonymous namespace restricts EXTERNAL linkage, not local access.
+    return TryNativeCamRestore(qi, qj, qk, qr);
+}
+
+// SEH-wrapped 4-float write. Lives in a separate function because the
+// caller (Hook_PreRender in CameraHook) has C++ objects with destructors
+// in scope which C2712 forbids pairing with __try.
+static bool SehWriteQuat(void* dst, float qi, float qj, float qk, float qr) {
+    __try {
+        float* p = reinterpret_cast<float*>(dst);
+        p[0] = qi;
+        p[1] = qj;
+        p[2] = qk;
+        p[3] = qr;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool NativeCamRestore_DirectWrite(float qi, float qj, float qk, float qr) {
+    // Both cache slots must be populated. They're populated lazily by
+    // ConsumePendingRestore on the first SNAP-CLEAN publish after the
+    // CRTTI system is ready. Until then this returns false and Lua's
+    // tickSnapRestore handles the restore.
+    RED4ext::IScriptable* cam = s_camInstance ? s_camInstance : ::g_camInstance;
+    if (cam == nullptr || s_camOrientationOffset < 0) return false;
+
+    uint8_t* base = reinterpret_cast<uint8_t*>(cam);
+    void*    dst  = base + s_camOrientationOffset;
+    return SehWriteQuat(dst, qi, qj, qk, qr);
+}
+
+// --- SHM-free pre-render staging -------------------------------------
+// The pre-render hook fires 10k+ times per second and has crashed the
+// game whenever we try to access the shared-memory mapping directly from
+// it (even a single non-branching read). Instead, NativeRunningHook
+// (OnUpdate context, proven safe for SHM) mirrors the pending state
+// into these thread-safe atomics, and the pre-render hook only ever
+// reads those. The quat is stored in plain floats protected by the
+// atomic seq counter: writers stage the quat first, then flip the
+// atomic to signal readiness; readers check the atomic and copy out
+// the quat only if set.
+
+// Pre-render staging globals. NOT static so the render-path hook can
+// read them directly without a cross-TU function call. Keeping them in
+// this TU (not CameraHook.cpp) groups them with the writer (OnUpdate
+// staging) and the DirectWrite logic.
+std::atomic<uint32_t> g_preRenderPendingSeq{0};
+std::atomic<uint32_t> g_preRenderConsumedSeq{0};
+std::atomic<uint64_t> g_preRenderStagedMs{0};
+float                 g_preRenderQuat[4] = {0, 0, 0, 1};
+float                 g_preRenderCleanQuat[4] = {0, 0, 0, 1};
+std::atomic<bool>     g_preRenderCleanQuatValid{false};
+
+// Continuously-mirrored head quat. OnUpdate writes it from SHM every
+// tick; the render hook reads plain floats (no atomic needed - single
+// writer, single reader, and the pre-render hook is allowed to see a
+// one-tick stale value without consequence).
+float                 g_headQuat[4] = {0, 0, 0, 1};
+
+// Diag slot for the pre-render hook to drop the camState pointer into
+// on its first restore. OnUpdate drains + logs.
+std::atomic<void*> g_diagCamStatePtr{nullptr};
+std::atomic<bool>  g_diagCamStateCaptured{false};
+std::atomic<void*> g_diagOutMatrixPtr{nullptr};
+
+// Per-click camState dump request flag. SetLocalOrientationHook sets this
+// to true when the engine's click-handler caller (+0x665323) calls
+// SetLocalOrientation. NativeRunningHook OnUpdate consumes it and dumps
+// camState bytes (read-only) so we can compare values across multiple
+// clicks and find the slot that snaps to clean-mouse-direction on click
+// frames vs head-rotated on baseline.
+std::atomic<bool>  g_clickDumpRequested{false};
+
+void NativePreRender_Stage(float qi, float qj, float qk, float qr, uint32_t req_seq) {
+    // Write quat first, then the seq atomic last. Acquire/release isn't
+    // strictly required on x86 but std::atomic with release is explicit
+    // and cheap; the pre-render hook's acquire load pairs with this.
+    bool cleanValid = false;
+    float ci = 0.0f;
+    float cj = 0.0f;
+    float ck = 0.0f;
+    float cr = 1.0f;
+    RED4ext::IScriptable* cam = s_camInstance ? s_camInstance : ::g_camInstance;
+    const int offset = s_camOrientationOffset >= 0 ? s_camOrientationOffset : ::g_camOrientationOffset;
+    if (cam != nullptr && offset >= 0) {
+        __try {
+            const float* p = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(cam) + offset);
+            ci = p[0];
+            cj = p[1];
+            ck = p[2];
+            cr = p[3];
+            cleanValid = true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            cleanValid = false;
+        }
+    }
+
+    g_preRenderCleanQuat[0] = ci;
+    g_preRenderCleanQuat[1] = cj;
+    g_preRenderCleanQuat[2] = ck;
+    g_preRenderCleanQuat[3] = cr;
+    g_preRenderCleanQuatValid.store(cleanValid, std::memory_order_release);
+
+    g_preRenderQuat[0] = qi;
+    g_preRenderQuat[1] = qj;
+    g_preRenderQuat[2] = qk;
+    g_preRenderQuat[3] = qr;
+    g_preRenderStagedMs.store(GetTickCount64(), std::memory_order_release);
+    g_preRenderPendingSeq.store(req_seq, std::memory_order_release);
+}
+
+uint32_t NativePreRender_GetStagedReqSeq() {
+    return g_preRenderPendingSeq.load(std::memory_order_relaxed);
+}

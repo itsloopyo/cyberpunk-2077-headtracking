@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "sensitivity_yaw": 1.0,
+  "sensitivity_pitch": 1.0,
+  "sensitivity_roll": 1.0,
+  "smoothing_factor": 0.5,
+  "clamp_yaw": 120.0,
+  "clamp_pitch": 80.0,
+  "clamp_roll": 45.0
+}

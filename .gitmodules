@@ -1,0 +1,7 @@
+[submodule "native/deps/RED4ext.SDK"]
+	path = native/deps/RED4ext.SDK
+	url = https://github.com/WopsS/RED4ext.SDK.git
+[submodule "cameraunlock-core"]
+	path = cameraunlock-core
+	url = https://github.com/itsloopyo/cameraunlock-core
+	branch = main
