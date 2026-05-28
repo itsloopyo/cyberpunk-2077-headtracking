@@ -171,6 +171,15 @@ local function quatDelta(a, b)
     return math.min(same, negated)
 end
 
+-- Max quatDelta between what we wrote to cam.localOrientation last frame and
+-- what we read back this frame for the engine to count as having KEPT our write
+-- (incremental mutation). Above this, the engine has overwritten the orientation
+-- with its own clean mouse value (camera-state events) and the head-peel must be
+-- skipped - peeling last_head_quat off an already-clean value snaps the view off
+-- by the head angle. ~0.08 L1 ≈ 9 degrees: clears smooth per-frame mouse look,
+-- trips on a meaningful head turn's worth of divergence.
+local PEEL_DIVERGENCE_THRESHOLD = 0.08
+
 --- Create a new camera controller instance
 --- @param settings table Settings module instance
 --- @return table Camera instance
@@ -563,6 +572,17 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     -- regression wrote non-unit quats, so the engine rejected them - hence the
     -- drift-diag showing read==clean - and the conjugate-as-inverse peel was
     -- wrong. Both are fixed now that current_quat/head_quat are normalized.)
+    -- Did the engine KEEP our last write (incremental mutation) vs OVERWRITE it
+    -- with its own clean orientation (camera-state events: ADS in/out, weapon
+    -- swap, vehicle enter/exit, cutscene/dialogue blends, FPP resets)? Peeling
+    -- last_head_quat off an already-overwritten (clean) value injects a spurious
+    -- inverse head rotation and snaps the view/gun off by the head angle - the
+    -- intermittent "points the wrong way". One signal drives every peel below
+    -- (local and world): world = parent * local, so an overwrite of local is an
+    -- overwrite of world too.
+    local engine_kept_our_write = self.last_head_quat and self._last_written_final_quat
+        and quatDelta(current_quat, self._last_written_final_quat) <= PEEL_DIVERGENCE_THRESHOLD
+
     local clean_quat
     if self._pending_recenter_unroll then
         -- Hard recenter (Home key panic-button): strip roll from the current
@@ -595,14 +615,14 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         self._pending_recenter_unroll = false
         self._skip_head_peel_once = false
     elseif self._skip_head_peel_once then
-        local should_peel = self.last_head_quat and self._last_written_final_quat
-            and quatDelta(current_quat, self._last_written_final_quat) <= 0.08
-        clean_quat = should_peel
+        clean_quat = engine_kept_our_write
             and quatNormalize(quatMul(current_quat, quaternionInverse(self.last_head_quat)))
             or current_quat
         self._skip_head_peel_once = false
     elseif self.last_head_quat then
-        clean_quat = quatNormalize(quatMul(current_quat, quaternionInverse(self.last_head_quat)))
+        clean_quat = engine_kept_our_write
+            and quatNormalize(quatMul(current_quat, quaternionInverse(self.last_head_quat)))
+            or current_quat
     else
         clean_quat = current_quat
     end
@@ -643,7 +663,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         local cam_world_now = getActiveCameraWorldOrientation()
         local clean_world = nil
         if cam_world_now then
-            if self.last_head_quat then
+            if engine_kept_our_write then
                 clean_world = quatNormalize(quatMul(cam_world_now, quaternionInverse(self.last_head_quat)))
             else
                 clean_world = cam_world_now
