@@ -29,7 +29,9 @@ local math_min = math.min
 local _cached_window_flags = nil
 
 local function _readCamFov(cam) return cam.fov end
-local function _readCamZoom(cam) return cam.zoom end
+-- cam.zoom field is stale (always 1.0); cam:GetZoom() is the live ADS
+-- magnification. Effective FOV = base_fov / zoom (zoom narrows the FOV).
+local function _readCamZoom(cam) return cam:GetZoom() end
 
 --- @param settings table Settings module instance
 --- @param camera table Camera module instance
@@ -121,7 +123,7 @@ function AdsReticle:draw(is_ads)
         local zok, zraw = pcall(_readCamZoom, cam)
         if zok and type(zraw) == "number" and zraw > 0 then cam_zoom = zraw end
     end
-    local vfov = cam_fov and (cam_fov * (cam_zoom or 1.0)) or nil
+    local vfov = cam_fov and (cam_fov / (cam_zoom or 1.0)) or nil
     if vfov then
         local aspect = screen_w / screen_h
         local tan_half_v = math_tan(math_rad(vfov) * 0.5)

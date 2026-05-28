@@ -6,6 +6,7 @@
 #include "TcpServer.hpp"
 #include "NativeRunningHook.hpp"
 #include "HitscanHook.hpp"
+#include "ShotSnapHook.hpp"
 #include "FreezeFrameHook.hpp"
 
 // Standard OpenTrack UDP port. If you change this, also change the OpenTrack
@@ -54,6 +55,12 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         NativeRunningHook_Start(aSdk, aHandle);
         HitscanHook_Start(aSdk, aHandle);
+        // ShotSnapHook (native cam+0xD0 bracket) is intentionally NOT started:
+        // proven 2026-05-28 to be a no-op for SMG/shotgun decoupling (the
+        // auto-fire shot ray does not read cam.localOrientation). Files kept in
+        // tree for the native shot-vector path. Re-enable only if that path
+        // needs the camera bracket too.
+        // ShotSnapHook_Start(aSdk, aHandle);
 
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
             w->hitscan_hook_active = HitscanHook_IsActive();
@@ -71,6 +78,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         TcpServer_Stop();
         UdpReceiver_Stop();
 
+        ShotSnapHook_Stop(aSdk, aHandle);  // no-op if never started
         HitscanHook_Stop(aSdk, aHandle);
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
             w->hitscan_hook_active = false;

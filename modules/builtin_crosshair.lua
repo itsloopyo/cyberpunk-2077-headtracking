@@ -28,7 +28,10 @@ local math_deg = math.deg
 -- per controller; module-scope helpers + pcall(_fn, args...) avoid that
 -- without losing the error guard.
 local function _readCamFov(cam) return cam.fov end
-local function _readCamZoom(cam) return cam.zoom end
+-- The cam.zoom FIELD is stale (always 1.0); cam:GetZoom() is the live ADS
+-- magnification (e.g. 1.5 on an anti-armor weapon's ADS). Proven via the
+-- DiagReticleFov probe. Zoom MAGNIFIES, so effective FOV = base_fov / zoom.
+local function _readCamZoom(cam) return cam:GetZoom() end
 local function _getRootWidget(ctrl) return ctrl:GetRootWidget() end
 local function _getRootCompoundWidget(ctrl) return ctrl:GetRootCompoundWidget() end
 local function _rootSetMargin(root, m) root:SetMargin(m) end
@@ -93,6 +96,13 @@ local GATE_MATCH_EPS  = 1.0
 local GATE_WALK_DEPTH = 6
 local AIM_MARKER_DEPTH_M = 10.0
 local LOCK_CHILD_TRANSLATION_PX = 8.0
+-- The child-translation lock heuristic latches ANY visible descendant displaced
+-- past LOCK_CHILD_TRANSLATION_PX as an "engine lock-on" and pins the reticle to
+-- (0,0). A SHOTGUN's spread reticle has arms permanently displaced past that
+-- threshold, so it false-fires and freezes the reticle at view-centre ("drifts
+-- with the head"). Disabled: the margin-based _engineDriving signal still backs
+-- off for a genuine root-margin lock projection, without the spread false-fire.
+local USE_LOCK_CHILD_GATE = false
 
 -- DebugLog is required lazily on first use so this module's file-scope is
 -- side-effect free and cannot fail at require-time inside CET's sandbox.
@@ -1145,7 +1155,11 @@ function BuiltinCrosshair:_computeOffset(screen_w, screen_h)
             if zok and type(zraw) == "number" and zraw > 0 then
                 zoom = zraw
             end
-            vfov = raw * zoom
+            -- Zoom magnifies the view, so it NARROWS the FOV: divide, don't
+            -- multiply. (Was `raw * zoom`, harmless only because the stale
+            -- cam.zoom field was always 1.0; with live GetZoom()=1.5 on ADS
+            -- the sign matters and `*` drifted the reticle.)
+            vfov = raw / zoom
         end
     end
     if vfov then
@@ -1200,6 +1214,32 @@ function BuiltinCrosshair:_computeOffset(screen_w, screen_h)
     if dx ~= dx or dy ~= dy then return 0, 0, false end
     if math_abs(dx) > 1e6 or math_abs(dy) > 1e6 then return 0, 0, false end
 
+    -- B2 diagnostic: log the raw FOV/zoom the projection used, so we can learn
+    -- CP2077's zoom convention (does scope zoom multiply or divide the FOV?) and
+    -- fix the zoomed-weapon reticle drift correctly instead of guessing.
+    if self._fov_log_frames and self._fov_log_frames > 0 then
+        self._fov_log_frames = self._fov_log_frames - 1
+        self._fov_log_ctr = (self._fov_log_ctr or 0) + 1
+        if (self._fov_log_ctr % 15) == 0 then
+            -- cam.fov / cam.zoom are blind to ADS (proven: constant 51/1.0).
+            -- Probe candidate live-FOV sources so one ADS capture reveals which
+            -- one actually tracks the zoom; then the projection uses that.
+            local function rd(fn) local ok, v = pcall(fn); if ok and type(v) == "number" then return v end return nil end
+            local function fmt(v) return v and string.format("%.2f", v) or "nil" end
+            local f  = rd(function() return cam and cam.fov end)
+            local z  = rd(function() return cam and cam.zoom end)
+            local fc = rd(function() return cam and cam.fieldOfView end)
+            local gf = rd(function() return cam and cam:GetFOV() end)
+            local gz = rd(function() return cam and cam:GetZoom() end)
+            local player = Game and Game.GetPlayer and Game.GetPlayer()
+            local csys = rd(function() return Game.GetCameraSystem and Game.GetCameraSystem():GetActiveCameraFOV() end)
+            local pfov = rd(function() return player and player:GetFPPCameraComponent() and player:GetFPPCameraComponent():GetFOV() end)
+            dlog(string.format(
+                "[ReticleFov] fov=%s zoom=%s fieldOfView=%s GetFOV=%s GetZoom=%s camSysFOV=%s pGetFOV=%s | yaw=%.1f dx=%.0f",
+                fmt(f), fmt(z), fmt(fc), fmt(gf), fmt(gz), fmt(csys), fmt(pfov), yaw, dx))
+        end
+    end
+
     return dx, dy, true
 end
 
@@ -1227,10 +1267,12 @@ function BuiltinCrosshair:_writeOne(entry, dx, dy)
     entry._lw = entry._lw or {}
     local log_armed = self._gate_log_frames and self._gate_log_frames > 0
     local reason, cur_l, cur_t, child_mag = _engineDriving(root, entry._lw, log_armed)
-    local locked, lock_mag = _lockStateFromVisibleChanges(root, entry._lw, cur_l, cur_t)
-    if locked then
-        reason = "lock-child"
-        child_mag = lock_mag
+    if USE_LOCK_CHILD_GATE then
+        local locked, lock_mag = _lockStateFromVisibleChanges(root, entry._lw, cur_l, cur_t)
+        if locked then
+            reason = "lock-child"
+            child_mag = lock_mag
+        end
     end
     if log_armed then
         self:_gateLog(entry.class, cur_l, cur_t, child_mag, entry._lw, dx, dy, reason)
@@ -1338,10 +1380,12 @@ function BuiltinCrosshair:_writeBrackets(dx, dy)
         if store == nil then store = {}; self._bracket_lw[i] = store end
         local log_armed = self._gate_log_frames and self._gate_log_frames > 0
         local reason, cur_l, cur_t, child_mag = _engineDriving(list[i], store, log_armed)
-        local locked, lock_mag = _lockStateFromVisibleChanges(list[i], store, cur_l, cur_t)
-        if locked then
-            reason = "lock-child"
-            child_mag = lock_mag
+        if USE_LOCK_CHILD_GATE then
+            local locked, lock_mag = _lockStateFromVisibleChanges(list[i], store, cur_l, cur_t)
+            if locked then
+                reason = "lock-child"
+                child_mag = lock_mag
+            end
         end
         if log_armed then
             self:_gateLog("brackets[" .. i .. "]", cur_l, cur_t, child_mag, store, mx, my, reason)
@@ -1530,6 +1574,20 @@ function BuiltinCrosshair:tick(tracking_allowed)
     self:_writeBrackets(dx, dy)
     if self._shove_nameplate then self:_writeNameplates(dx, dy) end
     if self._suppress_hitmarker then self:_suppressHitMarker() end
+end
+
+--- Arm the FOV/zoom diagnostic for `seconds` (default 8). Run it, then aim
+--- down sights / scope a weapon and swing your head: the [ReticleFov] lines
+--- show the fov/zoom the projection used vs the head yaw and resulting dx, so
+--- we can see whether scope zoom should multiply or divide the FOV.
+---   GetMod("HeadTracking").DiagReticleFov(8)
+function BuiltinCrosshair:probeReticleFov(seconds)
+    local s = (type(seconds) == "number" and seconds > 0) and seconds or 8
+    local ok, DebugLog = pcall(require, "modules/debuglog")
+    if ok and DebugLog and DebugLog.setEnabled then DebugLog.setEnabled(true) end
+    self._fov_log_frames = math.floor(s * 120)
+    self._fov_log_ctr = 0
+    dlog(string.format("[ReticleFov] armed ~%ds. ADS/scope a weapon and swing your head now.", s))
 end
 
 function BuiltinCrosshair:setBracketScale(s)

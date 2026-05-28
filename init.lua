@@ -579,6 +579,11 @@ local function onUpdateImpl(deltaTime)
         if aim.tickSnapRestore then aim:tickSnapRestore() end
         if rot_on then
             camera:apply(interp_yaw, interp_pitch, interp_roll, deltaTime, nil, skip_cam_write)
+            -- AFTER camera:apply: while the fire button is held, peel head
+            -- rotation back off cam.localOrientation so the native auto-fire
+            -- loop's per-shot reads see the mouse-only direction (extends
+            -- decoupling past the first shot of an automatic burst).
+            if aim.tickHoldClean then aim:tickHoldClean() end
         end
         if data then
             camera:applyPosition(data.x or 0, data.y or 0, data.z or 0, deltaTime)
@@ -960,5 +965,33 @@ return {
         else
             print("[HeadTracking:DIAG] camera driver not available")
         end
+    end,
+    DiagShotDiscovery = function(seconds)
+        if aim and aim.armShotDiscovery then
+            aim:armShotDiscovery(seconds)
+        else
+            print("[HeadTracking:DIAG] aim driver not available")
+        end
+    end,
+    DiagReticleFov = function(seconds)
+        if crosshair and crosshair.probeReticleFov then
+            crosshair:probeReticleFov(seconds)
+        else
+            print("[HeadTracking:DIAG] crosshair driver not available")
+        end
+    end,
+    -- Toggle the experimental hold-cam-clean-while-firing (auto-weapon
+    -- decoupling test). On by default; call with false to A/B against the
+    -- old first-shot-only behaviour.
+    DiagHoldClean = function(force)
+        if not (aim and aim.setHoldCleanWhileFiring) then
+            print("[HeadTracking:DIAG] aim driver not available")
+            return
+        end
+        local new_val
+        if force == nil then new_val = not aim:isHoldCleanWhileFiring()
+        else new_val = force and true or false end
+        aim:setHoldCleanWhileFiring(new_val)
+        print("[HeadTracking:DIAG] hold-clean-while-firing = " .. tostring(new_val))
     end,
 }

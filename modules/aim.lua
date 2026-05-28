@@ -27,6 +27,32 @@ do
     end
 end
 
+-- Scripted shot-direction discovery. When armed via Aim:armShotDiscovery
+-- (DiagShotDiscovery console hook), every aim-direction override logs its
+-- call rate + the incoming/outgoing forward so we can see, during sustained
+-- automatic fire, WHICH scripted method the follow-up shots re-query (if any).
+-- If none re-fires per shot, the follow-up direction is sourced in native code
+-- and no scripted Override can catch it.
+local _disco_until = 0
+local _disco_counts = {}
+local _disco_yaw = 0
+local _disco_pitch = 0
+local function discoArmed()
+    return os.clock() < _disco_until
+end
+local function discoTap(method, fwd)
+    if not discoArmed() then return end
+    _disco_counts[method] = (_disco_counts[method] or 0) + 1
+    local n = _disco_counts[method]
+    if n <= 3 or (n % 20) == 0 then
+        local fx, fy, fz = 0, 0, 0
+        if fwd then fx, fy, fz = fwd.x or 0, fwd.y or 0, fwd.z or 0 end
+        dlog(string.format(
+            "[ShotDisco] %-42s call#%d in_fwd=(%.3f,%.3f,%.3f) yaw=%.1f pitch=%.1f",
+            method, n, fx, fy, fz, _disco_yaw, _disco_pitch))
+    end
+end
+
 -- Windows constants (cheap; FFI not required to define them).
 local PAGE_READWRITE = 0x04
 local FILE_MAP_ALL_ACCESS = 0xF001F
@@ -389,6 +415,17 @@ local aim_state = {
     -- path) is disabled.
     udp = nil,
     snap_clean_enabled = true,
+    -- Experimental: while the fire button is HELD, hold cam+0xD0 clean every
+    -- frame (after camera:apply) so the NATIVE auto-fire loop's per-shot reads
+    -- see the mouse-only orientation, not just the first trigger-pull. Tests
+    -- whether automatic follow-up shots read cam+0xD0 at all. Tradeoff: the
+    -- view de-tracks (snaps mouse-forward) during sustained fire. PROVEN
+    -- 2026-05-28: works for bullets but de-tracks the view unacceptably,
+    -- because cam+0xD0 is the single shared view+aim slot. Default OFF; kept
+    -- behind DiagHoldClean for reference. The acceptable fix is a sub-frame
+    -- native bracket of the auto-fire's own cam+0xD0 read site.
+    hold_clean_while_firing = false,
+    firing_held = false,
 }
 
 -- Pre-cache math functions
@@ -501,6 +538,7 @@ function Aim:init()
         function(this, instigator, wrappedMethod)
             -- Call original - OUT params come back as return values
             local pos, fwd = wrappedMethod(instigator)
+            discoTap("TargetingSystem:GetCrosshairData", fwd)
 
             -- Debug logging
             aim_debug_counter = aim_debug_counter + 1
@@ -553,6 +591,7 @@ function Aim:init()
     print("[HeadTracking:AIM] Registering Override for TargetingSystem:GetBestComponentOnTargetObject")
     Override("TargetingSystem", "GetBestComponentOnTargetObject",
         function(this, shootStartPosition, shootStartForward, target, componentFilter, wrappedMethod)
+            discoTap("TargetingSystem:GetBestComponentOnTargetObject", shootStartForward)
             -- Debug logging (use same counter to avoid spam)
             local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
 
@@ -596,6 +635,7 @@ function Aim:init()
     Override("TargetingSystem", "GetDefaultCrosshairData",
         function(this, instigator, wrappedMethod)
             local pos, fwd = wrappedMethod(instigator)
+            discoTap("TargetingSystem:GetDefaultCrosshairData", fwd)
 
             local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
             if should_log then
@@ -625,6 +665,7 @@ function Aim:init()
         Override("FPPCameraComponent", "GetForward",
             function(this, wrappedMethod)
                 local fwd = wrappedMethod()
+                discoTap("FPPCameraComponent:GetForward", fwd)
 
                 local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
                 if should_log then
@@ -660,6 +701,7 @@ function Aim:init()
         Override("entCameraComponent", "GetForward",
             function(this, wrappedMethod)
                 local fwd = wrappedMethod()
+                discoTap("entCameraComponent:GetForward", fwd)
 
                 local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
                 if should_log then
@@ -803,6 +845,22 @@ function Aim:init()
         return true
     end
 
+    -- True only on an explicit button-RELEASE action (used to clear the
+    -- firing-held latch so the hold-clean stops when fire stops). Distinct
+    -- from "not pressed" so hold-progress ticks don't prematurely clear it.
+    local function isButtonReleasedAction(action)
+        if not action then return false end
+        local ok, value = pcall(function()
+            if action.GetType then return action:GetType() end
+            return action.actionType
+        end)
+        if not ok or value == nil then return false end
+        if type(value) == "number" then return value == 1 end
+        local okv, num = pcall(function() return value.value end)
+        if okv and type(num) == "number" then return num == 1 end
+        return tostring(value):lower():find("released", 1, true) ~= nil
+    end
+
     local shot_t0 = nil
     aim_state._shot_t0_ref = function() return shot_t0 end
 
@@ -840,8 +898,15 @@ function Aim:init()
 
             if is_fire then
                 if not isButtonPressedAction(action) then
+                    -- Clear the hold-clean latch on explicit release.
+                    if isButtonReleasedAction(action) then
+                        aim_state.firing_held = false
+                    end
                     return
                 end
+                -- Fire button pressed: latch firing-held for the per-frame
+                -- hold-clean (covers native auto-fire follow-up shots).
+                aim_state.firing_held = true
 
                 if aim_state.snap_clean_enabled == false then
                     return
@@ -1022,6 +1087,8 @@ function Aim:update(yaw, pitch, roll, quat)
     aim_state.smooth_yaw = yaw
     aim_state.smooth_pitch = pitch
     aim_state.smooth_roll = roll or 0
+    _disco_yaw = yaw
+    _disco_pitch = pitch
     if quat then
         aim_state.head_quat = quat
     end
@@ -1134,6 +1201,69 @@ function Aim:tickSnapRestore()
     aim_state.snap_saved_orientation = nil
 end
 
+--- Per-frame hold-clean. Called from onUpdate AFTER camera:apply (so it is
+--- not overwritten by the head-rotated view write). While the fire button is
+--- held and the weapon can fire, peel the head rotation off cam.localOrientation
+--- so the native auto-fire loop's per-shot reads see the mouse-only direction.
+--- This is what extends decoupling past the first shot of an automatic burst,
+--- IF those follow-up shots read cam+0xD0. The view de-tracks during the burst.
+function Aim:tickHoldClean()
+    if not aim_state.hold_clean_while_firing then return end
+    if not aim_state.firing_held then return end
+    if aim_state.snap_clean_enabled == false then return end
+    if math_abs(aim_state.smooth_yaw) < 0.1 and math_abs(aim_state.smooth_pitch) < 0.1 then
+        return
+    end
+
+    local player = Game and Game.GetPlayer and Game.GetPlayer()
+    if not player then return end
+    local cam = player:GetFPPCameraComponent()
+    if not cam then return end
+
+    -- Same can-fire gate as SNAP-CLEAN: weapon out, has ammo, not reloading.
+    local ok_w, weapon = pcall(function()
+        return player.GetActiveWeapon and player:GetActiveWeapon()
+    end)
+    if not ok_w or not weapon then
+        aim_state.firing_held = false
+        return
+    end
+    local ok_ammo, ammo = pcall(function()
+        return weapon.HasAnyAmmo and weapon:HasAnyAmmo()
+    end)
+    if ok_ammo and ammo == false then return end
+    local ok_rel, reloading = pcall(function()
+        return weapon.IsInReload and weapon:IsInReload()
+    end)
+    if ok_rel and reloading == true then return end
+
+    local ok, saved = pcall(_camGetLocalOrientation, cam)
+    if not ok or not saved then return end
+
+    -- cam currently holds clean_local * head_quat (camera:apply just wrote it).
+    -- Peel: clean = saved * inv(head_quat). inv = (-i,-j,-k, r).
+    local hq = aim_state.head_quat
+    local hq_inv = Quaternion.new(-hq.i, -hq.j, -hq.k, hq.r)
+    local a, b = saved, hq_inv
+    local clean = Quaternion.new(
+        a.r * b.i + a.i * b.r + a.j * b.k - a.k * b.j,
+        a.r * b.j - a.i * b.k + a.j * b.r + a.k * b.i,
+        a.r * b.k + a.i * b.j - a.j * b.i + a.k * b.r,
+        a.r * b.r - a.i * b.i - a.j * b.j - a.k * b.k
+    )
+    pcall(_camSetLocalOrientation, cam, clean)
+end
+
+function Aim:setHoldCleanWhileFiring(enabled)
+    aim_state.hold_clean_while_firing = enabled and true or false
+    if not aim_state.hold_clean_while_firing then aim_state.firing_held = false end
+    return aim_state.hold_clean_while_firing
+end
+
+function Aim:isHoldCleanWhileFiring()
+    return aim_state.hold_clean_while_firing ~= false
+end
+
 --- Periodically summarize discovery counts to the log. Shows firing
 --- frequency per method so we can distinguish per-frame chatter from
 --- per-shot fires.
@@ -1211,6 +1341,24 @@ end
 
 function Aim:isSnapCleanEnabled()
     return aim_state.snap_clean_enabled ~= false
+end
+
+--- Arm scripted shot-direction discovery for `seconds` (default 8). While
+--- armed, every aim-direction Override logs its call rate + incoming forward.
+--- Run it, then fire an automatic weapon (SMG) for the full window with the
+--- head turned off-centre. Read HeadTracking-diag.log [ShotDisco] lines: a
+--- method whose call count tracks the shot count is re-queried per shot (a
+--- candidate to compensate); one that fires once-per-trigger-pull is bypassed
+--- by the auto follow-ups (their direction is sourced in native code).
+---   GetMod("HeadTracking").DiagShotDiscovery(8)
+function Aim:armShotDiscovery(seconds)
+    local s = (type(seconds) == "number" and seconds > 0) and seconds or 8
+    -- DebugLog ships muted; enable it so [ShotDisco] lines land in the file.
+    local ok, DebugLog = pcall(require, "modules/debuglog")
+    if ok and DebugLog and DebugLog.setEnabled then DebugLog.setEnabled(true) end
+    _disco_until = os.clock() + s
+    _disco_counts = {}
+    dlog(string.format("[ShotDisco] armed for ~%ds. Fire an SMG (full burst) with head turned now.", s))
 end
 
 --- Check if currently in ADS mode

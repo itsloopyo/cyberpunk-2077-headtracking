@@ -19,6 +19,7 @@ add_library(HeadTrackingAim SHARED
     src/AimCompensation.cpp
     src/NativeRunningHook.cpp
     src/HitscanHook.cpp
+    src/ShotSnapHook.cpp
     src/FreezeFrameHook.cpp
     src/UdpReceiver.cpp
     src/TcpServer.cpp
