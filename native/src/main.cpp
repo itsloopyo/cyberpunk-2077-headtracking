@@ -5,6 +5,7 @@
 #include "UdpReceiver.hpp"
 #include "TcpServer.hpp"
 #include "NativeRunningHook.hpp"
+#include "CamPropagatorHook.hpp"
 #include "HitscanHook.hpp"
 #include "ShotSnapHook.hpp"
 #include "FreezeFrameHook.hpp"
@@ -54,15 +55,16 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         }
 
         NativeRunningHook_Start(aSdk, aHandle);
+        CamPropagatorHook_Start(aSdk, aHandle);
         HitscanHook_Start(aSdk, aHandle);
-        // ShotSnapHook (native cam+0xD0 bracket) is intentionally NOT started:
-        // proven 2026-05-28 to be a no-op for SMG/shotgun decoupling (the
-        // auto-fire shot ray does not read cam.localOrientation). Files kept in
-        // tree for the native shot-vector path. Re-enable only if that path
-        // needs the camera bracket too.
-        // ShotSnapHook_Start(aSdk, aHandle);
+        // ShotSnapHook deliberately stays disabled: it brackets cam+0xD0
+        // around shot code, which can hide aim coupling but is still a
+        // camera snap. Real decoupling must keep cam.localOrientation clean
+        // and inject head rotation only into the render path.
 
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
+            w->camera_hook_active = CamPropagatorHook_IsActive();
+            w->camera_hook_fires  = 0;
             w->hitscan_hook_active = HitscanHook_IsActive();
             w->hitscan_hook_fires  = 0;
             w->propagator_inject_active = 0;
@@ -80,7 +82,9 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         ShotSnapHook_Stop(aSdk, aHandle);  // no-op if never started
         HitscanHook_Stop(aSdk, aHandle);
+        CamPropagatorHook_Stop(aSdk, aHandle);
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
+            w->camera_hook_active = false;
             w->hitscan_hook_active = false;
         }
 

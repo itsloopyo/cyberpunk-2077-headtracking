@@ -18,6 +18,7 @@ add_library(HeadTrackingAim SHARED
     src/SharedState.cpp
     src/AimCompensation.cpp
     src/NativeRunningHook.cpp
+    src/CamPropagatorHook.cpp
     src/HitscanHook.cpp
     src/ShotSnapHook.cpp
     src/FreezeFrameHook.cpp

@@ -36,7 +36,7 @@ local NULL_CAMERA_LOG_EVERY_FRAMES = 300  -- ~5s at 60fps
 
 -- Pre-cache math functions for faster access (Lua optimization)
 local math_abs = math.abs
-local math_pow = math.pow
+local math_exp = math.exp
 local math_max = math.max
 local math_deg = math.deg
 local math_asin = math.asin
@@ -81,6 +81,20 @@ end
 -- show visible jitter - especially with wireless trackers. User-facing
 -- smoothing_factor still reads 0.0 as "minimum"; the floor applies internally.
 local BASELINE_SMOOTHING = 0.15
+
+--- Frame-rate independent smoothing factor. Port of cameraunlock-core
+--- SmoothingUtils.CalculateSmoothingFactor: speed = lerp(50, 0.1, smoothing),
+--- alpha = 1 - exp(-speed * dt). At the 0.15 baseline floor and 60 fps this
+--- gives ~0.5/frame, settling in ~100-150ms.
+--- @param smoothing number Smoothing 0-1 (baseline floor already applied)
+--- @param deltaTime number|nil Frame delta in seconds; defaults to 1/60
+--- @return number Interpolation factor in (0, 1)
+local function calculateSmoothingFactor(smoothing, deltaTime)
+    local dt = deltaTime
+    if not dt or dt <= 0 then dt = 1.0 / 60.0 end
+    local speed = 50.0 + (0.1 - 50.0) * smoothing
+    return 1.0 - math_exp(-speed * dt)
+end
 
 --- Clamp a value between min and max
 --- @param value number The value to clamp
@@ -506,19 +520,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     -- Baseline floor (CameraUnlock rule) enforced here, not in settings, so the
     -- user-visible default stays 0.0.
     local smoothing = math_max(cache.smoothing_factor, BASELINE_SMOOTHING)
-
-    -- Calculate frame-rate independent smoothing factor
-    -- Higher smoothing value = slower response (more smoothing)
-    local factor = 1.0 - smoothing
-
-    -- Optional: Adjust for frame time to make smoothing frame-rate independent
-    -- This ensures consistent feel across different frame rates
-    if deltaTime and deltaTime > 0 and deltaTime < 1.0 then
-        -- Adjust factor based on 60 FPS reference
-        local reference_dt = 1.0 / 60.0
-        local time_factor = deltaTime / reference_dt
-        factor = 1.0 - math_pow(smoothing, time_factor)
-    end
+    local factor = calculateSmoothingFactor(smoothing, deltaTime)
 
     -- Apply exponential moving average
     self.smooth_yaw = self.smooth_yaw + (adj_yaw - self.smooth_yaw) * factor
@@ -1089,13 +1091,8 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
     dx, dy, dz = dx * 0.01, dy * 0.01, dz * 0.01
 
     -- 4) exponential smoothing, frame-rate independent.
-    --    speed = lerp(50, 0.1, smoothing). At smoothing=0.15 baseline floor,
-    --    speed ~= 42 -> ~24 ms time constant at 60 Hz.
-    local s = c.position_smoothing
-    if s < 0.15 then s = 0.15 end
-    local speed = 50 + (0.1 - 50) * s
-    local dt = deltaTime or 0.016
-    local alpha = 1 - math.exp(-speed * dt)
+    local s = math_max(c.position_smoothing, BASELINE_SMOOTHING)
+    local alpha = calculateSmoothingFactor(s, deltaTime)
     self.pos_smooth.x = self.pos_smooth.x + (dx - self.pos_smooth.x) * alpha
     self.pos_smooth.y = self.pos_smooth.y + (dy - self.pos_smooth.y) * alpha
     self.pos_smooth.z = self.pos_smooth.z + (dz - self.pos_smooth.z) * alpha

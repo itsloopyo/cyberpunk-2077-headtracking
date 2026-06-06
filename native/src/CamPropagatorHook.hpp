@@ -1,0 +1,8 @@
+#pragma once
+
+#include <RED4ext/Api/v1/PluginHandle.hpp>
+#include <RED4ext/Api/v1/Sdk.hpp>
+
+bool CamPropagatorHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle);
+void CamPropagatorHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle);
+bool CamPropagatorHook_IsActive();

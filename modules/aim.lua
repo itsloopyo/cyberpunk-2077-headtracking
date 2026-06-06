@@ -1103,6 +1103,7 @@ function Aim:update(yaw, pitch, roll, quat)
     end
     if aim_state.udp and aim_state.udp.setNativeState then
         local propagator_inject = aim_state.settings:get("decouple_diag_clean_cam") == true
+            or native_camera_ready
         aim_state.udp:setNativeState(yaw, pitch, aim_state.smooth_roll,
                                      aim_state.enabled, aim_state.is_ads,
                                      aim_state.head_quat,
@@ -1121,6 +1122,7 @@ end
 function Aim:setPropagatorInjectActive(active)
     if not shared_mem.initialized or shared_mem.state == nil then return end
     shared_mem.state.propagator_inject_active = active and 1 or 0
+    shared_mem.state.camera_hook_inject = active and true or false
 end
 
 --- Enable or disable aim compensation.
