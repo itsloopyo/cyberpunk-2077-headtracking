@@ -63,8 +63,15 @@ jobs:
       - name: Setup Visual Studio environment
         uses: microsoft/setup-msbuild@v3
 
+      # run-install: false skips setup-pixi's `pixi install` + `pixi list`
+      # verification. This project's pixi environment has zero conda
+      # dependencies (native RED4ext/Lua mod; pixi is only a task runner), and
+      # pixi 0.70+ exits 1 when `pixi list` finds an empty environment. The
+      # build step below self-installs the environment via `pixi run`.
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          run-install: false
 
       # Same command as build.yml and developers run - no build logic in YAML.
       - name: Build and package
