@@ -27,7 +27,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [string]$Version
+    [string]$Version,
+    # Ship a release even when there are no user-facing commits since the
+    # last tag (writes a maintenance changelog entry instead of aborting).
+    [switch]$Force
 )
 
 Set-StrictMode -Version Latest
@@ -47,6 +50,22 @@ if ($Version -eq 'nightly') {
 }
 
 Import-Module (Join-Path $projectRoot 'cameraunlock-core/powershell/ReleaseWorkflow.psm1') -Force
+
+# Mirrors New-ChangelogFromCommits' insertion so a -Force maintenance entry
+# lands in the same place with the same shape.
+function Add-MaintenanceChangelogEntry {
+    param([string]$Path, [string]$NewVersion)
+    $date = Get-Date -Format 'yyyy-MM-dd'
+    $entry = "## [$NewVersion] - $date`n`n### Changed`n`n- Maintenance release (no user-facing changes).`n`n"
+    $changelog = Get-Content $Path -Raw
+    if ($changelog -match '(?s)(# Changelog.*?)(## \[)') {
+        $changelog = $changelog -replace '(?s)(# Changelog.*?\n\n)', "`$1$entry"
+    } else {
+        $changelog = $changelog -replace '(?s)(# Changelog.*?\n)', "`$1$entry"
+    }
+    $changelog = $changelog.TrimEnd() + "`n"
+    Set-Content $Path $changelog -NoNewline
+}
 
 Write-Host ''
 Write-Host '========================================' -ForegroundColor Yellow
@@ -81,8 +100,42 @@ if (Test-GitTagExists -Tag $tagName) {
 }
 Write-Host "  [OK] On main, tree clean, tag $tagName free" -ForegroundColor Green
 
-# ---- Step 3: Update version in canonical sources --------------------------
-Write-Info 'Step 3/8: Updating version in canonical sources...'
+# ---- Step 3: Generate CHANGELOG.md ----------------------------------------
+# This is the gate that aborts when there are no user-facing commits, so run
+# it BEFORE mutating any version files or building - a failure here then
+# leaves a clean tree instead of stranding a half-applied version bump with
+# no tag.
+Write-Info 'Step 3/8: Generating CHANGELOG.md from commits...'
+$changelogPath = Join-Path $projectRoot 'CHANGELOG.md'
+$hasExistingTags = git tag -l 2>$null
+if (-not $hasExistingTags) {
+    # First release - ensure a baseline CHANGELOG exists
+    if (-not (Test-Path $changelogPath)) {
+        $date = Get-Date -Format 'yyyy-MM-dd'
+        "# Changelog`n`n## [$Version] - $date`n`nFirst release.`n" | Set-Content $changelogPath
+        Write-Host "  [OK] Wrote initial CHANGELOG.md" -ForegroundColor Green
+    }
+} else {
+    try {
+        $result = New-ChangelogFromCommits -ChangelogPath $changelogPath -Version $Version
+        if ($result.AlreadyExists) {
+            Write-Host "  [OK] Changelog already has [$Version] (kept)" -ForegroundColor Green
+        } else {
+            Write-Host ("  [OK] Changelog updated: {0} feat / {1} fix / {2} change" -f $result.Features, $result.Fixes, $result.Changes) -ForegroundColor Green
+        }
+    } catch {
+        if (-not $Force) {
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host 'No user-facing changes to release. Re-run with -Force for a maintenance release.' -ForegroundColor Yellow
+            exit 1
+        }
+        Write-Host 'No user-facing commits since last tag - writing maintenance entry (-Force).' -ForegroundColor Yellow
+        Add-MaintenanceChangelogEntry -Path $changelogPath -NewVersion $Version
+    }
+}
+
+# ---- Step 4: Update version in canonical sources --------------------------
+Write-Info 'Step 4/8: Updating version in canonical sources...'
 
 $installCmd  = Join-Path $projectRoot 'scripts/install.cmd'
 $gameUiLua   = Join-Path $projectRoot 'modules/GameUI.lua'
@@ -106,21 +159,11 @@ if (Test-Path $gameUiLua) {
     }
 }
 
-# ---- Step 4: Build (release config) ---------------------------------------
-Write-Info 'Step 4/8: pixi run build...'
+# ---- Step 5: Build (release config) ---------------------------------------
+Write-Info 'Step 5/8: pixi run build...'
 & pixi run build
 if ($LASTEXITCODE -ne 0) { Write-Fail "pixi run build failed (exit $LASTEXITCODE)" }
 Write-Host '  [OK] Build succeeded' -ForegroundColor Green
-
-# ---- Step 5: Generate CHANGELOG.md ----------------------------------------
-Write-Info 'Step 5/8: Generating CHANGELOG.md from commits...'
-$changelogPath = Join-Path $projectRoot 'CHANGELOG.md'
-$result = New-ChangelogFromCommits -ChangelogPath $changelogPath -Version $Version
-if ($result.AlreadyExists) {
-    Write-Host "  [OK] Changelog already has [$Version] (kept)" -ForegroundColor Green
-} else {
-    Write-Host ("  [OK] Changelog updated: {0} feat / {1} fix / {2} change" -f $result.Features, $result.Fixes, $result.Changes) -ForegroundColor Green
-}
 
 # ---- Step 6: Commit -------------------------------------------------------
 Write-Info 'Step 6/8: Committing version bump + changelog...'
