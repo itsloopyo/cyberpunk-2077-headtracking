@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "mod_info": {
+    "name": "HeadTracking",
+    "version": "0.0.0",
+    "game_id": "cyberpunk-2077"
+  },
+  "strategy": "CET",
+  "delivery_mode": "manifest",
+
+  "loader": {
+    "archives": [],
+    "detect": [
+      "bin/x64/plugins/cyber_engine_tweaks/cyber_engine_tweaks.asi",
+      "red4ext/RED4ext.dll"
+    ],
+    "seed": []
+  },
+
+  "files": [
+    { "source": "init.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/init.lua" },
+    { "source": "modules/ads_reticle.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/ads_reticle.lua" },
+    { "source": "modules/aim.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/aim.lua" },
+    { "source": "modules/builtin_crosshair.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/builtin_crosshair.lua" },
+    { "source": "modules/camera.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/camera.lua" },
+    { "source": "modules/debuglog.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/debuglog.lua" },
+    { "source": "modules/GameUI.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/GameUI.lua" },
+    { "source": "modules/hotkeys.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/hotkeys.lua" },
+    { "source": "modules/nativesettings.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/nativesettings.lua" },
+    { "source": "modules/perf.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/perf.lua" },
+    { "source": "modules/poseinterpolator.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/poseinterpolator.lua" },
+    { "source": "modules/settings.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/settings.lua" },
+    { "source": "modules/state.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/state.lua" },
+    { "source": "modules/udp.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/udp.lua" },
+    { "source": "modules/ui.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/ui.lua" },
+    { "source": "native/build/bin/HeadTrackingAim.dll", "target": "red4ext/plugins/HeadTrackingAim.dll" }
+  ],
+
+  "runtime_requirements": [],
+  "dependencies": []
+}

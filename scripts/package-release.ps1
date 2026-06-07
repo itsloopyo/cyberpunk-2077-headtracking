@@ -192,6 +192,17 @@ foreach ($d in $docFiles) {
     if (Test-Path $src) { Copy-Item -Path $src -Destination (Join-Path $installerStaging (Split-Path -Leaf $d)) -Force }
 }
 
+# Stamp launcher-manifest.json with the real release version and drop it at the
+# installer ZIP root. This is the file Lopari reads to ingest the package; the
+# committed copy carries the placeholder 0.0.0 and the packager overwrites
+# mod_info.version with the version actually being released.
+$manifestSource = Join-Path $projectRoot "launcher-manifest.json"
+if (-not (Test-Path $manifestSource)) { Write-Fail "Missing launcher-manifest.json at project root" }
+$manifest = Get-Content -Path $manifestSource -Raw | ConvertFrom-Json
+$manifest.mod_info.version = $Version
+$manifest | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $installerStaging "launcher-manifest.json") -Encoding UTF8
+Write-Info "Stamped launcher-manifest.json (mod_info.version=$Version)"
+
 # Bundle the shared detection bundle (find-game.ps1 + games.json) so the root
 # install.cmd's shim resolves at user-install time without a network round-trip.
 Copy-SharedBundle -StagingDir $installerStaging -CoreRoot (Join-Path $projectRoot 'cameraunlock-core')
