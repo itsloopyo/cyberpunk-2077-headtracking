@@ -1103,7 +1103,6 @@ function Aim:update(yaw, pitch, roll, quat)
     end
     if aim_state.udp and aim_state.udp.setNativeState then
         local propagator_inject = aim_state.settings:get("decouple_diag_clean_cam") == true
-            or native_camera_ready
         aim_state.udp:setNativeState(yaw, pitch, aim_state.smooth_roll,
                                      aim_state.enabled, aim_state.is_ads,
                                      aim_state.head_quat,

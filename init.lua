@@ -565,7 +565,6 @@ local function onUpdateImpl(deltaTime)
 
     if interp_yaw ~= nil then
         local clean_cam_decouple = settings:get("decouple_diag_clean_cam") == true
-            or (aim.nativeCameraHookActive and aim:nativeCameraHookActive() == true)
         if aim.setPropagatorInjectActive then
             aim:setPropagatorInjectActive(clean_cam_decouple)
         end
