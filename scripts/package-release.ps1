@@ -176,6 +176,20 @@ if ($hasNative) {
     Copy-Item -Path $nativeDllPath -Destination (Join-Path $installerDllDir "HeadTrackingAim.dll") -Force
 }
 
+# Vendored loaders (CET + RED4ext) at the path launcher-manifest.json references
+# (vendor/<slug>/<slug>.zip). The launcher extracts these; the legacy install.cmd
+# path (deploy.ps1) reads them from the same place. The ZIP is the offline,
+# self-contained source of truth - install never reaches the network.
+foreach ($loader in @('cet', 'red4ext')) {
+    $loaderZip = Join-Path $projectRoot "vendor\$loader\$loader.zip"
+    if (-not (Test-Path $loaderZip)) {
+        Write-Fail "Missing vendored loader vendor\$loader\$loader.zip - run 'pixi run update-deps' first."
+    }
+    $loaderDest = Join-Path $installerStaging "vendor\$loader"
+    New-Item -ItemType Directory -Path $loaderDest -Force | Out-Null
+    Copy-Item -Path $loaderZip -Destination (Join-Path $loaderDest "$loader.zip") -Force
+}
+
 # Scripts dir - identical to repo's scripts/ so deploy.ps1 resolves sourceDir correctly.
 $installerScriptsDir = Join-Path $installerStaging "scripts"
 New-Item -ItemType Directory -Path $installerScriptsDir -Force | Out-Null

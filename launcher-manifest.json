@@ -9,9 +9,12 @@
   "delivery_mode": "manifest",
 
   "loader": {
-    "archives": [],
+    "archives": [
+      { "source": "vendor/cet/cet.zip", "dest": "" },
+      { "source": "vendor/red4ext/red4ext.zip", "dest": "" }
+    ],
     "detect": [
-      "bin/x64/plugins/cyber_engine_tweaks/cyber_engine_tweaks.asi",
+      "bin/x64/plugins/cyber_engine_tweaks.asi",
       "red4ext/RED4ext.dll"
     ],
     "seed": []

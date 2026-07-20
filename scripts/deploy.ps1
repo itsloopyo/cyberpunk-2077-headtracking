@@ -445,6 +445,41 @@ function Deploy-NativePlugin {
     return $true
 }
 
+function Install-VendoredLoader {
+    param(
+        [string]$SourceDir,
+        [string]$GameDir,
+        [string]$Slug,
+        [string]$DetectRelPath,
+        [string]$DisplayName
+    )
+
+    # Already installed (user's own copy, or a prior run) - never clobber it.
+    $detect = Join-Path $GameDir $DetectRelPath
+    if (Test-Path $detect) {
+        Write-Info "$DisplayName already present - leaving the existing install untouched"
+        return $true
+    }
+
+    # Vendored zip ships in the release ZIP at vendor\<slug>\<slug>.zip. Absent
+    # only in a bare dev checkout (run 'pixi run update-deps'); fall through so
+    # the caller's manual-install guidance still fires there.
+    $zip = Join-Path $SourceDir "vendor\$Slug\$Slug.zip"
+    if (-not (Test-Path $zip)) {
+        Write-Info "$DisplayName not bundled (vendor\$Slug\$Slug.zip missing - dev tree?) - skipping auto-install"
+        return $false
+    }
+
+    Write-Info "Installing bundled $DisplayName into the game folder..."
+    Expand-Archive -Path $zip -DestinationPath $GameDir -Force
+    if (-not (Test-Path $detect)) {
+        Write-Fail "$DisplayName extraction did not produce $DetectRelPath - vendored zip may be corrupt"
+        return $false
+    }
+    Write-Success "Installed bundled $DisplayName"
+    return $true
+}
+
 # Main execution
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Yellow
@@ -482,6 +517,10 @@ if (-not $gameDir) {
     exit 1
 }
 Write-Info "Found Cyberpunk 2077 at: $gameDir"
+
+# Auto-install the bundled CET loader if the user doesn't already have one.
+Install-VendoredLoader -SourceDir $sourceDir -GameDir $gameDir -Slug 'cet' `
+    -DetectRelPath 'bin\x64\plugins\cyber_engine_tweaks.asi' -DisplayName 'Cyber Engine Tweaks' | Out-Null
 
 # Validate CET installation
 $cetDir = Validate-CETInstallation -GameDir $gameDir
@@ -525,6 +564,10 @@ if (-not $result) {
 Write-Host ""
 Write-Info "Merging HeadTracking hotkey defaults into CET bindings.json..."
 Merge-CetBindings -CetDir $cetDir
+
+# Auto-install the bundled RED4ext loader so the native aim plugin loads.
+Install-VendoredLoader -SourceDir $sourceDir -GameDir $gameDir -Slug 'red4ext' `
+    -DetectRelPath 'red4ext\RED4ext.dll' -DisplayName 'RED4ext' | Out-Null
 
 # Deploy native RED4ext plugin (optional - for aim compensation)
 Write-Host ""

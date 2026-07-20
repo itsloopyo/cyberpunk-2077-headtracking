@@ -34,8 +34,9 @@ validate-release = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/val
 
 # Package release ZIPs (installer + Nexus). Depends on `build` so the
 # bundled native DLL is always rebuilt before zipping - this is the chain
-# described in cameraunlock-core/AGENTS.md (`package` -> `build` ->
-# vendoring; this mod has no vendored loader).
+# described in cameraunlock-core/AGENTS.md (`package` -> `build`). The
+# vendored CET + RED4ext loaders are committed under vendor/ and bundled
+# into the ZIP by package-release.ps1.
 package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build"] }
 
 # Automated release workflow
@@ -44,8 +45,8 @@ release = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/release.ps1"
 # Clean build artifacts
 clean = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/clean.ps1" }
 
-# No vendored loaders (native RED4ext plugin, no BepInEx/MelonLoader/etc to refresh)
-update-deps = { cmd = "powershell -NoProfile -Command \"Write-Host 'No vendored dependencies to update (native RED4ext plugin).'\"" }
+# Refresh vendored CET + RED4ext loaders from upstream (manual; commit after).
+update-deps = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/update-deps.ps1" }
 
 [target.linux-64.tasks]
 # Fetch/refresh submodules
@@ -70,8 +71,8 @@ release = { cmd = "bash scripts/release.sh" }
 # Clean build artifacts
 clean = { cmd = "rm -rf dist release native/build native/out && echo 'Build artifacts cleaned'" }
 
-# No vendored loaders (native RED4ext plugin, no BepInEx/MelonLoader/etc to refresh)
-update-deps = { cmd = "echo 'No vendored dependencies to update (native RED4ext plugin).'" }
+# update-deps refreshes Windows-only vendored loaders; not available on Linux.
+update-deps = { cmd = "echo 'update-deps is only available on Windows (CET/RED4ext loaders)' && exit 0" }
 
 [dependencies]
 # No pixi dependencies needed - Lua mod uses CET runtime

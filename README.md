@@ -226,6 +226,12 @@ pixi run release 1.0.0
 - [GameUI](https://github.com/psiberx/cp2077-cet-kit) by psiberx, for game-state detection.
 - [Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut, for the in-game crosshair overlay (used through CET).
 
+## Community & Support
+
+- Discord: [Loop's Head Tracking Hangout](https://discord.com/invite/dxyZdyFNT9) - setup help, bug reports, and new-release announcements
+- [Lopari](https://lopari.app) - free Windows launcher with one-click install and launch for the released head-tracking mods
+- [Headcam](https://headcam.app) - use your iPhone or Android phone as the head tracker
+
 ## License
 
 MIT - see [LICENSE](LICENSE). Copyright (c) 2026 itsloopyo.
