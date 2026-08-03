@@ -3,6 +3,7 @@
 #include "AimCompensation.hpp"  // LogInfo/LogWarning/LogError
 #include "HitscanHook.hpp"
 #include "NativeRunningHook.hpp"
+#include "UdpReceiver.hpp"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -220,6 +221,7 @@ void ServeClient(SOCKET client) {
                 LogWarning("[HeadTrackingAim] TCP processed state parse failed, bytes=%d", n);
             }
         }
+        UdpReceiver_PublishLatest();
         HeadTrackingState state = g_sharedState.Read();
         ++s_seq;
         uint32_t flags = 0;
@@ -227,7 +229,8 @@ void ServeClient(SOCKET client) {
         if (state.hitscan_hook_active && hasProcessedState) flags |= kFlagHitscanActive;
         if (state.camera_hook_active && hasProcessedState)  flags |= kFlagCameraActive;
         const ChordEdges edges = ConsumeChordEdges();
-        if (edges.recenter)       flags |= kFlagRecenter;
+        const bool trackerRecenter = UdpReceiver_TryConsumeRecenterRequest();
+        if (edges.recenter || trackerRecenter) flags |= kFlagRecenter;
         if (edges.toggleTracking) flags |= kFlagToggleTracking;
         if (edges.cycleMode)      flags |= kFlagCycleMode;
         if (edges.yawMode)        flags |= kFlagToggleYaw;

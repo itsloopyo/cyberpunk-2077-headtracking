@@ -232,8 +232,10 @@ function Camera.new(settings)
     self.last_head_quat = nil
 
     -- Auto-recenter on first fresh packet (CameraUnlock rule 8).
-    -- Counts stabilization frames after a stale-→-fresh transition and fires
-    -- recenter() once the tracker has had a few frames to stabilize.
+    -- Counts stabilization frames while armed and fires recenter() once the
+    -- tracker has had a few frames to stabilize. Armed at startup and on
+    -- world load / session start only - never re-armed by a data gap, so a
+    -- tracker that stops and resumes (face lost mid-session) keeps its center.
     self.stabilization_frames = 0
     self.pending_auto_recenter = true  -- true on startup so first-ever packets trigger recenter
     self.pending_initial_reset = true  -- one-shot hard reset on first frame cam is available
@@ -858,9 +860,9 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     self.stats.last_applied_roll = self.smooth_roll
 end
 
---- Stabilization frames required after a stale→fresh transition before we
---- auto-recenter. The first few packets from a freshly connected tracker are
---- often garbage (initialization, warmup).
+--- Stabilization frames required after arming before we auto-recenter. The
+--- first few packets from a freshly connected tracker are often garbage
+--- (initialization, warmup).
 local AUTO_RECENTER_STABILIZATION_FRAMES = 5
 
 --- One-shot startup reset: forces cam.localOrientation to identity and
@@ -889,9 +891,8 @@ function Camera:tryInitialReset()
 end
 
 --- Note that a fresh packet was just applied. Ticks the stabilization counter
---- and fires auto-recenter on the Nth frame after a stale→fresh transition.
+--- and fires auto-recenter on the Nth fresh packet after arming.
 function Camera:noteFreshPacket()
-    self._stale_streak_frames = 0
     if self.pending_auto_recenter then
         self.stabilization_frames = self.stabilization_frames + 1
         if self.stabilization_frames >= AUTO_RECENTER_STABILIZATION_FRAMES then
@@ -911,20 +912,6 @@ end
 function Camera:armAutoRecenter()
     self.pending_auto_recenter = true
     self.stabilization_frames = 0
-end
-
---- Note that no fresh packet arrived this frame. Only re-arms auto-recenter
---- after an extended stale streak indicating an actual tracker disconnect,
---- not transient single-frame UDP jitter (which is normal at any frame-rate
---- vs tracker-rate mismatch and was previously causing the reticle to drift
---- back to screen center on every blip).
-local STALE_STREAK_FRAMES_FOR_REARM = 120  -- ~2s at 60fps
-function Camera:noteStalePacket()
-    self._stale_streak_frames = (self._stale_streak_frames or 0) + 1
-    if self._stale_streak_frames >= STALE_STREAK_FRAMES_FOR_REARM then
-        self.pending_auto_recenter = true
-        self.stabilization_frames = 0
-    end
 end
 
 --- Store current head position as the neutral/center position

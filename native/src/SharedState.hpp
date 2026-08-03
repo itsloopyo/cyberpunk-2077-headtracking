@@ -144,13 +144,50 @@ struct HeadTrackingState {
     // snap-clean for documentation. Backbuffer is still copied each frame
     // so re-enabling has no warm-up frame. Default 1 = freeze enabled.
     uint32_t freeze_frame_enabled;
+
+    // ------------------------------------------------------------------
+    // Section 9: aim-provider decouple (AimProviderHook)
+    // ------------------------------------------------------------------
+    // The shot asks an entIOrientationProvider for its launch orientation;
+    // for the player that answer is the camera orientation, head rotation
+    // and all. The native hook peels the head rotation off that answer in
+    // the caller's own buffer, so bullets follow the mouse while the view
+    // keeps following the head - per pellet, so automatic fire decouples
+    // too, and with no camera state touched there is nothing to restore.
+    //
+    // provider_mode (Lua -> native):
+    //   0 off (instrument only)  1 peel, camera-match gated (ship)
+    //   2 peel while LMB held    3 peel always    4 double the head rotation
+    // Modes 2-4 are diagnostics.
+    uint32_t provider_hook_active;
+    uint32_t provider_mode;
+    uint32_t provider_calls;
+    uint32_t provider_overrides;
+
+    // ------------------------------------------------------------------
+    // Section 10: aim-getter decouple (AimGetterHook)
+    // ------------------------------------------------------------------
+    // Same idea as section 9 for vanilla hitscan weapons, which never build a
+    // projectile and so never ask an orientation provider. They call for the
+    // camera instead and get the answer in their own buffer - rewriting that
+    // buffer decouples the round with no camera state touched.
+    //
+    // aim_getter_mode (Lua -> native):
+    //   0 off   1 instrument only   2 peel via +0x802390 (GetWorldOrientation)
+    //   3 peel via +0x1D92A0 (GetWorldTransform)   4 peel via +0x84C968
+    //   (the weapon-fire routine's Normalize(target - muzzle))
+    uint32_t aim_getter_mode;
+    uint32_t aim_getter_calls_a;
+    uint32_t aim_getter_calls_b;
+    uint32_t aim_getter_calls_c;
+    uint32_t aim_getter_overrides;
 };
 
 // Shared memory name - must match CET Lua code
 constexpr const char* SHARED_MEM_NAME = "HeadTrackingAimState";
 constexpr size_t SHARED_MEM_SIZE = sizeof(HeadTrackingState);
 
-static_assert(sizeof(HeadTrackingState) == 152,
+static_assert(sizeof(HeadTrackingState) == 184,
     "HeadTrackingState layout changed - update modules/aim.lua cdef to match");
 
 class SharedState {

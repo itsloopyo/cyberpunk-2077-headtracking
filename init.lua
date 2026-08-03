@@ -233,6 +233,11 @@ local hotkey_last_fire = {}
 -- object work from the hotkey callback.
 local recenter_pending = false
 
+-- Set once the "queued" toast has been shown for the current pending
+-- recenter, so the blocked-in-menu path notifies once per press instead
+-- of every frame. Cleared when the recenter is performed.
+local recenter_deferred_notified = false
+
 -- Tracks the previous frame's tracking-allowed state so onUpdate can detect
 -- the allowed->not-allowed edge itself. camera:reset() (which peels our baked
 -- head rotation back off and clears last_head_quat) is otherwise only driven by
@@ -489,9 +494,11 @@ local function onUpdateImpl(deltaTime)
     end
     was_tracking_allowed = tracking_allowed
 
-    if recenter_pending and not tracking_allowed then
-        recenter_pending = false
-        if ui then ui:showWarning("Recenter: paused (not in gameplay)", 1.5) end
+    -- A pending recenter survives menus/loading: keep the flag set and apply
+    -- it on the first frame tracking is allowed again.
+    if recenter_pending and not tracking_allowed and not recenter_deferred_notified then
+        recenter_deferred_notified = true
+        if ui then ui:showWarning("Recenter: queued (applies on return to gameplay)", 1.5) end
     end
 
     if not tracking_allowed then
@@ -513,6 +520,15 @@ local function onUpdateImpl(deltaTime)
 
     perf:updateStart()
 
+    -- Consume the native recenter flag BEFORE the perform block so a press
+    -- observed this frame is applied this frame, not on frame N+1. The flag
+    -- is latched by the socket callback, not by udp:poll(), so reading it
+    -- before the poll below loses nothing.
+    if udp.consumeNativeRecenterRequested and udp:consumeNativeRecenterRequested() then
+        recenter_pending = true
+        dlog("[HeadTracking] Native recenter requested")
+    end
+
     -- Perform a pending recenter here, in the per-frame camera-update context
     -- (not the hotkey callback). handleRecenter only sets the flag; mashing
     -- Home coalesces to a single recenter. recenter() itself writes nothing to
@@ -521,6 +537,7 @@ local function onUpdateImpl(deltaTime)
     -- and only orientation write via its normal peel. One write per frame.
     if recenter_pending then
         recenter_pending = false
+        recenter_deferred_notified = false
         camera:recenter()
         if ui then ui:showSuccess("Head Tracking: Recentered", 2.0) end
     end
@@ -533,10 +550,6 @@ local function onUpdateImpl(deltaTime)
     -- value and camera:apply gets skipped, leaving visible judder on
     -- high-refresh displays.
     local data = udp:poll()
-    if udp.consumeNativeRecenterRequested and udp:consumeNativeRecenterRequested() then
-        recenter_pending = true
-        dlog("[HeadTracking] Native recenter requested")
-    end
     -- Native chord polls for Ctrl+Shift+{Y,G,H}. The CET registerHotkey path
     -- below only fires for the configured nav-cluster key; chord polling
     -- happens in native because LuaJIT FFI is sandboxed on this build.
@@ -594,8 +607,6 @@ local function onUpdateImpl(deltaTime)
     if data then
         perf:recordPacket()
         if camera.noteFreshPacket then camera:noteFreshPacket() end
-    elseif camera.noteStalePacket then
-        camera:noteStalePacket()
     end
 
     local rotation = camera:getSmoothedRotation()

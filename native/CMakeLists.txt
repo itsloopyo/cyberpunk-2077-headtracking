@@ -12,6 +12,18 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # RED4ext.SDK as submodule
 add_subdirectory(deps/RED4ext.SDK)
 
+set(CAMERAUNLOCK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cameraunlock-core/cpp")
+if(NOT EXISTS "${CAMERAUNLOCK_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+        "cameraunlock-core not found at ${CAMERAUNLOCK_DIR}. "
+        "Run: git submodule update --init --recursive")
+endif()
+set(CAMERAUNLOCK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CAMERAUNLOCK_DIR} ${CMAKE_BINARY_DIR}/_deps/cameraunlock EXCLUDE_FROM_ALL)
+if(MSVC)
+    set_property(TARGET cameraunlock PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 # Our plugin
 add_library(HeadTrackingAim SHARED
     src/main.cpp
@@ -23,6 +35,8 @@ add_library(HeadTrackingAim SHARED
     src/ShotSnapHook.cpp
     src/ShotEntryProbe.cpp
     src/FreezeFrameHook.cpp
+    src/AimProviderHook.cpp
+    src/AimGetterHook.cpp
     src/UdpReceiver.cpp
     src/TcpServer.cpp
 )
@@ -33,8 +47,8 @@ target_include_directories(HeadTrackingAim PRIVATE
 
 target_link_libraries(HeadTrackingAim PRIVATE
     RED4ext.SDK
+    cameraunlock
     psapi    # HitscanHook: GetModuleInformation for RVA resolution
-    ws2_32   # Winsock UDP receiver (replaces the Python bridge)
     d3d12    # FreezeFrameHook: swapchain Present hook + backbuffer copy
     dxgi     # FreezeFrameHook: swapchain creation for vtable steal
 )

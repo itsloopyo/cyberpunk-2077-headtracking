@@ -129,6 +129,19 @@ local function ensureFfi()
 
                 /* === Section 8: Lua -> native (FreezeFrameHook gate) === */
                 uint32_t freeze_frame_enabled;
+
+                /* === Section 9: aim-provider decouple === */
+                uint32_t provider_hook_active;
+                uint32_t provider_mode;
+                uint32_t provider_calls;
+                uint32_t provider_overrides;
+
+                /* === Section 10: aim-getter decouple === */
+                uint32_t aim_getter_mode;
+                uint32_t aim_getter_calls_a;
+                uint32_t aim_getter_calls_b;
+                uint32_t aim_getter_calls_c;
+                uint32_t aim_getter_overrides;
             } HeadTrackingState;
 
             void* CreateFileMappingA(void* hFile, void* lpAttr,
@@ -414,6 +427,9 @@ local aim_state = {
     -- the TCP control channel even when CET's FFI (and thus our SHM
     -- path) is disabled.
     udp = nil,
+    -- Still the ship behaviour. The native AimGetterHook peel is meant to
+    -- replace it (it decouples automatic fire too), but until one of its
+    -- levers is confirmed to move bullets, single-shot SNAP-CLEAN stays on.
     snap_clean_enabled = true,
     -- Experimental: while the fire button is HELD, hold cam+0xD0 clean every
     -- frame (after camera:apply) so the NATIVE auto-fire loop's per-shot reads

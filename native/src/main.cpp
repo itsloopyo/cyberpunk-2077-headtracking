@@ -10,6 +10,8 @@
 #include "ShotSnapHook.hpp"
 #include "ShotEntryProbe.hpp"
 #include "FreezeFrameHook.hpp"
+#include "AimProviderHook.hpp"
+#include "AimGetterHook.hpp"
 
 // Standard OpenTrack UDP port. If you change this, also change the OpenTrack
 // Output configuration (IP: 127.0.0.1, Port: 4242).
@@ -80,12 +82,28 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
             w->propagator_inject_active = 0;
             w->propagator_hook_fires    = 0;
             w->freeze_frame_enabled     = 1;
+            w->provider_hook_active     = 0;
+            w->provider_mode            = 1;  // camera-match gated peel
+            w->provider_calls           = 0;
+            w->provider_overrides       = 0;
+            // Instrument only until a lever is confirmed to move bullets:
+            // the hooks count calls and log the head/local/world pose, and
+            // mutate nothing. tools/set_aim_mode.py flips the mode live.
+            w->aim_getter_mode          = 1;
+            w->aim_getter_calls_a       = 0;
+            w->aim_getter_calls_b       = 0;
+            w->aim_getter_calls_c       = 0;
+            w->aim_getter_overrides     = 0;
         }
+
+        AimGetterHook_Start(aSdk, aHandle);
 
         FreezeFrameHook_Start();
         break;
 
     case RED4ext::v1::EMainReason::Unload:
+        AimGetterHook_Stop(aSdk, aHandle);
+        AimProviderHook_Stop();
         FreezeFrameHook_Stop();
         TcpServer_Stop();
         UdpReceiver_Stop();

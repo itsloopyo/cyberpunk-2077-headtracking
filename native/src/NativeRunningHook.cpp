@@ -2,6 +2,8 @@
 #include "SharedState.hpp"
 #include "AimCompensation.hpp"  // LogInfo / LogWarning
 #include "HitscanHook.hpp"
+#include "AimProviderHook.hpp"
+#include "AimGetterHook.hpp"
 
 #include <RED4ext/RED4ext.hpp>
 #include <RED4ext/GameStates.hpp>
@@ -423,6 +425,12 @@ void ConsumePendingRestore(HeadTrackingState* w) {
 }
 
 bool OnUpdate(RED4ext::CGameApplication*) {
+    // Provider vtables can only be patched once the RTTI registry is up, which
+    // is long after plugin load - this retries until it takes, then just mirrors
+    // counters.
+    AimProviderHook_Tick();
+    AimGetterHook_Tick();
+
     if (HeadTrackingState* w = g_sharedState.GetWritable()) {
         w->native_running_frame++;
         w->hitscan_hook_active = HitscanHook_IsActive();
