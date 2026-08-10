@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 #include "TcpServer.hpp"
 #include "SharedState.hpp"
 #include "AimCompensation.hpp"  // LogInfo/LogWarning/LogError

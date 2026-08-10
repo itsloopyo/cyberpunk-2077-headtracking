@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 // AimGetterHook - decouple the bullet by rewriting the camera ANSWER the shot
 // receives, never the camera itself.
 //
@@ -35,7 +37,9 @@
 #include <cstdint>
 #include <cstring>
 
+#include "ModuleGuard.hpp"
 #include "NativeRunningHook.hpp"
+#include "QuatMath.hpp"
 #include "SharedState.hpp"
 
 extern SharedState g_sharedState;
@@ -123,14 +127,7 @@ uint8_t* s_relay        = nullptr;
 
 std::atomic<bool> s_started{false};
 
-inline void QuatMul(float ax, float ay, float az, float aw,
-                    float bx, float by, float bz, float bw,
-                    float& ox, float& oy, float& oz, float& ow) {
-    ox = aw*bx + ax*bw + ay*bz - az*by;
-    oy = aw*by - ax*bz + ay*bw + az*bx;
-    oz = aw*bz + ax*by - ay*bx + az*bw;
-    ow = aw*bw - ax*bx - ay*by - az*bz;
-}
+using quatmath::QuatMul;
 
 // v' = q * v * conj(q), q = (x, y, z, w)
 inline void RotateVec(const float* q, const float* v, float* o) {
@@ -372,9 +369,28 @@ uint8_t* AllocRelayNear(uint8_t* target) {
     return nullptr;
 }
 
-bool PatchFireNormaliseCallsite(uintptr_t exeBase) {
-    s_origC = reinterpret_cast<NormaliseFn>(exeBase + kNormaliseFnRva);
-    s_callsite = reinterpret_cast<uint8_t*>(exeBase + kFireNormaliseCallRva);
+// Leave lever C fully disarmed: no call site to restore in Stop(), no relay
+// page leaked. Always returns false so callers can `return` it directly.
+bool AbandonCallsitePatch() {
+    if (s_relay) {
+        VirtualFree(s_relay, 0, MEM_RELEASE);
+        s_relay = nullptr;
+    }
+    s_callsite = nullptr;
+    s_origC = nullptr;
+    return false;
+}
+
+bool PatchFireNormaliseCallsite() {
+    // Bounds-check before the opcode read below: on a build whose image is
+    // smaller than these RVAs, reading s_callsite[0] is an access violation at
+    // plugin load, which the user sees as the mod bricking the game.
+    const uintptr_t normalise = modguard::ResolveCodeRva(kNormaliseFnRva, 16, "AimGetter C (Normalize)");
+    const uintptr_t callsite = modguard::ResolveCodeRva(kFireNormaliseCallRva, 5, "AimGetter C (call site)");
+    if (!normalise || !callsite) return false;
+
+    s_origC = reinterpret_cast<NormaliseFn>(normalise);
+    s_callsite = reinterpret_cast<uint8_t*>(callsite);
 
     // Refuse on anything but the exact `call Normalize` this was derived
     // against - a moved call site means a patched game, and a blind write there
@@ -382,20 +398,20 @@ bool PatchFireNormaliseCallsite(uintptr_t exeBase) {
     if (s_callsite[0] != 0xE8) {
         LogWarning("[AimGetter] C: +0x%llX is not a direct call (0x%02X) - lever disabled",
                    (unsigned long long)kFireNormaliseCallRva, s_callsite[0]);
-        return false;
+        return AbandonCallsitePatch();
     }
     int32_t rel = 0;
     std::memcpy(&rel, s_callsite + 1, 4);
-    if (reinterpret_cast<uintptr_t>(s_callsite + 5 + rel) != exeBase + kNormaliseFnRva) {
+    if (reinterpret_cast<uintptr_t>(s_callsite + 5 + rel) != normalise) {
         LogWarning("[AimGetter] C: +0x%llX does not call Normalize - lever disabled",
                    (unsigned long long)kFireNormaliseCallRva);
-        return false;
+        return AbandonCallsitePatch();
     }
 
     s_relay = AllocRelayNear(s_callsite);
     if (!s_relay) {
         LogError("[AimGetter] C: no relay page within reach of the call site");
-        return false;
+        return AbandonCallsitePatch();
     }
     // mov rax, &Hook_FireNormalise ; jmp rax
     uint8_t stub[12] = { 0x48, 0xB8, 0,0,0,0,0,0,0,0, 0xFF, 0xE0 };
@@ -407,7 +423,7 @@ bool PatchFireNormaliseCallsite(uintptr_t exeBase) {
     const intptr_t delta = s_relay - (s_callsite + 5);
     if (delta < INT32_MIN || delta > INT32_MAX) {
         LogError("[AimGetter] C: relay out of rel32 range");
-        return false;
+        return AbandonCallsitePatch();
     }
     std::memcpy(s_callsiteOrig, s_callsite, sizeof(s_callsiteOrig));
 
@@ -418,7 +434,7 @@ bool PatchFireNormaliseCallsite(uintptr_t exeBase) {
     DWORD oldProtect = 0;
     if (!VirtualProtect(s_callsite, sizeof(patch), PAGE_EXECUTE_READWRITE, &oldProtect)) {
         LogError("[AimGetter] C: VirtualProtect failed on the call site");
-        return false;
+        return AbandonCallsitePatch();
     }
     std::memcpy(s_callsite, patch, sizeof(patch));
     FlushInstructionCache(GetCurrentProcess(), s_callsite, sizeof(patch));
@@ -435,28 +451,27 @@ bool AimGetterHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle 
     if (s_started.load(std::memory_order_acquire)) return true;
     if (!sdk) return false;
 
-    HMODULE hModule = GetModuleHandleW(L"Cyberpunk2077.exe");
-    if (!hModule) {
-        LogError("[AimGetter] Cyberpunk2077.exe handle not found");
-        return false;
-    }
-    const uintptr_t base = reinterpret_cast<uintptr_t>(hModule);
-
-    s_targetA = reinterpret_cast<void*>(base + kGetWorldOrientationRva);
-    if (!sdk->hooking->Attach(handle, s_targetA, reinterpret_cast<void*>(&Hook_GetWorldOrientation),
+    // Each lever is bounds-checked against the running image independently, so
+    // a build that moved one of them still gets the others rather than a fault.
+    s_targetA = reinterpret_cast<void*>(
+        modguard::ResolveCodeRva(kGetWorldOrientationRva, 16, "AimGetter A"));
+    if (s_targetA &&
+        !sdk->hooking->Attach(handle, s_targetA, reinterpret_cast<void*>(&Hook_GetWorldOrientation),
                               reinterpret_cast<void**>(&s_origA))) {
         LogError("[AimGetter] A: attach failed at +0x%llX", (unsigned long long)kGetWorldOrientationRva);
         s_targetA = nullptr;
     }
 
-    s_targetB = reinterpret_cast<void*>(base + kGetWorldTransformRva);
-    if (!sdk->hooking->Attach(handle, s_targetB, reinterpret_cast<void*>(&Hook_GetWorldTransform),
+    s_targetB = reinterpret_cast<void*>(
+        modguard::ResolveCodeRva(kGetWorldTransformRva, 16, "AimGetter B"));
+    if (s_targetB &&
+        !sdk->hooking->Attach(handle, s_targetB, reinterpret_cast<void*>(&Hook_GetWorldTransform),
                               reinterpret_cast<void**>(&s_origB))) {
         LogError("[AimGetter] B: attach failed at +0x%llX", (unsigned long long)kGetWorldTransformRva);
         s_targetB = nullptr;
     }
 
-    PatchFireNormaliseCallsite(base);
+    PatchFireNormaliseCallsite();
     s_started.store(true, std::memory_order_release);
     LogInfo("[AimGetter] started (A=%d B=%d C=%d)",
             s_targetA ? 1 : 0, s_targetB ? 1 : 0, s_callsite ? 1 : 0);
@@ -476,6 +491,10 @@ void AimGetterHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle h
         }
     }
     s_callsite = nullptr;
+    if (s_relay) {
+        VirtualFree(s_relay, 0, MEM_RELEASE);
+        s_relay = nullptr;
+    }
 
     if (sdk) {
         if (s_targetA) sdk->hooking->Detach(handle, s_targetA);

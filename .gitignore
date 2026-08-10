@@ -37,6 +37,7 @@ native/out/
 mcp.json
 CLAUDE.md
 AGENTS.md
+skills/
 
 # Per-game install state (written by install.cmd into the game dir, but never check in if it lands here)
 .headtracking-state.json

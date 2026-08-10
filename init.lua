@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- HeadTracking - CET mod entry point
 -- Cyberpunk 2077 Head Tracking via OpenTrack UDP protocol
 --
@@ -261,14 +263,15 @@ local function hotkeyDebounced(id)
 end
 
 -- Hotkey wiring.
--- CET's registerHotkey is the only key path that works on this build:
--- LuaJIT FFI is sandboxed (require "ffi" fails), so GetAsyncKeyState-based
--- chord polling is impossible. Native code in TcpServer.cpp covers Home /
--- Ctrl+Shift+T for recenter (the one action whose CET dispatch crashes).
--- Everything else binds through registerHotkey + bindings.json seeding.
-local function pollChords() end   -- no-op kept so onUpdate call site is stable
+-- Both binding sets (nav-cluster keys and the Ctrl+Shift chords) are polled
+-- in native/src/TcpServer.cpp and delivered as one-shot flags on the tracking
+-- socket. Neither set can go through CET: registerHotkey dispatch crashes
+-- before entering Lua on this game build, and LuaJIT FFI is sandboxed
+-- (require "ffi" fails) so Lua-side GetAsyncKeyState polling is impossible.
+-- Native ORs each nav key with its chord into one edge source per action, so
+-- either key fires the handler exactly once.
 
--- Forward declarations so registerHotkey closures resolve the upvalue at call.
+-- Forward declarations so the onUpdate dispatch resolves the upvalue at call.
 local handleRecenter, handleToggleTracking, handleCycleMode,
       handleToggleYawMode
 
@@ -433,12 +436,6 @@ end)
 local function onUpdateImpl(deltaTime)
     init_debug_frame = init_debug_frame + 1
 
-    -- Poll Ctrl+Shift chords every frame. Runs before the init/tracking
-    -- gates so recenter and toggles work from the chord even in menus,
-    -- exactly as the nav-cluster binds do. Handlers self-guard on nil
-    -- modules and share debounce state with the registerHotkey path.
-    pollChords()
-
     -- onUpdate can fire once before onInit completes - tolerate that single
     -- race without masking later bugs. After onInit, all modules must exist.
     -- One-shot RTTI dump of the FPP camera component on the first frame
@@ -484,6 +481,17 @@ local function onUpdateImpl(deltaTime)
     local now = os.clock()
     local should_diag = (now - diag_last_log_time) >= DIAG_INTERVAL_S
 
+    -- Hotkey edges arrive as one-shot flags latched by the socket callback, so
+    -- reading them here (before udp:poll below) loses nothing. This must sit
+    -- ABOVE the tracking-allowed gate: with tracking toggled off the gate
+    -- closes, and dispatching below it would leave no way to turn tracking
+    -- back on. It also lets a recenter pressed in a menu queue for the first
+    -- gameplay frame instead of being dropped.
+    if udp:consumeNativeRecenterRequested()       then handleRecenter()       end
+    if udp:consumeNativeToggleTrackingRequested() then handleToggleTracking() end
+    if udp:consumeNativeCycleModeRequested()      then handleCycleMode()      end
+    if udp:consumeNativeToggleYawRequested()      then handleToggleYawMode()  end
+
     local tracking_allowed = state:isTrackingAllowed()
     if was_tracking_allowed and not tracking_allowed then
         -- Falling edge: peel our head rotation off NOW, while last_head_quat is
@@ -520,15 +528,6 @@ local function onUpdateImpl(deltaTime)
 
     perf:updateStart()
 
-    -- Consume the native recenter flag BEFORE the perform block so a press
-    -- observed this frame is applied this frame, not on frame N+1. The flag
-    -- is latched by the socket callback, not by udp:poll(), so reading it
-    -- before the poll below loses nothing.
-    if udp.consumeNativeRecenterRequested and udp:consumeNativeRecenterRequested() then
-        recenter_pending = true
-        dlog("[HeadTracking] Native recenter requested")
-    end
-
     -- Perform a pending recenter here, in the per-frame camera-update context
     -- (not the hotkey callback). handleRecenter only sets the flag; mashing
     -- Home coalesces to a single recenter. recenter() itself writes nothing to
@@ -550,18 +549,6 @@ local function onUpdateImpl(deltaTime)
     -- value and camera:apply gets skipped, leaving visible judder on
     -- high-refresh displays.
     local data = udp:poll()
-    -- Native chord polls for Ctrl+Shift+{Y,G,H}. The CET registerHotkey path
-    -- below only fires for the configured nav-cluster key; chord polling
-    -- happens in native because LuaJIT FFI is sandboxed on this build.
-    if udp.consumeNativeToggleTrackingRequested and udp:consumeNativeToggleTrackingRequested() then
-        handleToggleTracking()
-    end
-    if udp.consumeNativeCycleModeRequested and udp:consumeNativeCycleModeRequested() then
-        handleCycleMode()
-    end
-    if udp.consumeNativeToggleYawRequested and udp:consumeNativeToggleYawRequested() then
-        handleToggleYawMode()
-    end
     if data and not diag_first_packet_logged then
         dlog(string.format(
             "[HeadTracking:DIAG] FIRST packet received: yaw=%.2f pitch=%.2f roll=%.2f",
@@ -689,7 +676,7 @@ end
 -- point is to observe which engine systems STILL track the head (= they
 -- don't read cam+0xD0) vs. follow the mouse (= they DO read cam+0xD0).
 -- Watch in particular: interaction-prompt direction, click-flick direction.
-function HeadTrackingDiagCleanCam(force)
+local function diagCleanCam(force)
     if not settings or not ui then
         print("[HeadTracking:DIAG] settings/ui not initialised; mod still booting?")
         return
@@ -826,7 +813,7 @@ end
 -- CET sandboxes each mod's own globals, so file-scope `function Foo() ...`
 -- does NOT become a console global; the return table is the only way
 -- through.
-function HeadTrackingDiagVerbose(force)
+local function diagVerbose(force)
     if not DebugLog or not DebugLog.setEnabled then
         print("[HeadTracking:DIAG] DebugLog module unavailable")
         return
@@ -837,7 +824,7 @@ function HeadTrackingDiagVerbose(force)
     print("[HeadTracking:DIAG] Verbose console logging: " .. (new_val and "ON" or "OFF"))
 end
 
-function HeadTrackingDiagFreezeFrame(force)
+local function diagFreezeFrame(force)
     if not aim or not ui then
         print("[HeadTracking:DIAG] aim/ui not initialised; mod still booting?")
         return
@@ -851,7 +838,7 @@ function HeadTrackingDiagFreezeFrame(force)
     if new_val then ui:showSuccess(msg, 2.0) else ui:showWarning(msg, 2.0) end
 end
 
-function HeadTrackingDiagSnapClean(force)
+local function diagSnapClean(force)
     if not aim or not ui then
         print("[HeadTracking:DIAG] aim/ui not initialised; mod still booting?")
         return
@@ -864,141 +851,101 @@ function HeadTrackingDiagSnapClean(force)
     if new_val then ui:showSuccess(msg, 2.0) else ui:showWarning(msg, 2.0) end
 end
 
+-- Console delegates.
+--
+-- Most Diag* entries are the same shape: forward one argument to a method on
+-- one of the runtime drivers, or explain that the driver isn't up yet. The
+-- drivers are assigned in onInit, so each accessor is resolved at CALL time,
+-- not while this table is being built.
+local DRIVERS = {
+    crosshair = { get = function() return crosshair end, label = "crosshair" },
+    camera    = { get = function() return camera end,    label = "camera" },
+    aim       = { get = function() return aim end,       label = "aim" },
+}
+
+local function toBool(v) return v and true or false end
+
+--- Build a console entry forwarding one argument to driver:method(arg).
+--- @param driver_name string Key into DRIVERS.
+--- @param method string Method name looked up on the driver at call time.
+--- @param opts table|nil
+---   coerce   function  Applied to the argument before forwarding.
+---   announce string    Printed with the call's return value appended.
+---   silent   boolean   Missing driver/method is a no-op instead of a log line.
+---   noargs   boolean   Target takes no parameter; call it with none. Lua would
+---                      discard a surplus argument anyway, but stating it here
+---                      keeps a console typo from becoming a real argument if
+---                      the target ever grows an optional parameter.
+--- @return function Console-callable delegate.
+local function delegate(driver_name, method, opts)
+    opts = opts or {}
+    local driver = DRIVERS[driver_name]
+    return function(arg)
+        local d = driver.get()
+        if not (d and d[method]) then
+            if not opts.silent then
+                print("[HeadTracking:DIAG] " .. driver.label .. " driver not available")
+            end
+            return
+        end
+        local result
+        if opts.noargs then
+            result = d[method](d)
+        else
+            local value = arg
+            if opts.coerce then value = opts.coerce(arg) end
+            result = d[method](d, value)
+        end
+        if opts.announce then
+            print("[HeadTracking:DIAG] " .. opts.announce .. tostring(result))
+        end
+    end
+end
+
 return {
-    DiagCleanCam   = HeadTrackingDiagCleanCam,
-    DiagVerbose    = HeadTrackingDiagVerbose,
-    DiagSnapClean  = HeadTrackingDiagSnapClean,
-    DiagFreezeFrame = HeadTrackingDiagFreezeFrame,
-    DiagReticle    = function() if crosshair and crosshair.dumpStatus then crosshair:dumpStatus() end end,
-    DiagDumpTrees  = function() if crosshair and crosshair.dumpAllTrees then crosshair:dumpAllTrees() end end,
-    DiagNameplateProbe = function(seconds)
-        if crosshair and crosshair.probeNameplates then
-            crosshair:probeNameplates(seconds)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagNameplateAnchor = function()
-        if crosshair and crosshair.probeNameplateAnchor then
-            crosshair:probeNameplateAnchor()
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagNameplateHide = function(hidden)
-        if crosshair and crosshair.setNameplatesHidden then
-            crosshair:setNameplatesHidden(hidden and true or false)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagBracketScale = function(s)
-        if crosshair and crosshair.setBracketScale then
-            local v = crosshair:setBracketScale(s)
-            print("[HeadTracking:DIAG] in-car bracket_scale = " .. tostring(v))
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagCrosshairSuppress = function(on)
-        if crosshair and crosshair.setCrosshairSuppress then
-            crosshair:setCrosshairSuppress(on and true or false)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagCrosshairTree = function()
-        if crosshair and crosshair.dumpCrosshairTree then
-            crosshair:dumpCrosshairTree()
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagCrosshairMotion = function(seconds)
-        if crosshair and crosshair.probeCrosshairMotion then
-            crosshair:probeCrosshairMotion(seconds)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagGate = function(seconds)
-        if crosshair and crosshair.probeGate then
-            crosshair:probeGate(seconds)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagLockSignal = function(seconds)
-        if crosshair and crosshair.probeLockSignal then
-            crosshair:probeLockSignal(seconds)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagShoveOnly = function(idx)
-        if crosshair and crosshair.setShoveOnly then
-            crosshair:setShoveOnly(idx)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagHitMarker = function(seconds)
-        if crosshair and crosshair.probeHitMarker then
-            crosshair:probeHitMarker(seconds)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagShoveHitMarker = function(on)
-        if crosshair and crosshair.setShoveHitMarker then
-            crosshair:setShoveHitMarker(on and true or false)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagShoveNameplate = function(on)
-        if crosshair and crosshair.setShoveNameplate then
-            crosshair:setShoveNameplate(on and true or false)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
-    DiagYawMode = function(seconds)
-        if camera and camera.probeYawMode then
-            camera:probeYawMode(seconds)
-        else
-            print("[HeadTracking:DIAG] camera driver not available")
-        end
-    end,
-    DiagYawBasis = function()
-        if camera and camera.diagYawBasis then
-            camera:diagYawBasis()
-        else
-            print("[HeadTracking:DIAG] camera driver not available")
-        end
-    end,
-    DiagShotDiscovery = function(seconds)
-        if aim and aim.armShotDiscovery then
-            aim:armShotDiscovery(seconds)
-        else
-            print("[HeadTracking:DIAG] aim driver not available")
-        end
-    end,
-    DiagReticleFov = function(seconds)
-        if crosshair and crosshair.probeReticleFov then
-            crosshair:probeReticleFov(seconds)
-        else
-            print("[HeadTracking:DIAG] crosshair driver not available")
-        end
-    end,
+    DiagCleanCam    = diagCleanCam,
+    DiagVerbose     = diagVerbose,
+    DiagSnapClean   = diagSnapClean,
+    DiagFreezeFrame = diagFreezeFrame,
+
+    -- These two predate the "driver not available" convention and stay silent
+    -- when the crosshair driver is absent. Kept as-is so console scripts that
+    -- call them in a loop don't start spamming.
+    DiagReticle   = delegate("crosshair", "dumpStatus",   { silent = true, noargs = true }),
+    DiagDumpTrees = delegate("crosshair", "dumpAllTrees", { silent = true, noargs = true }),
+
+    DiagNameplateProbe    = delegate("crosshair", "probeNameplates"),
+    DiagNameplateAnchor   = delegate("crosshair", "probeNameplateAnchor", { noargs = true }),
+    DiagNameplateHide     = delegate("crosshair", "setNameplatesHidden",  { coerce = toBool }),
+    DiagCrosshairSuppress = delegate("crosshair", "setCrosshairSuppress", { coerce = toBool }),
+    DiagShoveHitMarker    = delegate("crosshair", "setShoveHitMarker",    { coerce = toBool }),
+    DiagShoveNameplate    = delegate("crosshair", "setShoveNameplate",    { coerce = toBool }),
+    DiagCrosshairTree     = delegate("crosshair", "dumpCrosshairTree", { noargs = true }),
+    DiagCrosshairMotion   = delegate("crosshair", "probeCrosshairMotion"),
+    DiagGate              = delegate("crosshair", "probeGate"),
+    DiagLockSignal        = delegate("crosshair", "probeLockSignal"),
+    DiagShoveOnly         = delegate("crosshair", "setShoveOnly"),
+    DiagHitMarker         = delegate("crosshair", "probeHitMarker"),
+    DiagReticleFov        = delegate("crosshair", "probeReticleFov"),
+    DiagBracketScale      = delegate("crosshair", "setBracketScale",
+                                     { announce = "in-car bracket_scale = " }),
+
+    DiagYawMode  = delegate("camera", "probeYawMode"),
+    DiagYawBasis = delegate("camera", "diagYawBasis", { noargs = true }),
+
+    DiagShotDiscovery = delegate("aim", "armShotDiscovery"),
+
     -- Toggle the experimental hold-cam-clean-while-firing (auto-weapon
     -- decoupling test). On by default; call with false to A/B against the
-    -- old first-shot-only behaviour.
+    -- old first-shot-only behaviour. Not a plain forward: it reads the
+    -- current value to support the no-argument toggle form.
     DiagHoldClean = function(force)
         if not (aim and aim.setHoldCleanWhileFiring) then
             print("[HeadTracking:DIAG] aim driver not available")
             return
         end
+        -- Only reads the current value in the no-argument toggle form; the
+        -- guard above covers the setter only, so don't assume the getter.
         local new_val
         if force == nil then new_val = not aim:isHoldCleanWhileFiring()
         else new_val = force and true or false end

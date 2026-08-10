@@ -58,7 +58,9 @@ $requiredFiles = @(
     "modules/ui.lua",
     "modules/GameUI.lua",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
 )
 
 # Optional but recommended files

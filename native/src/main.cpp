@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 #include <RED4ext/RED4ext.hpp>
 #include <windows.h>
 #include "SharedState.hpp"
@@ -39,9 +41,9 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         // told the user WHY via logs (UDP binding issues surface here, hook
         // issues surface below). A returned-false here is a catastrophic
         // init failure (e.g. WSAStartup); port-in-use is NOT fatal - the
-        // receiver schedules a 5s retry loop and the rest of the plugin
-        // keeps loading so tracking comes online the moment the conflicting
-        // holder releases the port.
+        // receiver schedules a background retry loop and the rest of the
+        // plugin keeps loading so tracking comes online the moment the
+        // conflicting holder releases the port.
         if (!UdpReceiver_Start(kUdpPort)) {
             LogError("[HeadTrackingAim] UDP receiver failed to initialise on port %u - refusing to load", kUdpPort);
             g_sharedState.Shutdown();
@@ -102,6 +104,13 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         break;
 
     case RED4ext::v1::EMainReason::Unload:
+        // Unregister the per-frame Running callback FIRST. AimProviderHook
+        // installs itself from OnUpdate and re-installs whenever it sees
+        // itself uninstalled, so tearing hooks down while OnUpdate is still
+        // firing left the game running our thunks out of a DLL that is on its
+        // way out of the address space.
+        NativeRunningHook_Stop(aSdk, aHandle);
+
         AimGetterHook_Stop(aSdk, aHandle);
         AimProviderHook_Stop();
         FreezeFrameHook_Stop();
@@ -116,8 +125,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
             w->camera_hook_active = false;
             w->hitscan_hook_active = false;
         }
-
-        NativeRunningHook_Stop(aSdk, aHandle);
 
         g_sharedState.Shutdown();
         LogInfo("[HeadTrackingAim] Shared memory shutdown");

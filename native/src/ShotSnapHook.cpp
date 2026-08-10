@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 // ShotSnapHook: native-side snap-clean of the FPP cam orientation around
 // the player shot computation.
 //
@@ -41,6 +43,7 @@
 #include <cstdint>
 
 #include "NativeRunningHook.hpp"
+#include "QuatMath.hpp"
 #include "SharedState.hpp"
 
 extern SharedState g_sharedState;
@@ -71,14 +74,7 @@ std::atomic<uint32_t> s_skipped_identity{0};
 std::atomic<uint32_t> s_restore_faults{0};
 uint64_t              s_lastHeartbeatMs = 0;
 
-inline void QuatMul(float ax, float ay, float az, float aw,
-                    float bx, float by, float bz, float bw,
-                    float& ox, float& oy, float& oz, float& ow) {
-    ox = aw*bx + ax*bw + ay*bz - az*by;
-    oy = aw*by - ax*bz + ay*bw + az*bx;
-    oz = aw*bz + ax*by - ay*bx + az*bw;
-    ow = aw*bw - ax*bx - ay*by - az*bz;
-}
+using quatmath::QuatMul;
 
 void Hook_PlayerShotCaller(void* rcx, void* rdx, void* r8, void* r9) {
     s_calls.fetch_add(1, std::memory_order_relaxed);

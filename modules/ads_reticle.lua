@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- ADS Reticle Module
 -- Draws a custom ImGui crosshair at the true aim point while aiming down sights.
 --

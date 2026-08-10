@@ -2,10 +2,13 @@
 :: ============================================
 :: HeadTracking (Cyberpunk 2077) - Install
 :: ============================================
-:: Skeleton from cameraunlock-core/scripts/templates/install.cmd. The
-:: actual mod deployment (Lua tree under bin\x64\plugins\... + optional
-:: RED4ext native plugin + CET bindings.json merge) lives in deploy.ps1
-:: which we forward to once GAME_PATH is resolved.
+:: Skeleton from cameraunlock-core/scripts/templates/install.cmd. No CET
+:: template exists: this mod deploys a Lua tree under
+:: bin\x64\plugins\cyber_engine_tweaks\mods\, a RED4ext native plugin and a
+:: TweakXL yaml, and it vendors three loaders (CET, RED4ext, TweakXL). All of
+:: that lives in deploy.ps1, which we forward to once GAME_PATH is resolved,
+:: so there is no MOD_DLLS list here - deploy.ps1 and launcher-manifest.json
+:: are the authoritative file lists.
 :: ============================================
 
 :: --- CONFIG BLOCK ---
@@ -13,7 +16,11 @@ set "GAME_ID=cyberpunk-2077"
 set "MOD_DISPLAY_NAME=HeadTracking (Cyberpunk 2077)"
 set "MOD_INTERNAL_NAME=HeadTracking"
 set "MOD_VERSION=0.0.0"
+set "MOD_CONTROLS=Controls:&echo   Home      - Recenter head tracking&echo   End       - Toggle head tracking on/off&echo   Page Up   - Cycle tracking mode&echo   Page Down - Toggle world/local yaw"
 set "STATE_FILE=.headtracking-state.json"
+:: CET, RED4ext and TweakXL are shared modding frameworks that uninstall never
+:: removes, so the state file records "None" - the uninstall template's
+:: framework dispatch has no CET/RED4ext case and must not try to remove one.
 set "FRAMEWORK_TYPE=None"
 :: --- END CONFIG BLOCK ---
 
@@ -76,6 +83,8 @@ echo === %MOD_DISPLAY_NAME% - Install ===
 echo.
 
 :: -------- Resolve game path via shared shim --------
+:: Release ZIP layout: scripts\ is the ZIP root, shim is at shared\find-game.ps1.
+:: Dev tree layout: scripts\ is <repo>\scripts\, shim is at ..\cameraunlock-core\scripts\find-game.ps1.
 set "_SHIM=%SCRIPT_DIR%shared\find-game.ps1"
 if not exist "%_SHIM%" set "_SHIM=%SCRIPT_DIR%..\cameraunlock-core\scripts\find-game.ps1"
 if not exist "%_SHIM%" (
@@ -100,7 +109,7 @@ if not "!_PS_EC!"=="0" (
 call "!_SHIM_OUT!"
 del "!_SHIM_OUT!" 2>nul
 
-echo Game found: %GAME_PATH%
+echo Game found: "%GAME_PATH%"
 echo.
 
 :: -------- Game-running check --------
@@ -122,10 +131,10 @@ if not exist "%DEPLOY_PS1%" (
     exit /b 1
 )
 
-:: -------- Prior state: preserve installed_by_us flag --------
-:: CET is a third-party loader; this mod never installs it for the user, so
-:: we always record installed_by_us=false. The flag is preserved purely so
-:: the schema matches the canonical state-file shape.
+:: -------- Prior state: preserve installed_by_us=true across re-installs --------
+:: deploy.ps1 extracts the vendored loaders when they are absent, but they are
+:: shared frameworks other mods depend on and uninstall never removes them, so
+:: this mod does not claim ownership of them.
 set "WE_INSTALLED=false"
 if exist "%GAME_PATH%\%STATE_FILE%" (
     findstr /c:"installed_by_us" "%GAME_PATH%\%STATE_FILE%" 2>nul | findstr /c:"true" >nul 2>&1
@@ -150,6 +159,18 @@ echo.
 echo ========================================
 echo   Deployment Complete!
 echo ========================================
+echo.
+echo %MOD_DISPLAY_NAME% has been deployed to:
+echo   %GAME_PATH%\bin\x64\plugins\cyber_engine_tweaks\mods\%MOD_INTERNAL_NAME%
+echo.
+echo Start the game to use the mod!
+:: Percent-expansion splits MOD_CONTROLS on its embedded &echo separators;
+:: delayed expansion prints them literally. Kept outside a ( ) block so a
+:: literal ) in the controls text cannot close the block.
+if not defined MOD_CONTROLS goto :controls_done
+echo.
+echo %MOD_CONTROLS%
+:controls_done
 echo.
 exit /b 0
 

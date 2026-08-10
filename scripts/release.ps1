@@ -10,8 +10,7 @@
     Workflow:
       1. Resolve target version (keyword bump or literal X.Y.Z[-prerelease]).
       2. Verify on `main`, working tree clean, target tag absent.
-      3. Update version in canonical sources (install.cmd MOD_VERSION,
-         modules/GameUI.lua version field).
+      3. Update version in the canonical source (install.cmd MOD_VERSION).
       4. pixi run build (release config).
       5. Generate CHANGELOG.md from commits since the last tag.
       6. Commit "Release v<version>" with version bump + changelog.
@@ -139,11 +138,13 @@ if (-not $hasExistingTags) {
     }
 }
 
-# ---- Step 4: Update version in canonical sources --------------------------
-Write-Info 'Step 4/8: Updating version in canonical sources...'
+# ---- Step 4: Update version in the canonical source -----------------------
+# scripts/install.cmd MOD_VERSION is the only place the mod version is
+# authored. launcher-manifest.json keeps its 0.0.0 placeholder in the repo and
+# is stamped by package-release.ps1 at package time.
+Write-Info 'Step 4/8: Updating version in the canonical source...'
 
 $installCmd  = Join-Path $projectRoot 'scripts/install.cmd'
-$gameUiLua   = Join-Path $projectRoot 'modules/GameUI.lua'
 
 if (-not (Test-Path $installCmd)) { Write-Fail "Missing canonical version source: $installCmd" }
 
@@ -155,15 +156,6 @@ $installRaw = [regex]::Replace($installRaw, 'set "MOD_VERSION=[^"]+"', "set `"MO
 [System.IO.File]::WriteAllText($installCmd, $installRaw)
 Write-Host "  [OK] scripts/install.cmd MOD_VERSION = $Version" -ForegroundColor Green
 
-if (Test-Path $gameUiLua) {
-    $luaRaw = [System.IO.File]::ReadAllText($gameUiLua)
-    if ($luaRaw -match 'version\s*=\s*"[^"]+"') {
-        $luaRaw = [regex]::Replace($luaRaw, '(version\s*=\s*")[^"]+(")', "`${1}$Version`${2}", 1)
-        [System.IO.File]::WriteAllText($gameUiLua, $luaRaw)
-        Write-Host "  [OK] modules/GameUI.lua version = $Version" -ForegroundColor Green
-    }
-}
-
 # ---- Step 5: Build (release config) ---------------------------------------
 Write-Info 'Step 5/8: pixi run build...'
 & pixi run build
@@ -173,10 +165,9 @@ Write-Host '  [OK] Build succeeded' -ForegroundColor Green
 # ---- Step 6: Commit -------------------------------------------------------
 Write-Info 'Step 6/8: Committing version bump + changelog...'
 $relInstall = 'scripts/install.cmd'
-$relGameUi  = 'modules/GameUI.lua'
 $relChangelog = 'CHANGELOG.md'
 
-& git add -- $relInstall $relGameUi $relChangelog | Out-Null
+& git add -- $relInstall $relChangelog | Out-Null
 $staged = & git diff --cached --name-only
 if (-not $staged) {
     Write-Fail 'No changes staged - version files were unchanged. Aborting.'

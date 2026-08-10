@@ -2,10 +2,12 @@
 :: ============================================
 :: HeadTracking (Cyberpunk 2077) - Uninstall
 :: ============================================
-:: Skeleton from cameraunlock-core/scripts/templates/uninstall.cmd. The
-:: actual file removal lives in uninstall.ps1; we just resolve GAME_PATH
-:: via the shared shim and forward. CET is a shared loader: even with
-:: /force we never remove it (other mods may depend on it).
+:: Skeleton from cameraunlock-core/scripts/templates/uninstall.cmd. The CET
+:: mod folder and the RED4ext native plugin are removed by uninstall.ps1; we
+:: resolve GAME_PATH via the shared shim, forward to it, then remove the
+:: files it does not cover (MOD_EXTRA_FILES). CET, RED4ext and TweakXL are
+:: shared loaders: even with /force we never remove them, since other mods
+:: depend on them.
 :: ============================================
 
 :: --- CONFIG BLOCK ---
@@ -14,6 +16,11 @@ set "MOD_DISPLAY_NAME=HeadTracking (Cyberpunk 2077)"
 set "MOD_INTERNAL_NAME=HeadTracking"
 set "STATE_FILE=.headtracking-state.json"
 set "FRAMEWORK_TYPE=None"
+:: Game-relative files deployed outside the CET mod folder. The TweakXL yaml
+:: rewrites the bullet records, so leaving it behind keeps altering gameplay
+:: after an uninstall. No LEGACY_DLLS: no shipped file has ever been renamed
+:: or dropped.
+set "MOD_EXTRA_FILES=r6\tweaks\HeadTracking_ProjectileBullets.yaml"
 :: --- END CONFIG BLOCK ---
 
 call :detect_yes_flag %*
@@ -102,7 +109,7 @@ if not "!_PS_EC!"=="0" (
 call "!_SHIM_OUT!"
 del "!_SHIM_OUT!" 2>nul
 
-echo Game found: %GAME_PATH%
+echo Game found: "%GAME_PATH%"
 echo.
 
 :: -------- Game-running check --------
@@ -134,11 +141,19 @@ if not "!_UN_EC!"=="0" (
     exit /b !_UN_EC!
 )
 
-:: CET is shared - never remove it. /force is parsed for launcher consistency
-:: but does not change behaviour here.
+:: -------- Remove mod files outside the CET mod folder --------
+for %%f in (%MOD_EXTRA_FILES%) do (
+    if exist "%GAME_PATH%\%%f" (
+        del "%GAME_PATH%\%%f"
+        echo   Removed: %%f
+    )
+)
+
+:: CET, RED4ext and TweakXL are shared - never removed. /force is parsed for
+:: launcher consistency but does not change behaviour here.
 if "!FORCE_FLAG!"=="1" (
     echo.
-    echo Cyber Engine Tweaks is a shared modding framework - leaving intact even with /force ^(other mods may depend on it^).
+    echo Cyber Engine Tweaks, RED4ext and TweakXL are shared modding frameworks - leaving intact even with /force ^(other mods may depend on them^).
 )
 
 :: -------- Remove state file --------

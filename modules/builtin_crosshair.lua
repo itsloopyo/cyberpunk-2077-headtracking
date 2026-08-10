@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Built-in Crosshair Driver
 --
 -- Moves the game's own crosshair widget so the engine-drawn reticle marks

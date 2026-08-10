@@ -178,6 +178,26 @@ local loaded_from_file = s2:load()
 assert_true(loaded_from_file, "second instance loaded existing config")
 assert_eq(s2:get("yaw_mode"), "local", "loaded yaw_mode unchanged")
 
+-- (5) every default has a validation rule. A key present in defaults but
+-- missing from VALIDATION_RULES type-checks as invalid, so :set() refuses it
+-- and :load() throws the user's saved value away on every launch - which is
+-- exactly what happened to freeze_frame_enabled.
+for key, default_value in pairs(s:getDefaults()) do
+    assert_true(s:getValidationRules(key),
+        "default '" .. key .. "' has a validation rule")
+    assert_true(s:set(key, default_value),
+        "default value for '" .. key .. "' is accepted by :set()")
+end
+
+-- (6) freeze_frame_enabled specifically: settable, and survives a reload.
+assert_true(s:set("freeze_frame_enabled", true), "freeze_frame_enabled=true accepted")
+assert_eq(s:get("freeze_frame_enabled"), true, "freeze_frame_enabled stored as true")
+local s3 = Settings.new()
+s3:load()
+assert_eq(s3:get("freeze_frame_enabled"), true, "freeze_frame_enabled survives reload")
+assert_true(s:set("freeze_frame_enabled", false), "freeze_frame_enabled=false accepted")
+assert_false(s:set("freeze_frame_enabled", "yes"), "freeze_frame_enabled string rejected")
+
 print("== All settings tests passed ==")
 
 -- best-effort cleanup

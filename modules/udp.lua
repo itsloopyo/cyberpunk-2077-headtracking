@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Tracking Data Receiver Module
 -- Reads head pose from the native RED4ext plugin's TCP server.
 --

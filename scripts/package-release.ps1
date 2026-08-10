@@ -92,6 +92,7 @@ $requiredModFiles = @(
 
 $docFiles = @(
     "README.md",
+    "LICENSE",
     "CHANGELOG.md",
     "THIRD-PARTY-NOTICES.md"
 )
@@ -145,6 +146,13 @@ function Copy-ModTree {
 
     Copy-Item -Path (Join-Path $projectRoot "init.lua") -Destination (Join-Path $ModTargetDir "init.lua") -Force
     Copy-Item -Path (Join-Path $projectRoot "modules") -Destination (Join-Path $ModTargetDir "modules") -Recurse -Force
+
+    # MIT requires the licence text to travel with the code. The Nexus ZIP
+    # carries no root-level docs, so the notices ride inside the mod folder
+    # where they cannot litter the game root.
+    foreach ($n in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
+        Copy-Item -Path (Join-Path $projectRoot $n) -Destination (Join-Path $ModTargetDir $n) -Force
+    }
 }
 
 # --- Build installer staging -----------------------------------------------
@@ -188,6 +196,18 @@ foreach ($loader in @('cet', 'red4ext', 'tweakxl')) {
     $loaderDest = Join-Path $installerStaging "vendor\$loader"
     New-Item -ItemType Directory -Path $loaderDest -Force | Out-Null
     Copy-Item -Path $loaderZip -Destination (Join-Path $loaderDest "$loader.zip") -Force
+
+    # LICENSE ships beside the loader zip: CET, RED4ext and TweakXL are all MIT
+    # and redistributing the binary without the licence text is a licence
+    # violation, not a tidiness nit. README.md carries the upstream tag / SHA-256
+    # so a user can verify the bytes they were shipped.
+    foreach ($attribution in @('LICENSE', 'README.md')) {
+        $src = Join-Path $projectRoot "vendor\$loader\$attribution"
+        if (-not (Test-Path $src)) {
+            Write-Fail "Missing vendor\$loader\$attribution - run 'pixi run update-deps' first."
+        }
+        Copy-Item -Path $src -Destination (Join-Path $loaderDest $attribution) -Force
+    }
 }
 
 # TweakDB tweaks. The projectile restoration lives here and is what makes

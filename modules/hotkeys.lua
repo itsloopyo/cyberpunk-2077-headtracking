@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Hotkey Sanity-Check Module
 -- Runs at every mod init. For each of our actions:
 --   - If already bound to anything non-zero, leave it alone.

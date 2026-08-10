@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 // ShotEntryProbe: diagnostic hook on +0x4E4AFC, the projectile/hitscan
 // dispatcher called from the player-shot caller +0x79ACA0 in a loop over
 // shot entries (one entry per shot/pellet).
@@ -23,6 +25,7 @@
 #include <cstdint>
 
 #include "NativeRunningHook.hpp"
+#include "QuatMath.hpp"
 #include "SharedState.hpp"
 
 extern SharedState g_sharedState;
@@ -148,14 +151,7 @@ EntrySnapshot ReadSnapshot(void* ctx, void* entry, void* state) {
     return s;
 }
 
-inline void QuatMul(float ax, float ay, float az, float aw,
-                    float bx, float by, float bz, float bw,
-                    float& ox, float& oy, float& oz, float& ow) {
-    ox = aw*bx + ax*bw + ay*bz - az*by;
-    oy = aw*by - ax*bz + ay*bw + az*bx;
-    oz = aw*bz + ax*by - ay*bx + az*bw;
-    ow = aw*bw - ax*bx - ay*by - az*bz;
-}
+using quatmath::QuatMul;
 
 // Multiply the quat at `slot` by inv(head) in place. Returns false when the
 // slot does not hold a unit-ish quat (left untouched).

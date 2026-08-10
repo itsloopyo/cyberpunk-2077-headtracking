@@ -6,13 +6,20 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - 'LICENSE'
       - '.millhouse/**'
   pull_request:
     branches: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - 'LICENSE'
       - '.millhouse/**'
+
+# This job builds pull-request branches, so it gets the read-only token rather
+# than whatever the repository default happens to be.
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -65,8 +72,9 @@ jobs:
         id: artifact
         shell: pwsh
         run: |
-          $branch = "${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-'
-          echo "name=Cyberpunk2077HeadTracking-$branch" >> $env:GITHUB_OUTPUT
+          $branch = if ($env:GITHUB_HEAD_REF) { $env:GITHUB_HEAD_REF } else { $env:GITHUB_REF_NAME }
+          $sanitized = $branch -replace '[^A-Za-z0-9._-]', '-'
+          "name=Cyberpunk2077HeadTracking-$sanitized" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v7

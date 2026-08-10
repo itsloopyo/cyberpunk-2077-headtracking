@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Aim Compensation Module
 -- Communicates with RED4ext C++ plugin via shared memory for native aim compensation
 --
@@ -163,6 +165,23 @@ local function ensureFfi()
         cdef_done = true
     end
 
+    -- The cdef above and native/src/SharedState.hpp describe the same bytes.
+    -- The native side pins its layout with a static_assert; this is the other
+    -- half of that contract. MapViewOfFile below maps the WHOLE section, so a
+    -- drifted cdef does not fail loudly - it silently reads and writes the
+    -- wrong offsets, and a larger struct runs off the end of the mapping.
+    local EXPECTED_STATE_SIZE = 184
+    local actual_size = ffi.sizeof("HeadTrackingState")
+    if actual_size ~= EXPECTED_STATE_SIZE then
+        -- Clear the module handle so the `if ffi then return true end`
+        -- fast path above cannot hand a later caller a success it never got.
+        ffi = nil
+        return false, string.format(
+            "HeadTrackingState layout mismatch: Lua cdef is %d bytes, native expects %d. " ..
+            "modules/aim.lua and native/src/SharedState.hpp are out of sync.",
+            actual_size, EXPECTED_STATE_SIZE)
+    end
+
     INVALID_HANDLE_VALUE = ffi.cast("void*", -1)
     return true
 end
@@ -286,15 +305,10 @@ end
 --- @param ads_scale number|nil ADS effect multiplier (default 0.2)
 --- @param roll number|nil Current roll in degrees (optional, defaults to 0)
 --- @param quat table|nil Head rotation quaternion {i,j,k,r}; if nil, keep last
-local _shm_diag_calls = 0
-local _shm_diag_last_logged = 0
-
 local function updateSharedMemory(yaw, pitch, enabled, is_ads, ads_scale, roll, quat)
     if not shared_mem.initialized or shared_mem.state == nil then
         return
     end
-
-    _shm_diag_calls = _shm_diag_calls + 1
 
     shared_mem.state.yaw = yaw
     shared_mem.state.pitch = pitch
@@ -462,9 +476,6 @@ local function _camSetLocalOrientation(cam, q)
     cam:SetLocalOrientation(q)
 end
 
--- Debug logging
-local aim_debug_counter = 0
-local AIM_DEBUG_INTERVAL = 120
 local SNAP_CLEAN_MIN_INTERVAL_SECONDS = 0.0
 
 --- Rotate a Vector4 direction by yaw and pitch angles
@@ -497,6 +508,128 @@ local function rotateVectorByAngles(vec, yaw_deg, pitch_deg)
     local z2 = y1 * sp + z1 * cp
 
     return Vector4.new(x2, y2, z2, vec.w)
+end
+
+--- Below this many degrees on BOTH axes the head is effectively centred, and
+--- rotating the aim vector would only add float noise to a direction the game
+--- is about to use for a raycast. Skipping the work also leaves the vanilla
+--- vector object untouched on the overwhelmingly common centred-head frames.
+local AIM_COMPENSATION_MIN_DEGREES = 0.1
+
+--- Rotate an engine-supplied forward vector by the INVERSE of the current head
+--- rotation, so the game's aim/raycast keeps pointing where the mouse points
+--- while the view follows the head.
+---
+--- Returns the input UNCHANGED (same object) when tracking is off, the vector
+--- is missing, or the head is within the deadzone - callers rely on that to
+--- hand the engine its original vector back untouched.
+--- @param fwd table|nil Vector4 forward direction from the engine.
+--- @return table|nil Compensated direction, or `fwd` as-is.
+local function compensateForward(fwd)
+    if not aim_state.enabled or not fwd then
+        return fwd
+    end
+
+    local yaw = aim_state.smooth_yaw
+    local pitch = aim_state.smooth_pitch
+    if math_abs(yaw) < AIM_COMPENSATION_MIN_DEGREES
+       and math_abs(pitch) < AIM_COMPENSATION_MIN_DEGREES then
+        return fwd
+    end
+
+    return rotateVectorByAngles(fwd, -yaw, -pitch)
+end
+
+-- ---------------------------------------------------------------------------
+-- PlayerAction classification
+--
+-- Pure helpers over the PlayerAction userdata the OnAction observer receives.
+-- They close over nothing and touch no mod state, so they live here rather
+-- than inside Aim:init() where they were originally written.
+-- ---------------------------------------------------------------------------
+
+--- Get a readable action name string from a PlayerAction userdata.
+--- CET-version-tolerant. Tries `Game.NameToString`, then `:AsString()`,
+--- then falls back to pulling the human label out of the `--[[ X --]]`
+--- decorator CET injects into `tostring(CName)` so we don't just get
+--- a hash-only representation that won't compare equal to "RangedAttack".
+--- @param action userdata|nil PlayerAction from OnAction.
+--- @return string|nil Human-readable action name, or nil if unavailable.
+local function actionHumanName(action)
+    if not action or not action.GetName then return nil end
+    local n
+    local ok, got = pcall(function() return action:GetName() end)
+    if not ok or not got then return nil end
+    n = got
+
+    -- 1) Game.NameToString (most reliable on modern CET).
+    local ok1, s1 = pcall(function() return Game.NameToString(n) end)
+    if ok1 and type(s1) == "string" and #s1 > 0 and s1 ~= "None" then return s1 end
+
+    -- 2) CName:AsString() callable form.
+    local ok2, s2 = pcall(function() return n:AsString() end)
+    if ok2 and type(s2) == "string" and #s2 > 0 and s2 ~= "None" then return s2 end
+
+    -- 3) tostring() + `--[[ label --]]` decorator extraction.
+    local raw = tostring(n)
+    if type(raw) == "string" then
+        local label = raw:match("%-%-%[%[%s*([%w_]+)%s*%-%-%]%]")
+        if label then return label end
+        return raw  -- last resort: raw ToCName{...} format
+    end
+    return nil
+end
+
+--- True when the action looks like a button PRESS. Defaults to true whenever
+--- the action type can't be read, so an unreadable fire action still triggers
+--- the decouple rather than being silently dropped.
+--- @param action userdata|nil PlayerAction from OnAction.
+--- @return boolean
+local function isButtonPressedAction(action)
+    if not action then return true end
+
+    local ok, value = pcall(function()
+        if action.GetType then return action:GetType() end
+        return action.actionType
+    end)
+    if not ok or value == nil then return true end
+
+    if type(value) == "number" then
+        return value == 0
+    end
+
+    local okValue, numericValue = pcall(function() return value.value end)
+    if okValue and type(numericValue) == "number" then
+        return numericValue == 0
+    end
+
+    local text = tostring(value):lower()
+    if text:find("button_pressed", 1, true) or text:find("pressed", 1, true) then
+        return true
+    end
+    if text:find("released", 1, true) or text:find("hold_progress", 1, true) or
+       text:find("hold_complete", 1, true) or text:find("repeat", 1, true) then
+        return false
+    end
+    return true
+end
+
+--- True only on an explicit button-RELEASE action (used to clear the
+--- firing-held latch so the hold-clean stops when fire stops). Distinct
+--- from "not pressed" so hold-progress ticks don't prematurely clear it.
+--- @param action userdata|nil PlayerAction from OnAction.
+--- @return boolean
+local function isButtonReleasedAction(action)
+    if not action then return false end
+    local ok, value = pcall(function()
+        if action.GetType then return action:GetType() end
+        return action.actionType
+    end)
+    if not ok or value == nil then return false end
+    if type(value) == "number" then return value == 1 end
+    local okv, num = pcall(function() return value.value end)
+    if okv and type(num) == "number" then return num == 1 end
+    return tostring(value):lower():find("released", 1, true) ~= nil
 end
 
 --- Create a new aim compensation instance
@@ -558,48 +691,7 @@ function Aim:init()
             -- Call original - OUT params come back as return values
             local pos, fwd = wrappedMethod(instigator)
             discoTap("TargetingSystem:GetCrosshairData", fwd)
-
-            -- Debug logging
-            aim_debug_counter = aim_debug_counter + 1
-            local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
-
-            if should_log then
-                print("[HeadTracking:AIM] GetCrosshairData OVERRIDE called!")
-                if fwd then
-                    print(string.format("[HeadTracking:AIM] Original fwd: x=%.3f y=%.3f z=%.3f", fwd.x, fwd.y, fwd.z))
-                else
-                    print("[HeadTracking:AIM] Forward is nil!")
-                end
-                print(string.format("[HeadTracking:AIM] State: enabled=%s yaw=%.2f pitch=%.2f",
-                    tostring(aim_state.enabled), aim_state.smooth_yaw, aim_state.smooth_pitch))
-            end
-
-            -- If disabled or no forward vector, return original
-            if not aim_state.enabled or not fwd then
-                return pos, fwd
-            end
-
-            -- Check for significant rotation
-            local yaw = aim_state.smooth_yaw
-            local pitch = aim_state.smooth_pitch
-
-            if math_abs(yaw) < 0.1 and math_abs(pitch) < 0.1 then
-                return pos, fwd
-            end
-
-            -- Rotate forward vector by INVERSE of head rotation
-            -- This compensates for the camera rotation, making bullets land at original aim point
-            local compensated = rotateVectorByAngles(fwd, -yaw, -pitch)
-
-            if should_log then
-                print(string.format("[HeadTracking:AIM] Compensating aim: yaw=%.2f pitch=%.2f", yaw, pitch))
-                print(string.format("[HeadTracking:AIM] Original forward: x=%.3f y=%.3f z=%.3f",
-                    fwd.x, fwd.y, fwd.z))
-                print(string.format("[HeadTracking:AIM] Compensated forward: x=%.3f y=%.3f z=%.3f",
-                    compensated.x, compensated.y, compensated.z))
-            end
-
-            return pos, compensated
+            return pos, compensateForward(fwd)
         end
     )
 
@@ -611,40 +703,9 @@ function Aim:init()
     Override("TargetingSystem", "GetBestComponentOnTargetObject",
         function(this, shootStartPosition, shootStartForward, target, componentFilter, wrappedMethod)
             discoTap("TargetingSystem:GetBestComponentOnTargetObject", shootStartForward)
-            -- Debug logging (use same counter to avoid spam)
-            local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
-
-            if should_log then
-                print("[HeadTracking:AIM] GetBestComponentOnTargetObject OVERRIDE called!")
-                if shootStartForward then
-                    print(string.format("[HeadTracking:AIM] shootStartForward: x=%.3f y=%.3f z=%.3f",
-                        shootStartForward.x, shootStartForward.y, shootStartForward.z))
-                end
-            end
-
-            -- If disabled or invalid forward, call original unchanged
-            if not aim_state.enabled or not shootStartForward then
-                return wrappedMethod(shootStartPosition, shootStartForward, target, componentFilter)
-            end
-
-            -- Check for significant rotation
-            local yaw = aim_state.smooth_yaw
-            local pitch = aim_state.smooth_pitch
-
-            if math_abs(yaw) < 0.1 and math_abs(pitch) < 0.1 then
-                return wrappedMethod(shootStartPosition, shootStartForward, target, componentFilter)
-            end
-
-            -- Rotate the shootStartForward by INVERSE of head rotation
-            local compensated = rotateVectorByAngles(shootStartForward, -yaw, -pitch)
-
-            if should_log then
-                print(string.format("[HeadTracking:AIM] Compensating shootForward: yaw=%.2f pitch=%.2f", yaw, pitch))
-                print(string.format("[HeadTracking:AIM] Compensated shootForward: x=%.3f y=%.3f z=%.3f",
-                    compensated.x, compensated.y, compensated.z))
-            end
-
-            return wrappedMethod(shootStartPosition, compensated, target, componentFilter)
+            return wrappedMethod(shootStartPosition,
+                                 compensateForward(shootStartForward),
+                                 target, componentFilter)
         end
     )
     print("[HeadTracking:AIM] GetBestComponentOnTargetObject Override registered")
@@ -655,25 +716,7 @@ function Aim:init()
         function(this, instigator, wrappedMethod)
             local pos, fwd = wrappedMethod(instigator)
             discoTap("TargetingSystem:GetDefaultCrosshairData", fwd)
-
-            local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
-            if should_log then
-                print("[HeadTracking:AIM] GetDefaultCrosshairData OVERRIDE called!")
-            end
-
-            if not aim_state.enabled or not fwd then
-                return pos, fwd
-            end
-
-            local yaw = aim_state.smooth_yaw
-            local pitch = aim_state.smooth_pitch
-
-            if math_abs(yaw) < 0.1 and math_abs(pitch) < 0.1 then
-                return pos, fwd
-            end
-
-            local compensated = rotateVectorByAngles(fwd, -yaw, -pitch)
-            return pos, compensated
+            return pos, compensateForward(fwd)
         end
     )
     print("[HeadTracking:AIM] GetDefaultCrosshairData Override registered")
@@ -685,26 +728,7 @@ function Aim:init()
             function(this, wrappedMethod)
                 local fwd = wrappedMethod()
                 discoTap("FPPCameraComponent:GetForward", fwd)
-
-                local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
-                if should_log then
-                    print("[HeadTracking:AIM] FPPCameraComponent:GetForward OVERRIDE called!")
-                end
-
-                if not aim_state.enabled or not fwd then
-                    return fwd
-                end
-
-                local yaw = aim_state.smooth_yaw
-                local pitch = aim_state.smooth_pitch
-
-                if math_abs(yaw) < 0.1 and math_abs(pitch) < 0.1 then
-                    return fwd
-                end
-
-                -- Return compensated forward when queried
-                local compensated = rotateVectorByAngles(fwd, -yaw, -pitch)
-                return compensated
+                return compensateForward(fwd)
             end
         )
     end)
@@ -721,25 +745,7 @@ function Aim:init()
             function(this, wrappedMethod)
                 local fwd = wrappedMethod()
                 discoTap("entCameraComponent:GetForward", fwd)
-
-                local should_log = false  -- silenced; was: (aim_debug_counter % AIM_DEBUG_INTERVAL == 1)
-                if should_log then
-                    print("[HeadTracking:AIM] entCameraComponent:GetForward OVERRIDE called!")
-                end
-
-                if not aim_state.enabled or not fwd then
-                    return fwd
-                end
-
-                local yaw = aim_state.smooth_yaw
-                local pitch = aim_state.smooth_pitch
-
-                if math_abs(yaw) < 0.1 and math_abs(pitch) < 0.1 then
-                    return fwd
-                end
-
-                local compensated = rotateVectorByAngles(fwd, -yaw, -pitch)
-                return compensated
+                return compensateForward(fwd)
             end
         )
     end)
@@ -804,81 +810,6 @@ function Aim:init()
     -- rather than just the first 2 raw OnAction fires.
     aim_state._seen_action_names = aim_state._seen_action_names or {}
     local seen_action_names = aim_state._seen_action_names
-
-    --- Get a readable action name string from a PlayerAction userdata.
-    --- CET-version-tolerant. Tries `Game.NameToString`, then `:AsString()`,
-    --- then falls back to pulling the human label out of the `--[[ X --]]`
-    --- decorator CET injects into `tostring(CName)` so we don't just get
-    --- a hash-only representation that won't compare equal to "RangedAttack".
-    local function actionHumanName(action)
-        if not action or not action.GetName then return nil end
-        local n
-        local ok, got = pcall(function() return action:GetName() end)
-        if not ok or not got then return nil end
-        n = got
-
-        -- 1) Game.NameToString (most reliable on modern CET).
-        local ok1, s1 = pcall(function() return Game.NameToString(n) end)
-        if ok1 and type(s1) == "string" and #s1 > 0 and s1 ~= "None" then return s1 end
-
-        -- 2) CName:AsString() callable form.
-        local ok2, s2 = pcall(function() return n:AsString() end)
-        if ok2 and type(s2) == "string" and #s2 > 0 and s2 ~= "None" then return s2 end
-
-        -- 3) tostring() + `--[[ label --]]` decorator extraction.
-        local raw = tostring(n)
-        if type(raw) == "string" then
-            local label = raw:match("%-%-%[%[%s*([%w_]+)%s*%-%-%]%]")
-            if label then return label end
-            return raw  -- last resort: raw ToCName{...} format
-        end
-        return nil
-    end
-
-    local function isButtonPressedAction(action)
-        if not action then return true end
-
-        local ok, value = pcall(function()
-            if action.GetType then return action:GetType() end
-            return action.actionType
-        end)
-        if not ok or value == nil then return true end
-
-        if type(value) == "number" then
-            return value == 0
-        end
-
-        local okValue, numericValue = pcall(function() return value.value end)
-        if okValue and type(numericValue) == "number" then
-            return numericValue == 0
-        end
-
-        local text = tostring(value):lower()
-        if text:find("button_pressed", 1, true) or text:find("pressed", 1, true) then
-            return true
-        end
-        if text:find("released", 1, true) or text:find("hold_progress", 1, true) or
-           text:find("hold_complete", 1, true) or text:find("repeat", 1, true) then
-            return false
-        end
-        return true
-    end
-
-    -- True only on an explicit button-RELEASE action (used to clear the
-    -- firing-held latch so the hold-clean stops when fire stops). Distinct
-    -- from "not pressed" so hold-progress ticks don't prematurely clear it.
-    local function isButtonReleasedAction(action)
-        if not action then return false end
-        local ok, value = pcall(function()
-            if action.GetType then return action:GetType() end
-            return action.actionType
-        end)
-        if not ok or value == nil then return false end
-        if type(value) == "number" then return value == 1 end
-        local okv, num = pcall(function() return value.value end)
-        if okv and type(num) == "number" then return num == 1 end
-        return tostring(value):lower():find("released", 1, true) ~= nil
-    end
 
     local shot_t0 = nil
     aim_state._shot_t0_ref = function() return shot_t0 end

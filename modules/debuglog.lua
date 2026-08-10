@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Debug Log Module
 -- Mirrors diagnostic lines to both the CET console AND a file in the mod
 -- folder so long-lived diag state stays readable after the CET console

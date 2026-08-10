@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 // AimProviderHook - decouple the bullet from the head by rewriting the aim
 // orientation the shot ASKS for, instead of the camera state it reads.
 //
@@ -36,6 +38,7 @@
 #include <cstring>
 
 #include "NativeRunningHook.hpp"
+#include "QuatMath.hpp"
 #include "SharedState.hpp"
 
 extern SharedState g_sharedState;
@@ -127,14 +130,7 @@ std::atomic<uint32_t> s_rejectedIdentity{0};
 uint32_t              s_logged = 0;
 uint64_t              s_lastHeartbeatMs = 0;
 
-inline void QuatMul(float ax, float ay, float az, float aw,
-                    float bx, float by, float bz, float bw,
-                    float& ox, float& oy, float& oz, float& ow) {
-    ox = aw*bx + ax*bw + ay*bz - az*by;
-    oy = aw*by - ax*bz + ay*bw + az*bx;
-    oz = aw*bz + ax*by - ay*bx + az*bw;
-    ow = aw*bw - ax*bx - ay*by - az*bz;
-}
+using quatmath::QuatMul;
 
 // What ApplyPeel wants to tell the log, filled inside the SEH region so the
 // logging call itself stays outside it.
@@ -356,18 +352,24 @@ bool Install() {
     // Nothing to instrument until the class registry is populated.
     if (!rtti->GetClass(RED4ext::CName(kClassNames[kClassCount - 1]))) return false;
 
-    s_page = static_cast<ThunkPage*>(VirtualAlloc(nullptr, sizeof(ThunkPage),
-                                                  MEM_RESERVE | MEM_COMMIT,
-                                                  PAGE_EXECUTE_READWRITE));
+    // Install() is retried from every OnUpdate until it takes. Allocating the
+    // page here unconditionally leaked a 64 KB executable reservation per frame
+    // whenever the classes were up but instrumentation failed, so the page is
+    // allocated once and freed again if this attempt instruments nothing.
     if (!s_page) {
-        LogError("[AimProvider] thunk page allocation failed");
-        return false;
+        s_page = static_cast<ThunkPage*>(VirtualAlloc(nullptr, sizeof(ThunkPage),
+                                                      MEM_RESERVE | MEM_COMMIT,
+                                                      PAGE_EXECUTE_READWRITE));
+        if (!s_page) {
+            LogError("[AimProvider] thunk page allocation failed");
+            return false;
+        }
+        std::memset(s_page, 0, sizeof(ThunkPage));
+        for (int i = 0; i < kThunkCount; ++i) {
+            EmitThunk(s_page->code + i * kThunkSize, &s_page->counters[i], &s_page->origs[i]);
+        }
+        FlushInstructionCache(GetCurrentProcess(), s_page->code, sizeof(s_page->code));
     }
-    std::memset(s_page, 0, sizeof(ThunkPage));
-    for (int i = 0; i < kThunkCount; ++i) {
-        EmitThunk(s_page->code + i * kThunkSize, &s_page->counters[i], &s_page->origs[i]);
-    }
-    FlushInstructionCache(GetCurrentProcess(), s_page->code, sizeof(s_page->code));
 
     int ok = 0;
     for (int c = 0; c < kClassCount; ++c) {
@@ -375,6 +377,8 @@ bool Install() {
     }
     if (ok == 0) {
         LogError("[AimProvider] no provider class instrumented");
+        VirtualFree(s_page, 0, MEM_RELEASE);
+        s_page = nullptr;
         return false;
     }
     LogInfo("[AimProvider] installed on %d/%d provider classes", ok, kClassCount);
@@ -403,14 +407,20 @@ void Heartbeat() {
     }
 
     char slots[192];
-    int written = 0;
+    size_t written = 0;
     slots[0] = '\0';
     for (int k = 0; k < 3 && topIdx[k] >= 0; ++k) {
+        if (written + 1 >= sizeof(slots)) break;
         const int c = topIdx[k] / kSlotCount;
         const int s = topIdx[k] % kSlotCount + kSlotLo;
-        written += _snprintf_s(slots + written, sizeof(slots) - written, _TRUNCATE,
-                               "%s%s:%d=%llu", written ? " " : "", kClassNames[c], s,
-                               static_cast<unsigned long long>(topVal[k]));
+        // _snprintf_s returns -1 on truncation; folding that into `written`
+        // walked the offset backwards and then handed the next iteration a
+        // wrapped (huge) size_t buffer size.
+        const int n = _snprintf_s(slots + written, sizeof(slots) - written, _TRUNCATE,
+                                  "%s%s:%d=%llu", written ? " " : "", kClassNames[c], s,
+                                  static_cast<unsigned long long>(topVal[k]));
+        if (n < 0) break;
+        written += static_cast<size_t>(n);
     }
 
     LogInfo("[AimProvider] heartbeat: mode=%u aimCalls=%u overrides=%u noMatch=%u identity=%u slots[%s]",

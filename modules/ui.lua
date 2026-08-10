@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- UI Module
 -- On-screen notifications and status display for user feedback
 -- Production-ready implementation with fade animations, queuing, and debug overlay

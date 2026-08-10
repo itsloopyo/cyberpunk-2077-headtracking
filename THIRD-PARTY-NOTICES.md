@@ -1,22 +1,24 @@
 # Third-Party Notices
 
+This mod is licensed under the MIT License, Copyright (c) 2026 itsloopyo - see [LICENSE](LICENSE). The components below are third-party and keep their own licenses.
+
 ## Cyber Engine Tweaks
 
-- **Version:** runtime, user-installed
+- **Version:** v1.37.1
 - **License:** MIT
 - **Upstream:** https://github.com/maximegmd/CyberEngineTweaks
 - **Usage:** Hosts the Lua mod and provides game scripting APIs (`Game`, `Observe`, `Override`, `ImGui`, `registerHotkey`).
-- **Bundled:** no.
+- **Bundled:** yes - `vendor/cet/cet.zip`, bundled in the release ZIP and used as the install-time source.
 
 ---
 
 ## RED4ext
 
-- **Version:** runtime, user-installed
+- **Version:** v1.30.0
 - **License:** MIT
 - **Upstream:** https://github.com/WopsS/RED4ext
 - **Usage:** Loader for the native C++ plugin and host of the UDP receiver / TCP server.
-- **Bundled:** no.
+- **Bundled:** yes - `vendor/red4ext/red4ext.zip`, bundled in the release ZIP and used as the install-time source.
 
 ---
 

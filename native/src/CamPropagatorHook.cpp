@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 #include "CamPropagatorHook.hpp"
 
 #include <Windows.h>
@@ -5,7 +7,9 @@
 #include <cmath>
 #include <cstdint>
 
+#include "ModuleGuard.hpp"
 #include "NativeRunningHook.hpp"
+#include "QuatMath.hpp"
 #include "SharedState.hpp"
 
 extern SharedState g_sharedState;
@@ -33,14 +37,7 @@ inline bool IsValidUnitish(float x, float y, float z, float w) {
     return std::isfinite(lenSq) && lenSq > 0.5f && lenSq < 1.5f;
 }
 
-inline void QuatMul(float ax, float ay, float az, float aw,
-                    float bx, float by, float bz, float bw,
-                    float& ox, float& oy, float& oz, float& ow) {
-    ox = aw*bx + ax*bw + ay*bz - az*by;
-    oy = aw*by - ax*bz + ay*bw + az*bx;
-    oz = aw*bz + ax*by - ay*bx + az*bw;
-    ow = aw*bw - ax*bx - ay*by - az*bz;
-}
+using quatmath::QuatMul;
 
 void Hook_Propagator(void* self, bool markDirty) {
     s_calls.fetch_add(1, std::memory_order_relaxed);
@@ -143,14 +140,12 @@ bool CamPropagatorHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHan
     if (s_hooked.load(std::memory_order_acquire)) return true;
     if (!sdk) return false;
 
-    HMODULE hModule = GetModuleHandleW(L"Cyberpunk2077.exe");
-    if (!hModule) {
-        LogError("[CamPropagator] Cyberpunk2077.exe handle not found");
-        return false;
-    }
+    // A detour written at an RVA that no longer belongs to this build lands in
+    // whatever occupies the address instead, which crashes the game seconds in.
+    const uintptr_t target = modguard::ResolveCodeRva(kPropagatorOffset, 16, "CamPropagator");
+    if (!target) return false;
 
-    const uintptr_t base = reinterpret_cast<uintptr_t>(hModule);
-    s_target = reinterpret_cast<void*>(base + kPropagatorOffset);
+    s_target = reinterpret_cast<void*>(target);
     const bool attached = sdk->hooking->Attach(handle,
                                                s_target,
                                                reinterpret_cast<void*>(&Hook_Propagator),

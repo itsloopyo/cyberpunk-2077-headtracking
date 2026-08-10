@@ -6,6 +6,8 @@ This module provides game state detection for context-aware mod behavior.
 It registers itself globally as 'GameUI' when required.
 
 Original source: https://github.com/psiberx/cp2077-cet-kit/blob/main/mods/GameUI.lua
+SPDX-License-Identifier: MIT
+Copyright (c) 2021 Pavel Siberx
 License: MIT (https://github.com/psiberx/cp2077-cet-kit/blob/main/LICENSE)
 
 Features:

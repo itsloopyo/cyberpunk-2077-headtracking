@@ -5,19 +5,37 @@ license = "MIT"
 channels = ["conda-forge"]
 platforms = ["win-64", "linux-64"]
 
+# Platform-independent tasks. Everything below in [target.*.tasks] either
+# builds the Windows payload or refuses to.
 [tasks]
-
-[target.win-64.tasks]
-# Fetch/refresh submodules (CameraUnlock standard task)
-sync = { cmd = "git submodule update --init --recursive" }
+# Fetch/refresh submodules (CameraUnlock standard task). The first pass covers
+# BOTH submodules so a fresh clone can build - native/deps/RED4ext.SDK is a
+# hard build dependency (CMakeLists.txt aborts without it). The second pass
+# then advances cameraunlock-core to its remote tip.
+sync = { cmd = "git submodule update --init --recursive && git submodule update --remote cameraunlock-core" }
 
 # Restore/setup any prerequisites (alias of sync for this project; no package dependencies)
 setup = { depends-on = ["sync"] }
 restore = { depends-on = ["sync"] }
 
+# Lua self-tests. Needs a `lua` interpreter on PATH; the CET sandbox isn't
+# involved, the tests stub the globals they need. Each suite runs as its own
+# process so one suite's global stubs can't leak into the next.
+test-syntax   = { cmd = "lua tests/syntax_test.lua" }
+test-settings = { cmd = "lua tests/settings_test.lua" }
+test-console  = { cmd = "lua tests/console_api_test.lua" }
+test-delegate = { cmd = "lua tests/delegate_equivalence_test.lua" }
+test-aim      = { cmd = "lua tests/aim_compensation_test.lua" }
+test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim"] }
+
+[target.win-64.tasks]
 # Build native RED4ext C++ plugin
 build-native = { cmd = "native\\build.bat" }
 build = { depends-on = ["build-native"] }
+# Alias for the CameraUnlock C++ primary-build name. NightlyRelease.psm1
+# defaults to `pixi run build-release`; without this, a nightly cut with the
+# module's default BuildCommand would fail on an unknown task.
+build-release = { depends-on = ["build-native"] }
 
 # Deploy to CET mods folder (Windows only). Depends on `build` so the native
 # RED4ext DLL is rebuilt before copying - otherwise `pixi run install` would
@@ -49,30 +67,25 @@ clean = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/clean.ps1" }
 update-deps = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/update-deps.ps1" }
 
 [target.linux-64.tasks]
-# Fetch/refresh submodules
-sync = { cmd = "git submodule update --init --recursive" }
-setup = { depends-on = ["sync"] }
-restore = { depends-on = ["sync"] }
-
-# Deploy is not available on Linux (game runs on Windows only)
-deploy = { cmd = "echo 'Deploy is only available on Windows (Cyberpunk 2077 is a Windows game)' && exit 0" }
+# Everything that touches the payload is Windows-only and fails fast here.
+# The package this repo ships is a Windows RED4ext DLL plus a CET Lua tree, so
+# no Linux task can produce a correct artifact. The previous wiring pointed
+# `package` / `release` / `validate-release` at scripts/*.sh - a second,
+# drifting copy of the build that emitted a single Lua-only
+# dist/HeadTracking-v<version>.zip with no native DLL, no vendored loaders, no
+# TweakXL yaml and no Nexus ZIP. A wrong artifact is worse than no artifact.
+build = { cmd = "echo 'build requires Windows (MSVC-built RED4ext plugin)' && exit 1" }
+build-release = { depends-on = ["build"] }
+deploy = { cmd = "echo 'deploy requires Windows (Cyberpunk 2077 is a Windows game)' && exit 1" }
 install = { depends-on = ["deploy"] }
-uninstall = { cmd = "echo 'Uninstall is only available on Windows' && exit 0" }
-
-# Validate mod structure (CI/CD compatible)
-validate-release = { cmd = "bash scripts/validate.sh" }
-
-# Package release ZIP
-package = { cmd = "bash scripts/package-release.sh" }
-
-# Release workflow
-release = { cmd = "bash scripts/release.sh" }
+uninstall = { cmd = "echo 'uninstall requires Windows' && exit 1" }
+validate-release = { cmd = "echo 'validate-release requires Windows' && exit 1" }
+package = { cmd = "echo 'package requires Windows (bundles an MSVC-built RED4ext plugin)' && exit 1" }
+release = { cmd = "echo 'release requires Windows' && exit 1" }
+update-deps = { cmd = "echo 'update-deps requires Windows (CET/RED4ext/TweakXL loaders)' && exit 1" }
 
 # Clean build artifacts
 clean = { cmd = "rm -rf dist release native/build native/out && echo 'Build artifacts cleaned'" }
-
-# update-deps refreshes Windows-only vendored loaders; not available on Linux.
-update-deps = { cmd = "echo 'update-deps is only available on Windows (CET/RED4ext loaders)' && exit 0" }
 
 [dependencies]
 # No pixi dependencies needed - Lua mod uses CET runtime

@@ -142,6 +142,13 @@ function Deploy-Mod {
     Copy-Item -Path $modulesSource -Destination $modulesTarget -Recurse -Force
     Write-Info "Copied modules directory"
 
+    # Licence and attribution travel with the deployed code, matching what the
+    # launcher-manifest deploys and what the Nexus ZIP extracts.
+    foreach ($n in @('LICENSE', 'THIRD-PARTY-NOTICES.md')) {
+        Copy-Item -Path (Join-Path $SourceDir $n) -Destination (Join-Path $TargetDir $n) -Force
+    }
+    Write-Info "Copied LICENSE and THIRD-PARTY-NOTICES.md"
+
     # Copy config.json if it exists and target doesn't have one
     $configSource = Join-Path $SourceDir "config.json"
     $configTarget = Join-Path $TargetDir "config.json"
@@ -413,12 +420,11 @@ function Deploy-NativePlugin {
         [string]$GameDir
     )
 
-    $dllCandidates = @(
-        (Join-Path $SourceDir "native\build\bin\HeadTrackingAim.dll"),
-        (Join-Path $SourceDir "native\build_upload_hook2\bin\HeadTrackingAim.dll")
-    )
-    $dllSource = $dllCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $dllSource) {
+    # Only the canonical output of `pixi run build-native`. A second candidate
+    # pointing at an old experiment directory meant a cleaned build\ silently
+    # deployed a stale DLL from that directory instead of failing.
+    $dllSource = Join-Path $SourceDir "native\build\bin\HeadTrackingAim.dll"
+    if (-not (Test-Path $dllSource)) {
         Write-Info "Native plugin not built - skipping (run 'pixi run build-native' to build)"
         return $false
     }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 #include "FreezeFrameHook.hpp"
 #include "AimCompensation.hpp"   // LogInfo / LogWarning / LogError
 #include "SharedState.hpp"
@@ -41,6 +43,11 @@ ID3D12CommandQueue* g_gameQueue = nullptr;
 
 // Lazily created copy machinery (on first Present).
 bool                     g_inited       = false;
+// LazyInit runs from Present, i.e. every frame until it succeeds. Its failure
+// paths used to leave a device reference and a backbuffer-sized texture behind
+// and get re-entered on the next frame, so a single failing device leaked tens
+// of MB per second. One attempt, then stay off.
+bool                     g_initFailed   = false;
 ID3D12Device*            g_device       = nullptr;
 ID3D12Resource*          g_prevFrame    = nullptr;   // rolling copy of last good frame
 ID3D12CommandAllocator*  g_alloc        = nullptr;
@@ -90,21 +97,40 @@ void Barrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
     cl->ResourceBarrier(1, &b);
 }
 
+// Release whatever LazyInit managed to create before it gave up.
+void ReleaseCopyObjects() {
+    if (g_cmdList)   { g_cmdList->Release();   g_cmdList = nullptr; }
+    if (g_alloc)     { g_alloc->Release();     g_alloc = nullptr; }
+    if (g_fence)     { g_fence->Release();     g_fence = nullptr; }
+    if (g_prevFrame) { g_prevFrame->Release(); g_prevFrame = nullptr; }
+    if (g_device)    { g_device->Release();    g_device = nullptr; }
+    if (g_fenceEvent) { CloseHandle(g_fenceEvent); g_fenceEvent = nullptr; }
+}
+
+// Give up on snap-cover for the rest of the session, releasing whatever
+// LazyInit had created so far. Always returns false so callers can `return`
+// it directly.
+bool AbandonInit(const char* what) {
+    LogError("[FreezeFrame] %s - snap-cover disabled", what);
+    g_initFailed = true;
+    ReleaseCopyObjects();
+    return false;
+}
+
 // Create prevFrame texture matching the backbuffer + the copy command objects.
 bool LazyInit(IDXGISwapChain3* sc) {
     if (g_inited) return true;
+    if (g_initFailed) return false;
     if (!g_gameQueue) return false;   // need the game's queue first
 
     if (FAILED(sc->GetDevice(IID_PPV_ARGS(&g_device))) || !g_device) {
-        LogError("[FreezeFrame] GetDevice failed");
-        return false;
+        return AbandonInit("GetDevice failed");
     }
 
     ID3D12Resource* bb = nullptr;
     UINT idx = sc->GetCurrentBackBufferIndex();
     if (FAILED(sc->GetBuffer(idx, IID_PPV_ARGS(&bb))) || !bb) {
-        LogError("[FreezeFrame] GetBuffer(0) failed");
-        return false;
+        return AbandonInit("GetBuffer(backbuffer) failed");
     }
     D3D12_RESOURCE_DESC desc = bb->GetDesc();
     bb->Release();
@@ -119,18 +145,19 @@ bool LazyInit(IDXGISwapChain3* sc) {
     td.Flags = D3D12_RESOURCE_FLAG_NONE;
     if (FAILED(g_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
                 D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&g_prevFrame)))) {
-        LogError("[FreezeFrame] CreateCommittedResource(prevFrame) failed");
-        return false;
+        return AbandonInit("CreateCommittedResource(prevFrame) failed");
     }
 
     if (FAILED(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&g_alloc)))
      || FAILED(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_alloc, nullptr, IID_PPV_ARGS(&g_cmdList)))
      || FAILED(g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&g_fence)))) {
-        LogError("[FreezeFrame] command-object creation failed");
-        return false;
+        return AbandonInit("command-object creation failed");
     }
     g_cmdList->Close();
     g_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!g_fenceEvent) {
+        return AbandonInit("fence event creation failed");
+    }
     g_inited = true;
     LogInfo("[FreezeFrame] initialized: %llux%u fmt=%d", (unsigned long long)g_bbWidth, g_bbHeight, (int)g_bbFormat);
     return true;
@@ -179,7 +206,19 @@ HRESULT STDMETHODCALLTYPE HOOK_Present(IDXGISwapChain3* This, UINT SyncInterval,
         if (SUCCEEDED(This->GetBuffer(This->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&bb))) && bb) {
             D3D12_RESOURCE_DESC d = bb->GetDesc();
             bb->Release();
-            if (d.Width == g_bbWidth && d.Height == g_bbHeight && d.Format == g_bbFormat) {
+            if (d.Width != g_bbWidth || d.Height != g_bbHeight || d.Format != g_bbFormat) {
+                // prevFrame no longer matches the backbuffer, so the copy would
+                // be invalid. Say so once instead of silently doing nothing for
+                // the rest of the session.
+                static bool s_loggedResize = false;
+                if (!s_loggedResize) {
+                    s_loggedResize = true;
+                    LogWarning("[FreezeFrame] backbuffer changed (%llux%u fmt=%d -> %llux%u fmt=%d) - "
+                               "snap-cover is off until the game is restarted",
+                               (unsigned long long)g_bbWidth, g_bbHeight, (int)g_bbFormat,
+                               (unsigned long long)d.Width, d.Height, (int)d.Format);
+                }
+            } else {
                 HeadTrackingState* s = g_sharedState.GetWritable();
                 if (s) {
                     uint32_t seq = s->restore_req_seq;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 #include "HitscanHook.hpp"
 #include "AimCompensation.hpp"
 #include "SharedState.hpp"

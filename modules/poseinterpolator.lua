@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Pose Interpolator
 --
 -- Bridges low-rate tracker samples (e.g. OpenTrack at 60 Hz) to the

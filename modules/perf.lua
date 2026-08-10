@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Performance Monitoring Module
 -- Tracks frame timing, update rates, and performance metrics
 -- Designed to have minimal overhead when not actively queried

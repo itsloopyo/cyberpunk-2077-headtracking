@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 #pragma once
 
 // Freeze-frame mask for the SNAP-CLEAN click flick.

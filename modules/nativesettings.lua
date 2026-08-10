@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Native Settings UI Integration Module
 -- Optional integration with the NativeSettings mod for in-game configuration
 -- https://www.nexusmods.com/cyberpunk2077/mods/3518

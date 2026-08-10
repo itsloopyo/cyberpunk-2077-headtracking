@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Camera Control Module
 -- Applies head tracking rotation to the first-person camera
 --
@@ -35,11 +37,8 @@ local consecutive_null_camera_frames = 0
 local NULL_CAMERA_LOG_EVERY_FRAMES = 300  -- ~5s at 60fps
 
 -- Pre-cache math functions for faster access (Lua optimization)
-local math_abs = math.abs
 local math_exp = math.exp
 local math_max = math.max
-local math_deg = math.deg
-local math_asin = math.asin
 
 -- Hoisted pcall trampolines. Lua allocates a fresh closure for every
 -- `pcall(function() ... end)` site, which is per-frame waste. Defining
@@ -48,9 +47,6 @@ local math_asin = math.asin
 -- userdata calls need.
 local function _callQuatToEuler(q)
     return q:ToEulerAngles()
-end
-local function _callGetForward(cam)
-    return cam:GetForward()
 end
 local function _callGetLocalOrientation(cam)
     return cam:GetLocalOrientation()
@@ -385,10 +381,6 @@ local function composeWorldModeQuat(world_clean, smooth_roll, smooth_pitch, smoo
     return quatMul(Qy_local, Qpr_local)
 end
 
--- Debug logging control
-local DEBUG_LOG_INTERVAL = 60  -- Log every N frames to avoid spam
-local debug_frame_counter = 0
-
 --- Best-effort conversion of a Quaternion to its "pitch/yaw/roll" in degrees
 --- for human-readable debug output. Uses CET's built-in ToEulerAngles() if
 --- available; otherwise returns nil fields so the log just omits those values.
@@ -437,9 +429,6 @@ end
 ---   hook is handling render-side injection and we must leave cam.transform clean
 ---   (otherwise the game sees a double-rotated camera).
 function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
-    debug_frame_counter = debug_frame_counter + 1
-    local should_log = false  -- silenced; flip DebugLog.setEnabled(true) for investigative sessions
-
     -- Validate input values
     if not isValidNumber(yaw) or not isValidNumber(pitch) or not isValidNumber(roll) then
         return
@@ -748,18 +737,6 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         end
     end
 
-    if should_log then
-        local hp, hy, hr = quatToPYR(head_quat)
-        dlog(string.format(
-            "[HeadTracking:DEBUG] mode=%s | smooth yaw=%.1f pitch=%.1f roll=%.1f",
-            tostring(yaw_mode), self.smooth_yaw, self.smooth_pitch, self.smooth_roll))
-        if hp then
-            dlog(string.format(
-                "[HeadTracking:DEBUG]   head_quat output : pitch=%.1f yaw=%.1f roll=%.1f",
-                hp, hy, hr))
-        end
-    end
-
     -- Step 6: Validate the head-rotation quaternion.
     -- Any NaN/Inf component can crash the game engine when fed to
     -- SetLocalOrientation (observed on world-mode transitions). Guard
@@ -774,11 +751,6 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         h_mag2 > 0.25 and h_mag2 < 4.0
 
     if not headQuatOk then
-        if should_log then
-            dlog(string.format(
-                "[HeadTracking:DEBUG] SKIPPED SetLocalOrientation - invalid quat i=%s j=%s k=%s r=%s",
-                tostring(hi), tostring(hj), tostring(hk), tostring(hr)))
-        end
         return
     end
 
@@ -840,17 +812,6 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         self.last_head_quat = write_head_rotation and head_quat or nil
         self.last_clean_local_quat = clean_quat
         self._last_written_final_quat = { i = fi, j = fj, k = fk, r = fr }
-        if should_log then
-            dlog(string.format(
-                "[HeadTracking:DEBUG] undo+compose: clean=(%.3f,%.3f,%.3f,%.3f) head applied",
-                clean_quat.i, clean_quat.j, clean_quat.k, clean_quat.r))
-        end
-    else
-        if should_log then
-            dlog(string.format(
-                "[HeadTracking:DEBUG] SKIPPED SetLocalOrientation - invalid composed quat i=%s j=%s k=%s r=%s",
-                tostring(fi), tostring(fj), tostring(fk), tostring(fr)))
-        end
     end
 
     -- Update statistics

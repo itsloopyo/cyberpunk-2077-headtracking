@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
 #pragma once
 
 #include <RED4ext/RED4ext.hpp>

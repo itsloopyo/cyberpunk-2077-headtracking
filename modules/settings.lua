@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Settings Module
 -- Manages persistent configuration via config.json
 -- Production-ready implementation with validation, observers, and atomic saves
@@ -64,7 +66,12 @@ local VALIDATION_RULES = {
     -- instead of head-rotated. Used to probe which engine systems read
     -- cam+0xD0 for their "where is the camera pointing" answer. See
     -- modules/camera.lua and Camera:apply().
-    decouple_diag_clean_cam = { type = "boolean" }
+    decouple_diag_clean_cam = { type = "boolean" },
+    -- Native FreezeFrameHook gate (console: DiagFreezeFrame). Every key in
+    -- `defaults` needs a rule here: without one, validateValue rejects the
+    -- value, so :set() refuses the toggle and :load() discards whatever the
+    -- user had saved.
+    freeze_frame_enabled = { type = "boolean" }
 }
 
 --- Validate a single value against its rule
