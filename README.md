@@ -31,9 +31,7 @@ Everything is applied through TweakXL, so removing the mod restores stock behavi
 
 ## Known Issues
 
-**Shooting is imperfect.** On every left-click action (firing, punching, reloading, holstering, even empty-mag clicks) the engine briefly snaps the camera toward the mouse-aim direction for a single frame. The mod masks this by holding the last good frame over the snap frame, so in normal play you should not see it. It is a cosmetic workaround, not a true fix.
-
-**Turn off frame generation and motion blur.** Both make the click flick more visible. The mod is built and tested without either. With frame generation on, the engine interpolates the flicked frame into adjacent frames and smears the snap across a longer visible window.
+**A few weapons still shoot hitscan.** 23 unique and quest weapons (MA70, the AirDrop variants, Nova Doom Doom and Saratoga Maelstrom among them) use their own attack records and are not converted, so aim stays coupled to your head on those. Every standard weapon is covered.
 
 ## Requirements
 
