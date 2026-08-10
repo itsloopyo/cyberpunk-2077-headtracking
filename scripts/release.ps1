@@ -21,12 +21,12 @@
 .PARAMETER Version
     Required. Either 'major' / 'minor' / 'patch' (bump from latest tag),
     a literal semantic version (e.g. '1.0.0', '2.0.0-beta.1'), or
-    'nightly' to publish a Patreon-gated nightly build to R2.
+    'nightly' to refresh the rolling `dev` GitHub pre-release.
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Position = 0)]
     [string]$Version,
     # Ship a release even when there are no user-facing commits since the
     # last tag (writes a maintenance changelog entry instead of aborting).
@@ -43,6 +43,11 @@ function Write-Fail    { param([string]$m) Write-Host "[ERROR] $m"   -Foreground
 $scriptDir   = Split-Path -Parent $PSCommandPath
 $projectRoot = Split-Path -Parent $scriptDir
 Set-Location $projectRoot
+
+if (-not $Version) {
+    Write-Error 'Usage: pixi run release <major|minor|patch|nightly|X.Y.Z>'
+    exit 1
+}
 
 if ($Version -eq 'nightly') {
     & (Join-Path $scriptDir 'release-nightly.ps1')
