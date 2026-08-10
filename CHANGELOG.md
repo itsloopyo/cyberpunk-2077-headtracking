@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.0] - 2026-08-11
+
+### Added
+
+- switch player gunfire to projectile attacks for aim decoupling
+
+### Fixed
+
+- bump cameraunlock-core so a busy tracker port is recoverable
+- guard native hooks on unknown builds, plug leaks, ship licences
+
+### Other
+
+- Add release nightly dispatch and publisher shim
+
 ## [Unreleased]
 
 ### Added
