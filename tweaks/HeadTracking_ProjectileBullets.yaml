@@ -1,0 +1,60 @@
+# Makes player gunfire use projectile attacks instead of hitscan, so the aim
+# provider (vtable slot 33) is consulted per round and the native plugin can
+# peel head rotation out of the shot direction. Hitscan bypasses that provider
+# entirely and cannot be decoupled.
+#
+# Selection chain:
+#   Items.*.rangedAttacks -> Attacks.<Family>BulletPackage
+#                .defaultFire -> Attacks.<Family>Bullet
+#               .playerAttack -> the attack that actually fires
+#
+# playerAttack is the only field that decides hitscan vs projectile. The game
+# already does this for time dilation (NPCTimeDilated points at a projectile
+# record), which is why bullets are visible in Sandevistan.
+#
+# There are four bullet families across the weapon roster, not one. They cover
+# 219 of the ~235 hitscan weapons; missing any of them leaves whole weapon
+# classes on hitscan and silently undecoupled.
+#
+# NPCAttack is deliberately left on hitscan. NPCs do not need decoupling, and
+# every NPC firing physics projectiles is a needless cost.
+
+Attacks.PhysicalBullet:
+  playerAttack: Attacks.Bullet_Projectile
+
+Attacks.PowerBulletsBullet:
+  playerAttack: Attacks.PowerBullets_Projectile
+
+Attacks.PowerRoundsBullet:
+  playerAttack: Attacks.PowerRounds_Projectile
+
+Attacks.PowerBuckshotsBullet:
+  playerAttack: Attacks.PowerBuckshots_Projectile
+
+# Element variants, reached when the weapon's damage type is not physical.
+Attacks.ThermalBullet:
+  playerAttack: Attacks.ThermalBulletProjectile
+
+Attacks.ChemicalBullet:
+  playerAttack: Attacks.ChemicalBulletProjectile
+
+Attacks.ElectricBullet:
+  playerAttack: Attacks.ElectricBulletProjectile
+
+# Vanilla ships the bullet projectiles at velocity 90. 200 is the fastest
+# velocity the game itself uses anywhere (exploding_bullet); nothing ships
+# above it. Going higher risks the projectile stepping past thin geometry
+# between physics ticks and missing hits entirely.
+# Which variant fires depends on the weapon family and damage element, so they
+# all have to move together.
+
+Attacks.Bullet_Projectile:            { velocity: 200.0 }
+Attacks.PowerBullets_Projectile:      { velocity: 200.0 }
+Attacks.PowerRounds_Projectile:       { velocity: 200.0 }
+Attacks.PowerBuckshots_Projectile:    { velocity: 200.0 }
+Attacks.ThermalBulletProjectile:      { velocity: 200.0 }
+Attacks.ChemicalBulletProjectile:     { velocity: 200.0 }
+Attacks.ElectricBulletProjectile:     { velocity: 200.0 }
+Attacks.BurningBulletProjectile:      { velocity: 200.0 }
+Attacks.SuicideBulletProjectile:      { velocity: 200.0 }
+Attacks.ExplodingBulletProjectile:    { velocity: 200.0 }

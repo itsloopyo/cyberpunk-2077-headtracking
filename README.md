@@ -17,6 +17,35 @@ once assets/readme-clip.gif is added. -->
 
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim.
 - **Parallax-correct aim reticle** - a second reticle marks where bullets will actually land while you look around.
+- **Projectile bullets** - player gunfire fires travelling rounds instead of hitscan, which is what makes decoupling possible at all.
+
+## Projectile Bullets: What This Changes
+
+Hitscan shots resolve instantly along a ray the engine builds before the mod
+can see it, so they cannot be decoupled from where your head is pointing. The
+mod switches **player** gunfire to the projectile attacks the game already
+ships, and uses them permanently rather than only during time dilation. This
+is the same code path that makes bullets visible under a Sandevistan.
+
+It is a real gameplay change, so it is worth knowing what moves:
+
+- **Rounds have travel time.** At any normal engagement distance this is not
+  something you will notice, but at long range you lead a moving target
+  slightly.
+- **Bullets are physical objects.** They can be seen in flight, and they
+  interact with the world rather than teleporting to the target.
+- **Wall penetration behaves differently.** Tech weapons that charge through
+  cover keep their own hitscan behaviour and are untouched.
+- **NPCs still use hitscan.** Only the player is converted. Enemies shoot
+  exactly as they do in vanilla, and there is no added cost from every NPC in
+  a firefight spawning physics projectiles.
+
+Round speed is set to 200, the fastest velocity the base game uses for any
+projectile. Everything is applied through TweakXL at `r6/tweaks/`, so removing
+the mod restores stock behaviour completely.
+
+23 unique or quest weapons (MA70, AirDrop variants, Nova Doom Doom, Saratoga
+Maelstrom among them) are still on hitscan and will not decouple.
 
 ## Known Issues
 

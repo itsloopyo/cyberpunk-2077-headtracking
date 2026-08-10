@@ -427,10 +427,13 @@ local aim_state = {
     -- the TCP control channel even when CET's FFI (and thus our SHM
     -- path) is disabled.
     udp = nil,
-    -- Still the ship behaviour. The native AimGetterHook peel is meant to
-    -- replace it (it decouples automatic fire too), but until one of its
-    -- levers is confirmed to move bullets, single-shot SNAP-CLEAN stays on.
-    snap_clean_enabled = true,
+    -- OFF since the projectile restoration landed. Rounds now launch as
+    -- projectiles and AimProviderHook peels the head rotation out of EVERY one,
+    -- so this single-shot camera flick is a second compensation on top. It only
+    -- fires on the first round of a trigger pull, which is exactly what that
+    -- round double-peeled and landed mirrored on the far side of the reticle
+    -- while the rest of the burst was correct.
+    snap_clean_enabled = false,
     -- Experimental: while the fire button is HELD, hold cam+0xD0 clean every
     -- frame (after camera:apply) so the NATIVE auto-fire loop's per-shot reads
     -- see the mouse-only orientation, not just the first trigger-pull. Tests

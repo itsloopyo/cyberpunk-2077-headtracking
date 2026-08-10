@@ -20,6 +20,16 @@
 
 ---
 
+## TweakXL
+
+- **Version:** v1.11.3 (commit `e8e2f0121af424cf4b9d89cb7683e3f74ef9dced`)
+- **License:** MIT
+- **Upstream:** https://github.com/psiberx/cp2077-tweak-xl
+- **Usage:** Applies the TweakDB changes in `r6/tweaks/` that switch player gunfire from hitscan to projectile attacks, which is what makes look/aim decoupling possible.
+- **Bundled:** yes - `vendor/tweakxl/tweakxl.zip`, bundled in the release ZIP and used as the install-time source.
+
+---
+
 ## RED4ext.SDK
 
 - **Version:** git submodule at `native/deps/RED4ext.SDK`

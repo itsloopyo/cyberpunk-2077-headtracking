@@ -46,6 +46,18 @@ void LogError(const char* fmt, ...);
 
 namespace {
 
+// Projectile launch-state setup, found by capturing the return address in the
+// aim provider stub (the provider is called from inside it via vtable slot 33 /
+// +0x108). param_1 is the launch state: providers at +0x600 logical position,
+// +0x610 logical orientation, +0x620 visual position, +0x630 visual orientation,
+// poses written into +0x480..+0x520.
+//
+// Dumping that object is how we find where the launch SPEED lives. Everything
+// else has been eliminated: the round is not Attacks.Bullet_Projectile, has no
+// scripted layer (BaseBullet / BaseProjectile / launch helpers all observed
+// across hundreds of rounds, never fired), and the velocity params are not
+// reachable from the provider's stack.
+
 constexpr uintptr_t kGetWorldOrientationRva = 0x802390;
 constexpr uintptr_t kGetWorldTransformRva   = 0x1D92A0;
 constexpr uintptr_t kFireNormaliseCallRva   = 0x84C968;
@@ -75,7 +87,16 @@ enum Mode : uint32_t {
     kModePeelA      = 2,
     kModePeelB      = 3,
     kModePeelC      = 4,
+    // Discriminator: rotate lever A's answer by a large fixed yaw, independent
+    // of the tracker. With no head pose the view stays still, so if the impacts
+    // swing wide then this getter really is what aims the bullet. Peeling by the
+    // head pose cannot answer that on its own - a null result there is
+    // indistinguishable from a lever the shot ignores.
+    kModeTestYawA   = 5,
 };
+
+// Deliberately large: unmistakable on camera, still on a wide wall.
+constexpr float kTestYawRadians = 0.785398f;  // 45 degrees
 
 std::atomic<uint32_t> s_mode{kModeInstrument};
 
@@ -206,8 +227,19 @@ bool PeelWorldDirection(float* d, const float* head, const float* camWorld) {
     return true;
 }
 
+// Swing the answer by a fixed yaw about the world up axis (REDengine is Z-up).
+bool ApplyTestYaw(float* q) {
+    const float half = kTestYawRadians * 0.5f;
+    const float yaw[4] = { 0.0f, 0.0f, std::sin(half), std::cos(half) };
+    float out[4];
+    QuatMul(yaw[0], yaw[1], yaw[2], yaw[3], q[0], q[1], q[2], q[3],
+            out[0], out[1], out[2], out[3]);
+    for (int i = 0; i < 4; ++i) q[i] = out[i];
+    return true;
+}
+
 // Shared body for the two camera getters. Returns true when it rewrote the quat.
-bool HandleCameraQuat(void* outQuat, bool peel, float* dotOut) {
+bool HandleCameraQuat(void* outQuat, bool peel, float* dotOut, bool testYaw = false) {
     *dotOut = 0.0f;
     if (!outQuat) return false;
 
@@ -223,8 +255,12 @@ bool HandleCameraQuat(void* outQuat, bool peel, float* dotOut) {
                                     q[2]*camWorld[2] + q[3]*camWorld[3]);
         *dotOut = dot;
         if (dot < kCamMatchDot) return false;   // not our camera
-        if (!peel) return false;
-        rewrote = PeelCameraQuat(q, head);
+        if (testYaw) {
+            rewrote = ApplyTestYaw(q);
+        } else {
+            if (!peel) return false;
+            rewrote = PeelCameraQuat(q, head);
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         rewrote = false;
     }
@@ -239,8 +275,9 @@ void* Hook_GetWorldOrientation(void* rcx, void* rdx) {
 
     s_callsA.fetch_add(1, std::memory_order_relaxed);
     const bool peel = (mode == kModePeelA) && InFireWindow();
+    const bool testYaw = (mode == kModeTestYawA) && InFireWindow();
     float dot = 0.0f;
-    const bool rewrote = HandleCameraQuat(rdx, peel, &dot);
+    const bool rewrote = HandleCameraQuat(rdx, peel, &dot, testYaw);
     if (dot >= kCamMatchDot) s_matchA.fetch_add(1, std::memory_order_relaxed);
 
     if (s_loggedA < 8 && dot >= kCamMatchDot) {
@@ -420,7 +457,6 @@ bool AimGetterHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle 
     }
 
     PatchFireNormaliseCallsite(base);
-
     s_started.store(true, std::memory_order_release);
     LogInfo("[AimGetter] started (A=%d B=%d C=%d)",
             s_targetA ? 1 : 0, s_targetB ? 1 : 0, s_callsite ? 1 : 0);

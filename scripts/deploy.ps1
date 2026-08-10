@@ -445,6 +445,27 @@ function Deploy-NativePlugin {
     return $true
 }
 
+function Deploy-Tweaks {
+    param(
+        [string]$SourceDir,
+        [string]$GameDir
+    )
+
+    $tweakSource = Join-Path $SourceDir "tweaks"
+    if (-not (Test-Path $tweakSource)) {
+        Write-Fail "tweaks/ not found at $tweakSource - the projectile restoration is missing."
+        return $false
+    }
+
+    $tweakTarget = Join-Path $GameDir "r6\tweaks"
+    New-Item -ItemType Directory -Path $tweakTarget -Force | Out-Null
+    Get-ChildItem -Path $tweakSource -Filter *.yaml -File | ForEach-Object {
+        Copy-Item -Path $_.FullName -Destination (Join-Path $tweakTarget $_.Name) -Force
+        Write-Info "Deployed tweak: $($_.Name)"
+    }
+    return $true
+}
+
 function Install-VendoredLoader {
     param(
         [string]$SourceDir,
@@ -522,6 +543,11 @@ Write-Info "Found Cyberpunk 2077 at: $gameDir"
 Install-VendoredLoader -SourceDir $sourceDir -GameDir $gameDir -Slug 'cet' `
     -DetectRelPath 'bin\x64\plugins\cyber_engine_tweaks.asi' -DisplayName 'Cyber Engine Tweaks' | Out-Null
 
+# TweakXL applies the projectile restoration. Automatic fire cannot decouple
+# without it, so it is a hard requirement rather than an optional extra.
+Install-VendoredLoader -SourceDir $sourceDir -GameDir $gameDir -Slug 'tweakxl' `
+    -DetectRelPath 'red4ext\plugins\TweakXL\TweakXL.dll' -DisplayName 'TweakXL' | Out-Null
+
 # Validate CET installation
 $cetDir = Validate-CETInstallation -GameDir $gameDir
 if (-not $cetDir) {
@@ -573,6 +599,7 @@ Install-VendoredLoader -SourceDir $sourceDir -GameDir $gameDir -Slug 'red4ext' `
 Write-Host ""
 Write-Info "Checking for native aim compensation plugin..."
 $nativeDeployed = Deploy-NativePlugin -SourceDir $sourceDir -GameDir $gameDir
+Deploy-Tweaks -SourceDir $sourceDir -GameDir $gameDir | Out-Null
 
 Write-Host ""
 Write-Success "Mod deployed successfully!"
