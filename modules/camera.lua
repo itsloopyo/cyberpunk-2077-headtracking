@@ -395,23 +395,49 @@ local function quatToPYR(q)
     return e.pitch, e.yaw, e.roll
 end
 
-local function getActiveCameraWorldOrientation()
+-- Why the last lookup failed. World yaw mode degrades to a pitch-free
+-- reference when this returns nil, which makes it behave exactly like local
+-- mode, so the reason is recorded and reported once instead of being swallowed.
+local world_orient_fail_reason = nil
+
+local function getActiveCameraForward()
     local okCS, cs = pcall(_callGetCameraSystem)
     if not okCS or not cs then return nil end
+    local ok, f = pcall(function() return cs:GetActiveCameraForward() end)
+    if ok and f then return f end
+    return nil
+end
+
+local function getActiveCameraWorldOrientation()
+    local okCS, cs = pcall(_callGetCameraSystem)
+    if not okCS or not cs then
+        world_orient_fail_reason = "Game.GetCameraSystem() failed or returned nil"
+        return nil
+    end
 
     local okWT, wt = pcall(_callGetActiveCameraWorldTransform, cs)
-    if not okWT or not wt then return nil end
+    if not okWT or not wt then
+        world_orient_fail_reason = "cameraSystem:GetActiveCameraWorldTransform() failed or returned nil"
+        return nil
+    end
 
     local okProp, q = pcall(_callGetOrientationProperty, wt)
     if (not okProp or not q) then
         local okMethod, qm = pcall(_callGetOrientationMethod, wt)
         if okMethod then q = qm end
+        if not q then
+            world_orient_fail_reason =
+                "WorldTransform: neither the .Orientation property nor :GetOrientation() returned a value"
+            return nil
+        end
     end
 
     if q and isValidNumber(q.i) and isValidNumber(q.j)
          and isValidNumber(q.k) and isValidNumber(q.r) then
+        world_orient_fail_reason = nil
         return quatNormalize(q)
     end
+    world_orient_fail_reason = "orientation quaternion had non-finite components"
     return nil
 end
 
@@ -654,6 +680,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         -- orientation, so right-peeled in world space too since world = parent
         -- * local) to recover the true clean world orientation.
         local cam_world_now = getActiveCameraWorldOrientation()
+        local world_is_true = cam_world_now ~= nil
         local clean_world = nil
         if cam_world_now then
             if engine_kept_our_write then
@@ -663,18 +690,89 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
             end
         elseif parent_world then
             -- Fallback (no camera-system transform available): synthesize from
-            -- parent_world * clean_local. Loses mouse pitch on this build but
-            -- is better than nothing.
+            -- parent_world * clean_local. Loses mouse pitch on this build, which
+            -- collapses the yaw axis back onto local-Z and makes world mode
+            -- indistinguishable from local. Say so once rather than leaving the
+            -- user toggling a switch that does nothing.
             clean_world = quatNormalize(quatMul(parent_world, clean_quat))
+            if not self._world_degraded_logged then
+                self._world_degraded_logged = true
+                -- print, not dlog: DebugLog is disabled by default, and a mode
+                -- that silently does nothing is exactly what must not be quiet.
+                print("[HeadTracking] WORLD yaw mode DEGRADED to camera-local: " ..
+                      tostring(world_orient_fail_reason or "camera-system orientation unavailable") ..
+                      " - horizon lock inactive")
+            end
         end
 
-        if parent_world and clean_world then
-            local Qy_world = EulerAngles.new(0, 0, self.smooth_yaw):ToQuat()
-            local Qpr_local = EulerAngles.new(self.smooth_roll, self.smooth_pitch, 0):ToQuat()
-            local desired_world = quatNormalize(quatMul(quatMul(Qy_world, clean_world), Qpr_local))
-            local desired_local = quatNormalize(quatMul(quaternionInverse(parent_world), desired_world))
-            head_quat = quatNormalize(quatMul(quaternionInverse(clean_quat), desired_local))
+        -- clean_world is the synthetic parent*clean and carries no mouse pitch,
+        -- because getActiveCameraWorldOrientation() never returns anything:
+        -- GetActiveCameraWorldTransform takes an out-parameter and we call it
+        -- with none, so it errors every frame. Fixing that call is the tidier
+        -- route, but the forward vector is a simpler reference and is already
+        -- proven, so take the view pitch from there.
+        --
+        -- Only the PITCH of the clean view orientation matters here: world yaw
+        -- is a rotation about world Z and so is the yaw part of W, and rotations
+        -- about the same axis commute, so the yaw cancels out of
+        -- W^-1 * Qyaw * W entirely. That reduces the reference we need from a
+        -- full orientation to one scalar.
+        local view_pitch = nil
+        local fwd = getActiveCameraForward()
+        if fwd then
+            local okz, z = pcall(function() return fwd.z end)
+            if okz and isValidNumber(z) then
+                if z > 1.0 then z = 1.0 elseif z < -1.0 then z = -1.0 end
+                local rendered_pitch = math.deg(math.asin(z))
+                -- fwd includes the head rotation we applied last frame; peel it
+                -- so the reference is the CLEAN (mouse-only) view pitch.
+                local hp = 0
+                if self.last_head_quat then
+                    local p = quatToPYR(self.last_head_quat)
+                    if isValidNumber(p) then hp = p end
+                end
+                view_pitch = rendered_pitch - hp
+            end
+        end
+
+        if view_pitch or clean_world then
+            if not self._world_active_logged then
+                self._world_active_logged = true
+                print(string.format(
+                    "[HeadTracking] WORLD yaw mode ACTIVE (pitch reference: %s)",
+                    view_pitch and "camera forward vector"
+                        or (world_is_true and "camera-system orientation" or "NONE - degraded")))
+            end
+
+            -- head must satisfy  W * head = Qyaw_world * W * Qpitchroll_local,
+            -- so head = W^-1 * Qyaw_world * W * Qpitchroll_local: the SAME W on
+            -- both sides of the yaw.
+            --
+            -- Conjugating with parent_world * clean_quat on the left while using
+            -- clean_world on the right (what this did before) mixes a pitch-free
+            -- orientation with a pitched one. A conjugation with mismatched
+            -- factors does not move the yaw axis onto world vertical at all, so
+            -- head yaw stayed on the camera-local axis and world mode was
+            -- indistinguishable from local no matter how the lookup went.
+            -- Pitch-only reference when we have it: W reduces to Qpitch, and
+            -- composeWorldModeQuat conjugates the world yaw by exactly that.
+            local W = clean_world
+            if view_pitch then
+                W = EulerAngles.new(0, view_pitch, 0):ToQuat()
+            end
+            head_quat = composeWorldModeQuat(W,
+                self.smooth_roll, self.smooth_pitch, self.smooth_yaw)
         else
+            -- Neither the camera system nor the player gave a world orientation,
+            -- so the only reference left is the clean LOCAL one. Conjugating by
+            -- that puts the yaw axis back on camera-local, which is local mode
+            -- in all but name. Report it once rather than pretending.
+            if not self._world_degraded_logged then
+                self._world_degraded_logged = true
+                print("[HeadTracking] WORLD yaw mode DEGRADED (no world orientation available): " ..
+                      tostring(world_orient_fail_reason or "player world orientation unavailable") ..
+                      " - horizon lock inactive")
+            end
             head_quat = composeWorldModeQuat(clean_quat,
                 self.smooth_roll, self.smooth_pitch, self.smooth_yaw)
         end
@@ -813,6 +911,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         self.last_clean_local_quat = clean_quat
         self._last_written_final_quat = { i = fi, j = fj, k = fk, r = fr }
     end
+
 
     -- Update statistics
     self.stats.update_count = self.stats.update_count + 1
