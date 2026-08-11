@@ -149,6 +149,10 @@ Edit it directly, or use the in-game Native Settings UI if you have it installed
   "clamp_pitch": 80.0,
   "clamp_roll": 45.0,
 
+  "deadzone_yaw": 0.5,
+  "deadzone_pitch": 0.5,
+  "deadzone_roll": 1.0,
+
   "crosshair_enabled": true,
   "crosshair_fov_degrees": 84.0,
   "crosshair_lead_factor": 0.0,
@@ -180,6 +184,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - `crosshair_*`: parallax-correct reticle overlay. Set `crosshair_fov_degrees` to your in-game FOV so the marker tracks the true aim point at extreme head angles.
 - `ads_reticle_*`: custom aim-down-sights reticle drawn at the true aim point while aiming. `ads_reticle_size` is in pixels, `ads_reticle_opacity` runs 0.0 to 1.0.
 - `position_*`: 6DOF translation. Sensitivities are per-axis multipliers, limits are in meters.
+- `deadzone_yaw` / `deadzone_pitch` / `deadzone_roll`: degrees of head movement ignored around centre, to stop tracker noise drifting the view while you hold still. Roll defaults higher than the other two because head-roll noise is the usual cause of the view slowly rolling on its own; raise it if you still see that.
 - `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`, but note this one is **not persisted**: every launch starts back in `"world"`, so the toggle lasts for the session only.
 
 ## Troubleshooting
