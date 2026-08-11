@@ -35,10 +35,8 @@ if type(debug) ~= "table" then
         return (type(m) == "string") and m or ""
     end
     debug = { traceback = _tb, getinfo = function() return {} end }
-    print("[HeadTracking:PROBE] installed fallback global 'debug' (was nil) - Lua errors now non-fatal")
 elseif type(debug.traceback) ~= "function" then
     debug.traceback = function(msg) return tostring(msg or "") end
-    print("[HeadTracking:PROBE] installed fallback debug.traceback (was missing)")
 end
 
 -- Import modules. Each require is pcall-wrapped so we can capture which
@@ -363,7 +361,7 @@ registerForEvent("onInit", function()
         -- is pre-init because the observer fires later.
         if udp and aim.setUdp then
             aim:setUdp(udp)
-            print("[HeadTracking] Aim->UDP bridge wired (SNAP-CLEAN can publish to native)")
+            print("[HeadTracking] Aim->UDP bridge wired")
         end
         local ff = settings:get("freeze_frame_enabled")
         if aim.setFreezeFrameEnabled then

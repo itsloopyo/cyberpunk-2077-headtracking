@@ -476,143 +476,6 @@ bool OnUpdate(RED4ext::CGameApplication*) {
         // per-renderable-entity transform builder, not per-camera).
         // All ring data was noise. See DECOUPLING.md.
         //
-        // The unreachable block below is left as a stub so the
-        // baseline dump (which is also dumping noise from random
-        // entity structs) and the LMB rising-edge plumbing can be
-        // pulled out cleanly when we pivot to the next probe.
-        if (false /* g_diagCamStateCaptured.load(std::memory_order_acquire) */) {
-            static bool      s_lmbDown    = false;
-            static int       s_dumpDelay  = -1;  // -1 = idle; else countdown ticks
-            static uint32_t  s_clickSeq   = 0;
-
-            const bool lmbNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-            if (lmbNow && !s_lmbDown) {
-                ++s_clickSeq;
-                s_dumpDelay = 4;  // wait 4 ticks then dump
-            }
-            s_lmbDown = lmbNow;
-
-            if (s_dumpDelay > 0) {
-                --s_dumpDelay;
-            } else if (s_dumpDelay == 0) {
-                s_dumpDelay = -1;
-                const uint64_t writeSeq = g_camRingWriteSeq.load(std::memory_order_acquire);
-                const uint64_t startSeq = writeSeq > kCamRingSize ? writeSeq - kCamRingSize : 0;
-                LogInfo("[HeadTrackingAim] CLICKRING[%u] dumping %u entries (seq %llu .. %llu)",
-                        s_clickSeq, (unsigned)(writeSeq - startSeq),
-                        (unsigned long long)startSeq, (unsigned long long)(writeSeq - 1));
-                for (uint64_t s = startSeq; s < writeSeq; ++s) {
-                    const CamRingEntry& slot = g_camRing[s % kCamRingSize];
-                    if (slot.writeSeq == 0) continue;
-                    LogInfo("[HeadTrackingAim] CLICKRING[%u] s=%llu cam=%p q014=(%+.4f,%+.4f,%+.4f,%+.4f) q028=(%+.4f,%+.4f,%+.4f,%+.4f) q154=(%+.4f,%+.4f,%+.4f,%+.4f) q1D4=(%+.4f,%+.4f,%+.4f,%+.4f) q1E8=(%+.4f,%+.4f,%+.4f,%+.4f) q394=(%+.4f,%+.4f,%+.4f,%+.4f) q3A8=(%+.4f,%+.4f,%+.4f,%+.4f) q554=(%+.4f,%+.4f,%+.4f,%+.4f) q568=(%+.4f,%+.4f,%+.4f,%+.4f) q714=(%+.4f,%+.4f,%+.4f,%+.4f) q728=(%+.4f,%+.4f,%+.4f,%+.4f)",
-                            s_clickSeq, (unsigned long long)s, slot.camStatePtr,
-                            slot.quats[0][0], slot.quats[0][1], slot.quats[0][2], slot.quats[0][3],
-                            slot.quats[1][0], slot.quats[1][1], slot.quats[1][2], slot.quats[1][3],
-                            slot.quats[2][0], slot.quats[2][1], slot.quats[2][2], slot.quats[2][3],
-                            slot.quats[3][0], slot.quats[3][1], slot.quats[3][2], slot.quats[3][3],
-                            slot.quats[4][0], slot.quats[4][1], slot.quats[4][2], slot.quats[4][3],
-                            slot.quats[5][0], slot.quats[5][1], slot.quats[5][2], slot.quats[5][3],
-                            slot.quats[6][0], slot.quats[6][1], slot.quats[6][2], slot.quats[6][3],
-                            slot.quats[7][0], slot.quats[7][1], slot.quats[7][2], slot.quats[7][3],
-                            slot.quats[8][0], slot.quats[8][1], slot.quats[8][2], slot.quats[8][3],
-                            slot.quats[9][0], slot.quats[9][1], slot.quats[9][2], slot.quats[9][3],
-                            slot.quats[10][0], slot.quats[10][1], slot.quats[10][2], slot.quats[10][3]);
-                }
-            }
-        }
-
-        // Periodic baseline dump: same offsets, every ~2s of OnUpdate
-        // ticks, so we have non-click-frame reference data to compare
-        // against CLICKDUMP. The flick source will be the offset that
-        // differs between BASELINE (head-rotated) and CLICKDUMP (clean
-        // mouse-direction) on click frames. ~120 ticks @ 60Hz =~ 2s;
-        // a bit faster on 144Hz, fine.
-        // BASELINE periodic dump REMOVED 2026-05-08 - same reason as
-        // click ring-dump above: the underlying camStatePtr is not a
-        // camera, it's per-entity. Data was noise.
-        if (false /* periodic baseline */) {
-            static uint32_t s_baselineCounter = 0;
-            if ((++s_baselineCounter % 120) == 0) {
-                void* camStatePtr = g_diagCamStatePtr.load(std::memory_order_acquire);
-                if (camStatePtr) {
-                    static uint32_t s_baselineSeq = 0;
-                    ++s_baselineSeq;
-                    const uint8_t* base = reinterpret_cast<const uint8_t*>(camStatePtr);
-                    auto dumpQuat = [&](size_t off) {
-                        const float* p = reinterpret_cast<const float*>(base + off);
-                        LogInfo("[HeadTrackingAim] BASELINE[%u] +0x%03zX: (%+.4f,%+.4f,%+.4f,%+.4f)",
-                                s_baselineSeq, off, p[0], p[1], p[2], p[3]);
-                    };
-                    dumpQuat(0x014);
-                    dumpQuat(0x028);
-                    dumpQuat(0x154);
-                    dumpQuat(0x1D4);
-                    dumpQuat(0x1E8);
-                    dumpQuat(0x394);
-                    dumpQuat(0x3A8);
-                    dumpQuat(0x554);
-                    dumpQuat(0x568);
-                    dumpQuat(0x714);
-                    dumpQuat(0x728);
-                }
-            }
-        }
-
-        // Original one-shot first-restore diag (kept for reference).
-        if (g_diagCamStateCaptured.load(std::memory_order_acquire)) {
-            static bool s_diagLogged = false;
-            if (!s_diagLogged) {
-                s_diagLogged = true;
-                void* camStatePtr = g_diagCamStatePtr.load(std::memory_order_acquire);
-                LogInfo("[HeadTrackingAim] DIAG first-restore camState ptr = %p ; g_camInstance = %p ; same? %s",
-                        camStatePtr, (void*)g_camInstance,
-                        (camStatePtr == g_camInstance) ? "YES" : "NO");
-                // Dump outMatrix - this is what the function wrote as
-                // its output. If it's a 4x4 view matrix with an
-                // orthonormal 3x3 rotation block, we know where the
-                // render-facing orientation lives and can modify it.
-                void* outMatrixPtr = g_diagOutMatrixPtr.load(std::memory_order_acquire);
-                LogInfo("[HeadTrackingAim] DIAG outMatrix ptr = %p", outMatrixPtr);
-                if (outMatrixPtr) {
-                    const float* om = reinterpret_cast<const float*>(outMatrixPtr);
-                    for (int row = 0; row < 8; ++row) {
-                        const int off = row * 16;
-                        LogInfo("[HeadTrackingAim] DIAG outMatrix[+0x%02X]: %+10.4f %+10.4f %+10.4f %+10.4f",
-                                off, om[row*4+0], om[row*4+1], om[row*4+2], om[row*4+3]);
-                    }
-                }
-
-                if (camStatePtr) {
-                    const float* cs = reinterpret_cast<const float*>(camStatePtr);
-                    // Raw 512-byte dump (same as before) for coarse layout.
-                    for (int row = 0; row < 32; ++row) {
-                        const int off = row * 16;
-                        LogInfo("[HeadTrackingAim] DIAG camState[+0x%03X]: %+10.4f %+10.4f %+10.4f %+10.4f",
-                                off, cs[row*4+0], cs[row*4+1], cs[row*4+2], cs[row*4+3]);
-                    }
-                    // Targeted scan: find all 4-consecutive-float sequences
-                    // whose magnitude is within 1% of 1.0 AND where each
-                    // component is in (-1.05, 1.05). Unit quaternions
-                    // always satisfy both. Step by 4 bytes - orientation
-                    // fields are always 4-byte aligned in MSVC layout.
-                    LogInfo("[HeadTrackingAim] DIAG camState unit-quat candidates in first 2KB:");
-                    for (int off = 0; off + 16 <= 0x800; off += 4) {
-                        const float* p = reinterpret_cast<const float*>(
-                            reinterpret_cast<const uint8_t*>(camStatePtr) + off);
-                        const float a = p[0], b = p[1], c = p[2], d = p[3];
-                        if (a < -1.05f || a > 1.05f) continue;
-                        if (b < -1.05f || b > 1.05f) continue;
-                        if (c < -1.05f || c > 1.05f) continue;
-                        if (d < -1.05f || d > 1.05f) continue;
-                        const float mag2 = a*a + b*b + c*c + d*d;
-                        if (mag2 < 0.98f || mag2 > 1.02f) continue;
-                        LogInfo("[HeadTrackingAim] DIAG   +0x%03X: (%+.4f,%+.4f,%+.4f,%+.4f) |mag|=%.4f",
-                                off, a, b, c, d, std::sqrt(mag2));
-                    }
-                }
-            }
-        }
-
         const uint64_t now = GetTickCount64();
         if (s_lastLogMs == 0) {
             s_lastLogMs = now;
@@ -753,8 +616,6 @@ float                 g_headQuat[4] = {0, 0, 0, 1};
 // Diag slot for the pre-render hook to drop the camState pointer into
 // on its first restore. OnUpdate drains + logs.
 std::atomic<void*> g_diagCamStatePtr{nullptr};
-std::atomic<bool>  g_diagCamStateCaptured{false};
-std::atomic<void*> g_diagOutMatrixPtr{nullptr};
 
 // Per-click camState dump request flag. SetLocalOrientationHook sets this
 // to true when the engine's click-handler caller (+0x665323) calls
@@ -762,7 +623,6 @@ std::atomic<void*> g_diagOutMatrixPtr{nullptr};
 // camState bytes (read-only) so we can compare values across multiple
 // clicks and find the slot that snaps to clean-mouse-direction on click
 // frames vs head-rotated on baseline.
-std::atomic<bool>  g_clickDumpRequested{false};
 
 void NativePreRender_Stage(float qi, float qj, float qk, float qr, uint32_t req_seq) {
     // Write quat first, then the seq atomic last. Acquire/release isn't

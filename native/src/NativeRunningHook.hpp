@@ -77,20 +77,8 @@ extern float                  g_headQuat[4];
 // enough to crash the trampoline). OnUpdate drains this by reading /
 // clearing it.
 extern std::atomic<void*> g_diagCamStatePtr;
-extern std::atomic<bool>  g_diagCamStateCaptured;
 
-// Per-click camState dump request. SetLocalOrientationHook sets true on
-// every LMB click (caller +0x665323); NativeRunningHook OnUpdate dumps a
-// short summary of camState's camera-shaped offsets and clears the flag.
-// Read-only - never writes to camState.
-extern std::atomic<bool>  g_clickDumpRequested;
 
-// Also captures the outMatrix pointer AFTER s_originalFn has written
-// it. Read-only from the hook (no write post-call - that crashed the
-// game). OnUpdate dumps both the pointer and a 4x4-ish block of
-// contents so we can identify whether outMatrix is a view matrix or
-// some intermediate struct.
-extern std::atomic<void*> g_diagOutMatrixPtr;
 
 // Pointer and offset for the raw cam-orientation memory write. Both
 // populated lazily by OnUpdate when CRTTI + ScanOrientationOffset have
