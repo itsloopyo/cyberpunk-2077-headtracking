@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.0] - 2026-08-11
+
+### Changed
+
+- Performance and stability improvements
+
 ## [0.1.0] - 2026-08-11
 
 ### Added
