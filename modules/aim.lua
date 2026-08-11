@@ -626,43 +626,12 @@ function Aim:init()
     )
     print("[HeadTracking:AIM] GetDefaultCrosshairData Override registered")
 
-    -- Try overriding camera GetForward - this might be what the game queries for bullet direction
-    print("[HeadTracking:AIM] Registering Override for FPPCameraComponent:GetForward")
-    local fpp_override_ok = pcall(function()
-        Override("FPPCameraComponent", "GetForward",
-            function(this, wrappedMethod)
-                local fwd = wrappedMethod()
-                discoTap("FPPCameraComponent:GetForward", fwd)
-                return compensateForward(fwd)
-            end
-        )
-    end)
-    if fpp_override_ok then
-        print("[HeadTracking:AIM] FPPCameraComponent:GetForward Override registered")
-    else
-        print("[HeadTracking:AIM] FPPCameraComponent:GetForward Override FAILED (method may not exist)")
-    end
-
-    -- Also try entCameraComponent which might be the parent class
-    print("[HeadTracking:AIM] Registering Override for entCameraComponent:GetForward")
-    local ent_override_ok = pcall(function()
-        Override("entCameraComponent", "GetForward",
-            function(this, wrappedMethod)
-                local fwd = wrappedMethod()
-                discoTap("entCameraComponent:GetForward", fwd)
-                return compensateForward(fwd)
-            end
-        )
-    end)
-    if ent_override_ok then
-        print("[HeadTracking:AIM] entCameraComponent:GetForward Override registered")
-    else
-        print("[HeadTracking:AIM] entCameraComponent:GetForward Override FAILED (method may not exist)")
-    end
-
-    -- NOTE: ShootEvents observer removed - it caused lag and didn't work anyway.
-    -- Bullet direction is calculated at native level BEFORE our observer runs.
-    -- True aim decoupling requires a RED4ext C++ plugin hooking the bullet spawn.
+    -- FPPCameraComponent:GetForward and entCameraComponent:GetForward were
+    -- overridden here to compensate the camera forward. Neither method exists
+    -- on this build: CET logs "Function GetForward in class ... does not exist"
+    -- and the Override is a no-op, but the surrounding pcall succeeds so the
+    -- old code still printed "registered" and looked healthy. Removed rather
+    -- than left claiming a compensation that never ran.
 
     aim_state.override_registered = true
     print("[HeadTracking:AIM] All Overrides and Observers registered successfully")
