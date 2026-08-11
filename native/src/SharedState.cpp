@@ -26,11 +26,7 @@ static bool IsSane(const HeadTrackingState& s) {
     // into RotateVector and corrupt bullet direction.
     if (!finite(s.raw_yaw) || !finite(s.raw_pitch) || !finite(s.raw_roll)) return false;
     // Quaternion fields used by the camera hook for the view-matrix injection
-    // and SNAP-CLEAN restore. ApplyQuatToMatrix3x3 of a NaN quat produces a
-    // NaN view matrix that freezes/garbles the render.
     if (!finite(s.quat_i) || !finite(s.quat_j) || !finite(s.quat_k) || !finite(s.quat_r)) return false;
-    if (!finite(s.restore_quat_i) || !finite(s.restore_quat_j) ||
-        !finite(s.restore_quat_k) || !finite(s.restore_quat_r)) return false;
     // Yaw/pitch/roll are degrees, not radians - a reading outside ±720 is
     // almost certainly a torn-read artefact, not a real head pose.
     if (std::abs(s.yaw) > 720.0f || std::abs(s.pitch) > 720.0f || std::abs(s.roll) > 720.0f) return false;

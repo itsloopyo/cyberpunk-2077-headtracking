@@ -13,9 +13,7 @@ namespace RED4ext { struct IScriptable; }
 // Register a per-frame RED4ext GameState callback for the Running state.
 // Its sole job in phase 1 is to fire every frame, bump a SharedState
 // counter, and log its rate so we can confirm the native hook is alive
-// and fires at frame cadence. Phase 2 will use the same callback to
-// write head-rotated cam.localOrientation back after a SNAP-CLEAN shot,
-// killing the one-frame visual flash that the Lua-only path cannot fix.
+// and fires at frame cadence.
 bool NativeRunningHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle);
 void NativeRunningHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle);
 
@@ -24,9 +22,6 @@ void NativeRunningHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHand
 // SEH-wrapped internally so any engine-side fault is caught.
 //
 // NOT safe to call from the render-pipeline hook - scripted dispatch
-// from inside that hook crashes the game. Use NativeCamRestore_DirectWrite
-// from there instead.
-bool NativeCamRestore_Invoke(float qi, float qj, float qk, float qr);
 
 // Render-pipeline-safe cam restore: writes 4 floats directly into the
 // cached cam instance at the cached orientation offset. No scripted
@@ -36,10 +31,8 @@ bool NativeCamRestore_Invoke(float qi, float qj, float qk, float qr);
 // orientation offset has not been discovered yet (both are populated
 // lazily from NativeRunningHook::OnUpdate's discovery pass).
 //
-// Both pointers get cached on the first SNAP-CLEAN where the CRTTI walk
+// Both pointers get cached on the first tick where the CRTTI walk
 // resolves AND the orientation scan finds a match. From that point on
-// this function is O(1) with a single cache miss and a cache-line write.
-bool NativeCamRestore_DirectWrite(float qi, float qj, float qk, float qr);
 
 // SHM-free pre-render coordination. NativeRunningHook (runs in the
 // main-thread OnUpdate context where SHM access is proven safe) polls
@@ -54,20 +47,11 @@ bool NativeCamRestore_DirectWrite(float qi, float qj, float qk, float qr);
 // crashes the game. Passthrough + one function call to our own DLL's
 // code = consistent crash. Passthrough with no DLL-internal calls =
 // stable. So the consume path is inlined in CameraHook.cpp, poking
-// the same globals that NativePreRender_Stage writes from the safe
 // context.
-extern std::atomic<uint32_t> g_preRenderPendingSeq;   // producer: OnUpdate. consumer: hook. 0 = nothing staged.
-extern std::atomic<uint32_t> g_preRenderConsumedSeq;  // consumer-only: hook. last seq already applied.
-extern std::atomic<uint64_t> g_preRenderStagedMs;     // GetTickCount64 timestamp for the staged quat.
-extern float                  g_preRenderQuat[4];      // written by OnUpdate BEFORE bumping PendingSeq; read by hook.
-extern float                  g_preRenderCleanQuat[4]; // camera orientation at the moment SNAP-CLEAN was staged.
-extern std::atomic<bool>      g_preRenderCleanQuatValid;
 
 // Continuously-mirrored head quat from SHM. OnUpdate refreshes this from
 // shared_mem.state.quat_{i,j,k,r} every tick. Read by the render-pipeline
-// hook on SNAP-CLEAN frames to rotate outMatrix's cached forward vectors
-// by the head delta - this fixes the one-frame render flash caused by the
-// cam being momentarily clean while bullets are computed.
+// by AimProviderHook, AimGetterHook and CamPropagatorHook.
 extern float                  g_headQuat[4];
 
 // Diagnostic capture: on first restore the pre-render hook stores the
@@ -76,7 +60,6 @@ extern float                  g_headQuat[4];
 // (even dormant cross-TU calls in the hook function change MSVC codegen
 // enough to crash the trampoline). OnUpdate drains this by reading /
 // clearing it.
-extern std::atomic<void*> g_diagCamStatePtr;
 
 
 
@@ -87,10 +70,6 @@ extern RED4ext::IScriptable* g_camInstance;
 extern int                    g_camOrientationOffset;
 
 // Legacy staging helpers (still used by OnUpdate to keep the write-
-// side side-effects grouped in one place). Equivalent inline logic in
-// the render hook replaces the corresponding consume helper.
-void NativePreRender_Stage(float qi, float qj, float qk, float qr, uint32_t req_seq);
-uint32_t NativePreRender_GetStagedReqSeq();
 
 // Rolling ring of recent pre-render captures. Hot path in CameraHook
 // pre-render writes one entry per call; OnUpdate reads on click events

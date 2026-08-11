@@ -3,7 +3,6 @@
 #include "TcpServer.hpp"
 #include "SharedState.hpp"
 #include "AimCompensation.hpp"  // LogInfo/LogWarning/LogError
-#include "HitscanHook.hpp"
 #include "NativeRunningHook.hpp"
 #include "UdpReceiver.hpp"
 
@@ -46,57 +45,6 @@ bool s_yawModeChordWasDown = false;
 // responses so it can discard stale samples.
 uint32_t s_seq = 0;
 
-// Parse an "R,qi,qj,qk,qr\n" SNAP-CLEAN restore publish. On success writes
-// the quat into shared memory, flips pending_native_restore, bumps
-// restore_req_seq. Returns true if parsed, false if malformed (caller
-// drops the request silently - the Lua FFI path is still active as a
-// second channel).
-bool HandleRestoreCommand(const char* buf, size_t len) {
-    if (len < 10 || buf[0] != 'R' || buf[1] != ',') return false;
-    float qi = 0, qj = 0, qk = 0, qr = 1;
-    // sscanf needs a null-terminated string; copy into a fixed stack buffer.
-    char tmp[64];
-    size_t copy = (len < sizeof(tmp) - 1) ? len : sizeof(tmp) - 1;
-    std::memcpy(tmp, buf, copy);
-    tmp[copy] = '\0';
-    int parsed = std::sscanf(tmp, "R,%f,%f,%f,%f", &qi, &qj, &qk, &qr);
-    if (parsed != 4) return false;
-    // Boundary validation: a non-finite quaternion would make
-    // ApplyQuatToMatrix3x3 produce NaN view matrices and freeze/garble the
-    // render. Reject anything that isn't finite, and clamp to a sane unit-
-    // quaternion magnitude window (a healthy unit quat has |q|=1).
-    if (!std::isfinite(qi) || !std::isfinite(qj) ||
-        !std::isfinite(qk) || !std::isfinite(qr)) {
-        return false;
-    }
-    const float magSq = qi*qi + qj*qj + qk*qk + qr*qr;
-    if (magSq < 0.5f || magSq > 2.0f) {
-        return false;
-    }
-    HeadTrackingState* w = g_sharedState.GetWritable();
-    if (!w) return false;
-    // Write quat BEFORE flipping the flag so the native consumer never
-    // observes a stale/partial quat. A full memory barrier is overkill
-    // here since there's only one producer (this thread) and one
-    // consumer (NativeRunningHook OnUpdate on the main thread); the
-    // ordering we need is just "compiler won't reorder across the flag
-    // write". Volatile is enough in practice, but simpler to write the
-    // fields first in source order.
-    w->restore_quat_i = qi;
-    w->restore_quat_j = qj;
-    w->restore_quat_k = qk;
-    w->restore_quat_r = qr;
-    uint32_t req = w->restore_req_seq;
-    if (!w->pending_native_restore || req == 0) {
-        req = req + 1;
-        w->restore_req_seq = req;
-    }
-    w->pending_native_restore = true;
-    NativePreRender_Stage(qi, qj, qk, qr, req);
-    LogInfo("[HeadTrackingAim] TCP restore staged for render: req=%u quat=(%.3f,%.3f,%.3f,%.3f)",
-            req, qi, qj, qk, qr);
-    return true;
-}
 
 bool HandleStateCommand(const char* buf, size_t len) {
     if (len < 4 || buf[0] != 'G' || buf[1] != ',') return false;
@@ -208,15 +156,10 @@ void ServeClient(SOCKET client) {
         }
 
         // Protocol discriminators (one-byte prefix, comma-separated args):
-        //   'R' -> "R,qi,qj,qk,qr\n" SNAP-CLEAN restore publish (no reply).
         //   anything else (traditionally 'G') -> "get latest pose"; reply
         //     with "<seq>,yaw,pitch,roll\r\n" as before.
         // Keep the read loop tight: publish paths must not block the
         // regular 60-120 Hz pose-poll ping-pong.
-        if (n >= 2 && inbuf[0] == 'R') {
-            HandleRestoreCommand(inbuf, static_cast<size_t>(n));
-            continue;
-        }
         if (n >= 2 && inbuf[0] == 'G' && inbuf[1] == ',') {
             if (!HandleStateCommand(inbuf, static_cast<size_t>(n)) &&
                 !s_loggedBadStateCommand.exchange(true)) {
@@ -228,7 +171,6 @@ void ServeClient(SOCKET client) {
         ++s_seq;
         uint32_t flags = 0;
         const bool hasProcessedState = state.enabled && state.applied_frame > 0;
-        if (state.hitscan_hook_active && hasProcessedState) flags |= kFlagHitscanActive;
         if (state.camera_hook_active && hasProcessedState)  flags |= kFlagCameraActive;
         const ChordEdges edges = ConsumeChordEdges();
         const bool trackerRecenter = UdpReceiver_TryConsumeRecenterRequest();

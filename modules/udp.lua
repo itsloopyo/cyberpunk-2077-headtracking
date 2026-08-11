@@ -32,7 +32,6 @@ local reusable_data = { yaw = 0, pitch = 0, roll = 0, x = 0, y = 0, z = 0, seq =
 -- native_flags bit layout, mirrored in native/src/TcpServer.cpp. Bits 0-1 are
 -- live status (hook activity); bits 2+ are one-shot edges that native sets
 -- when a chord/key transitions to down, and Lua clears on consume.
-local FLAG_HITSCAN_ACTIVE   = 1   -- bit 0
 local FLAG_CAMERA_ACTIVE    = 2   -- bit 1
 local FLAG_RECENTER         = 4   -- bit 2
 local FLAG_TOGGLE_TRACKING  = 8   -- bit 3
@@ -252,10 +251,6 @@ function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat, p
     st.propagator_inject = propagator_inject and 1 or 0
 end
 
-function TrackingInput:isNativeHitscanActive()
-    return hasFlag(native_flags, FLAG_HITSCAN_ACTIVE)
-end
-
 function TrackingInput:isNativeCameraHookActive()
     return hasFlag(native_flags, FLAG_CAMERA_ACTIVE)
 end
@@ -357,28 +352,6 @@ function TrackingInput:poll()
     return nil
 end
 
---- Publish a SNAP-CLEAN restore request over the TCP control channel.
---- The native plugin keeps a TCP server alongside its UDP listener; we
---- send the "R" command with the quaternion that should be written back
---- to cam.localOrientation once the hitscan has run. This is a fire-and-
---- forget one-way publish - there's no reply to parse, so it won't
---- interfere with the regular pose-poll ping-pong.
----
---- Returns true if the send was dispatched (not the same as "the native
---- side applied it"; that is observable via SHM's restore_ack_seq when
---- FFI is up). The caller should still run its fallback restore so the
---- tick budget isn't bet on a TCP round-trip we can't confirm.
---- @param qi number quaternion i
---- @param qj number quaternion j
---- @param qk number quaternion k
---- @param qr number quaternion r
---- @return boolean sent
-function TrackingInput:sendRestore(qi, qj, qk, qr)
-    if not self.connected or not self.socket then return false end
-    local cmd = string.format("R,%.6f,%.6f,%.6f,%.6f", qi, qj, qk, qr)
-    local ok = pcall(_socketSendCommand, self.socket, cmd)
-    return ok == true
-end
 
 function TrackingInput:getStats()
     local now = os.clock()

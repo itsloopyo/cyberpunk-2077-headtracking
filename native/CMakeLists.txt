@@ -32,10 +32,6 @@ add_library(HeadTrackingAim SHARED
     src/ModuleGuard.cpp
     src/NativeRunningHook.cpp
     src/CamPropagatorHook.cpp
-    src/HitscanHook.cpp
-    src/ShotSnapHook.cpp
-    src/ShotEntryProbe.cpp
-    src/FreezeFrameHook.cpp
     src/AimProviderHook.cpp
     src/AimGetterHook.cpp
     src/UdpReceiver.cpp

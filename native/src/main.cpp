@@ -8,10 +8,6 @@
 #include "TcpServer.hpp"
 #include "NativeRunningHook.hpp"
 #include "CamPropagatorHook.hpp"
-#include "HitscanHook.hpp"
-#include "ShotSnapHook.hpp"
-#include "ShotEntryProbe.hpp"
-#include "FreezeFrameHook.hpp"
 #include "AimProviderHook.hpp"
 #include "AimGetterHook.hpp"
 
@@ -61,29 +57,12 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         NativeRunningHook_Start(aSdk, aHandle);
         CamPropagatorHook_Start(aSdk, aHandle);
-        HitscanHook_Start(aSdk, aHandle);
-        // Decoupling status (2026-06-10): the shooter-state aim quat at
-        // +0x1E30 is the bullet's aim source (peeling it redirects bullets),
-        // but the engine round-trips it back to the camera every frame inside
-        // +0x4E4AFC, so cleaning it also de-tracks the view. Confirmed across
-        // the quat, the +0x80 pellet slots, the +0x4E4030 stack copy, and a
-        // full child-by-child hole sweep - every shooter-state mutation
-        // de-tracks the view. cam+0xD0 snapping (ShotSnapHook) does NOT reach
-        // the bullet at all. So both native experiments stay disabled and the
-        // ship behaviour is the Lua SNAP-CLEAN (single-shot decouple). The
-        // ShotEntryProbe carries the disabled AimPeel for the next attempt:
-        // peel the trace's camera transform (param_1+0x48 at +0x1303EC), the
-        // only +0x1E30 consumer downstream of the camera writeback.
-        // ShotEntryProbe_Start(aSdk, aHandle);
 
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
             w->camera_hook_active = CamPropagatorHook_IsActive();
             w->camera_hook_fires  = 0;
-            w->hitscan_hook_active = HitscanHook_IsActive();
-            w->hitscan_hook_fires  = 0;
             w->propagator_inject_active = 0;
             w->propagator_hook_fires    = 0;
-            w->freeze_frame_enabled     = 1;
             w->provider_hook_active     = 0;
             w->provider_mode            = 1;  // camera-match gated peel
             w->provider_calls           = 0;
@@ -100,7 +79,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         AimGetterHook_Start(aSdk, aHandle);
 
-        FreezeFrameHook_Start();
         break;
 
     case RED4ext::v1::EMainReason::Unload:
@@ -113,17 +91,12 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         AimGetterHook_Stop(aSdk, aHandle);
         AimProviderHook_Stop();
-        FreezeFrameHook_Stop();
         TcpServer_Stop();
         UdpReceiver_Stop();
 
-        ShotEntryProbe_Stop(aSdk, aHandle);
-        ShotSnapHook_Stop(aSdk, aHandle);  // no-op if never started
-        HitscanHook_Stop(aSdk, aHandle);
         CamPropagatorHook_Stop(aSdk, aHandle);
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
             w->camera_hook_active = false;
-            w->hitscan_hook_active = false;
         }
 
         g_sharedState.Shutdown();

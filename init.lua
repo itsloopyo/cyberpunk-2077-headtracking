@@ -354,7 +354,7 @@ registerForEvent("onInit", function()
     runInitStep("aim", function()
         aim = Aim.new(settings, camera)
         aim:init()
-        -- Wire the UDP/TCP input so Aim's SNAP-CLEAN observer can
+        -- Wire the UDP/TCP input for the native control channel.
         -- publish restore quats to native over the TCP control channel.
         -- Must happen after both aim:init() (observer registered) and
         -- the udp init step completed; safe to call even if aim:setUdp
@@ -362,10 +362,6 @@ registerForEvent("onInit", function()
         if udp and aim.setUdp then
             aim:setUdp(udp)
             print("[HeadTracking] Aim->UDP bridge wired")
-        end
-        local ff = settings:get("freeze_frame_enabled")
-        if aim.setFreezeFrameEnabled then
-            aim:setFreezeFrameEnabled(ff == true)
         end
         print("[HeadTracking] Aim compensation initialized")
     end)
@@ -569,19 +565,8 @@ local function onUpdateImpl(deltaTime)
 
         local skip_cam_write = clean_cam_decouple
         local rot_on = settings:get("enabled") and true or false
-        -- Restore BEFORE camera:apply so the undo-and-recompose math
-        -- sees the head_rotated cam state it expects, not a SNAP-CLEAN
-        -- leftover. Without this, every fired shot leaves a residual
-        -- quaternion error that accumulates as visible roll drift under
-        -- rapid mash + off-center head pose.
-        if aim.tickSnapRestore then aim:tickSnapRestore() end
         if rot_on then
             camera:apply(interp_yaw, interp_pitch, interp_roll, deltaTime, nil, skip_cam_write)
-            -- AFTER camera:apply: while the fire button is held, peel head
-            -- rotation back off cam.localOrientation so the native auto-fire
-            -- loop's per-shot reads see the mouse-only direction (extends
-            -- decoupling past the first shot of an automatic burst).
-            if aim.tickHoldClean then aim:tickHoldClean() end
         end
         if data then
             camera:applyPosition(data.x or 0, data.y or 0, data.z or 0, deltaTime)
@@ -605,18 +590,15 @@ local function onUpdateImpl(deltaTime)
     if should_diag then
         local stats = udp:getStats()
         local native_frame = aim.nativeRunningFrame and aim:nativeRunningFrame() or 0
-        local rreq, rack = 0, 0
-        if aim.restoreSeqs then rreq, rack = aim:restoreSeqs() end
         dlog(string.format(
-            "[HeadTracking:DIAG] tracking ON | enabled=%s | shm=%s | fresh=%s | packets=%d | last=%.1fs ago | smoothed yaw=%.1f pitch=%.1f | native_frame=%d | restore req=%d ack=%d",
+            "[HeadTracking:DIAG] tracking ON | enabled=%s | shm=%s | fresh=%s | packets=%d | last=%.1fs ago | smoothed yaw=%.1f pitch=%.1f | native_frame=%d",
             tostring(settings:get("enabled")),
             tostring(udp:isReady()),
             tostring(udp:isDataFresh()),
             stats.packet_count,
             udp:secondsSinceLastPacket(),
             rotation.yaw, rotation.pitch,
-            native_frame,
-            rreq, rack
+            native_frame
         ))
         diag_last_log_time = now
     end
@@ -807,7 +789,6 @@ end
 
 -- Public API for the CET console. Reachable as
 --   GetMod("HeadTracking").DiagCleanCam(true)
---   GetMod("HeadTracking").DiagSnapClean(false)
 -- CET sandboxes each mod's own globals, so file-scope `function Foo() ...`
 -- does NOT become a console global; the return table is the only way
 -- through.
@@ -822,32 +803,7 @@ local function diagVerbose(force)
     print("[HeadTracking:DIAG] Verbose console logging: " .. (new_val and "ON" or "OFF"))
 end
 
-local function diagFreezeFrame(force)
-    if not aim or not ui then
-        print("[HeadTracking:DIAG] aim/ui not initialised; mod still booting?")
-        return
-    end
-    local current = aim:isFreezeFrameEnabled()
-    local new_val = resolveToggle(current, force)
-    aim:setFreezeFrameEnabled(new_val)
-    settings:set("freeze_frame_enabled", new_val)
-    local msg = "FreezeFrame snap-cover: " .. (new_val and "ON" or "OFF (raw snap visible)")
-    print("[HeadTracking:DIAG] " .. msg)
-    if new_val then ui:showSuccess(msg, 2.0) else ui:showWarning(msg, 2.0) end
-end
 
-local function diagSnapClean(force)
-    if not aim or not ui then
-        print("[HeadTracking:DIAG] aim/ui not initialised; mod still booting?")
-        return
-    end
-    local current = aim:isSnapCleanEnabled()
-    local new_val = resolveToggle(current, force)
-    aim:setSnapCleanEnabled(new_val)
-    local msg = "SNAP-CLEAN: " .. (new_val and "ON" or "OFF (bullets may follow head)")
-    print("[HeadTracking:DIAG] " .. msg)
-    if new_val then ui:showSuccess(msg, 2.0) else ui:showWarning(msg, 2.0) end
-end
 
 -- Console delegates.
 --
@@ -903,8 +859,6 @@ end
 return {
     DiagCleanCam    = diagCleanCam,
     DiagVerbose     = diagVerbose,
-    DiagSnapClean   = diagSnapClean,
-    DiagFreezeFrame = diagFreezeFrame,
 
     -- These two predate the "driver not available" convention and stay silent
     -- when the crosshair driver is absent. Kept as-is so console scripts that
@@ -933,21 +887,4 @@ return {
 
     DiagShotDiscovery = delegate("aim", "armShotDiscovery"),
 
-    -- Toggle the experimental hold-cam-clean-while-firing (auto-weapon
-    -- decoupling test). On by default; call with false to A/B against the
-    -- old first-shot-only behaviour. Not a plain forward: it reads the
-    -- current value to support the no-argument toggle form.
-    DiagHoldClean = function(force)
-        if not (aim and aim.setHoldCleanWhileFiring) then
-            print("[HeadTracking:DIAG] aim driver not available")
-            return
-        end
-        -- Only reads the current value in the no-argument toggle form; the
-        -- guard above covers the setter only, so don't assume the getter.
-        local new_val
-        if force == nil then new_val = not aim:isHoldCleanWhileFiring()
-        else new_val = force and true or false end
-        aim:setHoldCleanWhileFiring(new_val)
-        print("[HeadTracking:DIAG] hold-clean-while-firing = " .. tostring(new_val))
-    end,
 }

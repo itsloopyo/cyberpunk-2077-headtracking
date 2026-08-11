@@ -67,11 +67,6 @@ local VALIDATION_RULES = {
     -- cam+0xD0 for their "where is the camera pointing" answer. See
     -- modules/camera.lua and Camera:apply().
     decouple_diag_clean_cam = { type = "boolean" },
-    -- Native FreezeFrameHook gate (console: DiagFreezeFrame). Every key in
-    -- `defaults` needs a rule here: without one, validateValue rejects the
-    -- value, so :set() refuses the toggle and :load() discards whatever the
-    -- user had saved.
-    freeze_frame_enabled = { type = "boolean" }
 }
 
 --- Validate a single value against its rule
@@ -174,11 +169,6 @@ function Settings.new()
         -- Clean-camera diagnostic path. Lua keeps cam.localOrientation
         -- mouse-only while native experiments try to inject head rotation.
         decouple_diag_clean_cam = false,
-        -- Native FreezeFrameHook: blits the previous backbuffer over the
-        -- SNAP-CLEAN frame so the one-frame snap is invisible. Set false to
-        -- expose the raw snap (blog/demo video capture). Backbuffer copy
-        -- keeps running so re-enabling is seamless.
-        freeze_frame_enabled = false,
     }
 
     -- Current values (populated by load())

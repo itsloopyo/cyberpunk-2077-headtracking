@@ -78,53 +78,6 @@ struct HeadTrackingState {
     uint32_t native_running_frame;  // increments every Running::OnUpdate fire
 
     // ------------------------------------------------------------------
-    // Section 5: Lua <-> native (SNAP-CLEAN restore hand-off)
-    // ------------------------------------------------------------------
-    // On a pistol shot Lua does SNAP-CLEAN in OnAction: saves the current
-    // head-rotated cam.localOrientation, computes the clean (no-head)
-    // orientation, writes it back, sets pending_restore=true here with the
-    // saved quat. The native side, from Running::OnUpdate, performs the
-    // restore as soon as possible. If the native call lands after the
-    // hitscan but before the frame renders, the one-frame render flash
-    // that the Lua-only tickSnapRestore cannot avoid is killed.
-    //
-    // Handshake:
-    //   Lua writes restore_quat_i/j/k/r, then sets pending_native_restore=1
-    //   and bumps restore_req_seq. (order matters; native reads pending
-    //   last so the quat is guaranteed to be coherent.)
-    //
-    //   Native consumes pending_native_restore, performs the restore,
-    //   clears pending_native_restore=0 and sets restore_ack_seq = the
-    //   req_seq it consumed. Lua reads the ack to decide whether it
-    //   still needs to run the fallback tickSnapRestore.
-    bool     pending_native_restore;
-    uint8_t  pad2[3];
-    float    restore_quat_i;
-    float    restore_quat_j;
-    float    restore_quat_k;
-    float    restore_quat_r;
-    uint32_t restore_req_seq;   // Lua bumps on every SNAP-CLEAN publish
-    uint32_t restore_ack_seq;   // native mirrors req_seq once restore is done
-    uint32_t restore_fires;     // total native-side restores performed
-    uint32_t shot_marker_seq;   // Lua bumps on fire input when native owns aim
-
-    // ------------------------------------------------------------------
-    // Section 6: native -> Lua (hitscan hook status)
-    // ------------------------------------------------------------------
-    // When the native hitscan hook is attached, it intercepts the raycast
-    // dispatch for pistol shots and rotates the ray direction by the
-    // inverse head rotation. That makes bullets land where the MOUSE
-    // points without needing Lua's SNAP-CLEAN dance, which means the
-    // cam.localOrientation can stay head-rotated for the whole frame -
-    // no more one-frame render flash.
-    //
-    // `hitscan_hook_fires` is a diagnostic counter. Lua trusts
-    // `hitscan_hook_active` once the final-vector hook is attached.
-    bool     hitscan_hook_active;
-    uint8_t  pad3[3];
-    uint32_t hitscan_hook_fires;  // total hook fires; heartbeat diag
-
-    // ------------------------------------------------------------------
     // Section 7: Lua -> native (cam-propagator decouple gate)
     // ------------------------------------------------------------------
     // True when Lua is writing CLEAN (mouse-only) quat to cam.localOrientation
@@ -137,15 +90,6 @@ struct HeadTrackingState {
     uint32_t propagator_inject_active;
     uint32_t propagator_hook_fires;  // heartbeat: native sandwich count
 
-    // ------------------------------------------------------------------
-    // Section 8: Lua -> native (FreezeFrameHook gate)
-    // ------------------------------------------------------------------
-    // The FreezeFrameHook normally blits the previous backbuffer over the
-    // SNAP-CLEAN frame so the snap is invisible. Set this to 0 to disable
-    // the blit (snap is rendered as-is) - used when recording video of the
-    // snap-clean for documentation. Backbuffer is still copied each frame
-    // so re-enabling has no warm-up frame. Default 1 = freeze enabled.
-    uint32_t freeze_frame_enabled;
 
     // ------------------------------------------------------------------
     // Section 9: aim-provider decouple (AimProviderHook)
@@ -189,7 +133,7 @@ struct HeadTrackingState {
 constexpr const char* SHARED_MEM_NAME = "HeadTrackingAimState";
 constexpr size_t SHARED_MEM_SIZE = sizeof(HeadTrackingState);
 
-static_assert(sizeof(HeadTrackingState) == 184,
+static_assert(sizeof(HeadTrackingState) == 136,
     "HeadTrackingState layout changed - update modules/aim.lua cdef to match");
 
 class SharedState {
