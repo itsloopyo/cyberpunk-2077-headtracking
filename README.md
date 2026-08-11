@@ -1,20 +1,12 @@
 # Cyberpunk 2077 Head Tracking
 
-Use a webcam, phone, or VR headset to drive Night City's first-person camera with your head while your mouse or controller still controls aim, so you can lean into corners, peek around cover, and glance at your passenger without losing your shot.
-
-<!-- Mod GIF placeholder. Replace with:
 ![Mod GIF](https://raw.githubusercontent.com/itsloopyo/cyberpunk-2077-headtracking/main/assets/readme-clip.gif)
-once assets/readme-clip.gif is added. -->
 
-> [!CAUTION]
-> **Experimental prototype - expect missing core features**
->
-> This is **not** a finished mod. Current builds may only test whether head tracking can drive the camera. Bug fixes and core features like decoupled look/aim, independent reticle behavior, correct shot direction, off-screen reticle support, movement handling, and comfort tuning may be missing at this early stage of development.
+Use a webcam, phone, or VR headset to drive Night City's first-person camera with your head while your mouse or controller still controls aim, so you can lean into corners, peek around cover, and glance at your passenger without losing your shot.
 
 ## Features
 
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim
-- **Projectile bullets** - player gunfire fires travelling rounds you can watch in flight instead of instant hitscan
 - **6DOF positional tracking** - lean into corners and peek around cover with your head position
 
 ## Gameplay Changes
@@ -36,7 +28,7 @@ Everything is applied through TweakXL, so removing the mod restores stock behavi
 ## Requirements
 
 - [Cyberpunk 2077](https://store.steampowered.com/app/1091500/Cyberpunk_2077/) v2.x (Steam, GOG, or Epic).
-- An OpenTrack-compatible head tracker: [OpenTrack](https://github.com/opentrack/opentrack) with a webcam or VR headset, or a phone app that speaks the OpenTrack UDP protocol.
+- An OpenTrack-compatible head tracker: [OpenTrack](https://github.com/opentrack/opentrack) with a webcam or VR headset, or a phone app that speaks the OpenTrack UDP protocol (see [Phone App Setup](#phone-app-setup) for which apps can send straight to the mod and which need OpenTrack in the chain).
 - Windows 10 or 11, 64-bit.
 
 ## Installation
@@ -101,12 +93,12 @@ You can use a VR headset purely as a head tracker. There is no VR rendering, you
 
 ### Phone App Setup
 
-Most phone trackers (Headcam, SmoothTrack, OpenTrack Companion) can speak OpenTrack UDP directly:
+Phone trackers generally all speak OpenTrack UDP, but they differ in how much filtering they do on the phone, and that is what decides how you should wire them up:
 
-- **Direct send**: point the app at your PC's LAN IP on port `4242`. Use this if the app already smooths the signal.
-- **Via OpenTrack**: have the phone send to OpenTrack on a different port (for example 4243), then OpenTrack's Output forwards to `127.0.0.1:4242`. Use this if you want OpenTrack's curve mapping or filters in the chain.
+- **Direct send**: point the app at your PC's LAN IP on port `4242`. Only apps that filter aggressively on-device are usable this way. [Headcam](https://headcam.app) does that filtering, so it is clean sent straight to the mod.
+- **Via OpenTrack**: have the phone send to OpenTrack on a different port (for example 4243), then OpenTrack's Output forwards to `127.0.0.1:4242`. Apps that send a raw or lightly filtered signal need this route so OpenTrack's filters and curve mapping can clean the feed up first.
 
-The mod's internal smoothing and deadzone are independent of the phone app, so duplicate filtering is fine but unnecessary.
+The mod's own smoothing and deadzone apply either way, but they are sized to take the edge off an already clean signal, not to rescue a noisy one.
 
 ## Controls
 
@@ -206,7 +198,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 
 **Jittery or unstable tracking.**
 - Raise `smoothing_factor` toward 0.3 to 0.5.
-- For phone trackers, enable smoothing in the phone app or relay through OpenTrack with a low-pass filter.
+- If a phone tracker is sending straight to port `4242` and it does not filter heavily on-device, relay it through OpenTrack with a low-pass filter instead.
 - High-FPS displays show micro-jitter more readily. The 0.15 internal floor is the minimum that is ever applied.
 
 **Wrong rotation axis (camera moves the wrong way).**
