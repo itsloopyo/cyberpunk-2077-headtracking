@@ -24,6 +24,7 @@ local math_cos = math.cos
 local math_abs = math.abs
 local math_max = math.max
 local math_min = math.min
+local math_exp = math.exp
 
 -- Cached ImGui window-flags bitfield. drawCrosshairAt() runs every render
 -- frame; ImGuiWindowFlags is only populated after CET's onInit, so resolve
@@ -95,6 +96,32 @@ function AdsReticle:isEnabled() return self.enabled end
 
 --- Draw the ADS reticle. Only draws while aiming down sights and enabled.
 --- @param is_ads boolean Whether the player is aiming down sights (driven by
+-- The projected offset scales by 1/tan(fov/2), so any per-frame wobble in the
+-- live FOV read lands straight on the reticle as position jitter. It is subtle
+-- at native frame rate and obvious with frame generation, which interpolates
+-- the overlay without motion vectors. Smooth the FOV, but snap on a real change
+-- (ADS in/out, scope zoom) so the reticle does not drag across the screen
+-- during the transition.
+local FOV_SNAP_DEGREES = 4.0
+local FOV_SMOOTH_SPEED = 30.0
+
+local function smoothFov(self, vfov)
+    local now = os.clock()
+    local dt = now - (self._fov_last_t or now)
+    self._fov_last_t = now
+    if dt <= 0 or dt > 0.25 then dt = 1.0 / 60.0 end
+
+    local prev = self._fov_smoothed
+    if not prev or math_abs(vfov - prev) > FOV_SNAP_DEGREES then
+        self._fov_smoothed = vfov
+        return vfov
+    end
+    local alpha = 1.0 - math_exp(-FOV_SMOOTH_SPEED * dt)
+    local out = prev + (vfov - prev) * alpha
+    self._fov_smoothed = out
+    return out
+end
+
 ---        the iron-sight controller lifecycle; see modules/state.lua).
 function AdsReticle:draw(is_ads)
     if not self.enabled or not is_ads then
@@ -126,6 +153,7 @@ function AdsReticle:draw(is_ads)
         if zok and type(zraw) == "number" and zraw > 0 then cam_zoom = zraw end
     end
     local vfov = cam_fov and (cam_fov / (cam_zoom or 1.0)) or nil
+    if vfov then vfov = smoothFov(self, vfov) end
     if vfov then
         local aspect = screen_w / screen_h
         local tan_half_v = math_tan(math_rad(vfov) * 0.5)
@@ -194,6 +222,7 @@ function AdsReticle:draw(is_ads)
 
     self:drawCrosshairAt(cx, cy)
 end
+
 
 --- @param x number Screen X position
 --- @param y number Screen Y position

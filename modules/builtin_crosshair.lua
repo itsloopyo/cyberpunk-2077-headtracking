@@ -23,6 +23,7 @@ local math_cos = math.cos
 local math_abs = math.abs
 local math_atan = math.atan
 local math_deg = math.deg
+local math_exp = math.exp
 
 -- Hoisted pcall trampolines. The per-frame tick path reads cam.fov, cam.zoom,
 -- calls GetRootWidget/GetRootCompoundWidget, and SetMargin under pcall. A
@@ -1141,6 +1142,31 @@ function BuiltinCrosshair:_findEntry(this)
     end
     return nil
 end
+-- The projected offset scales by 1/tan(fov/2), so per-frame wobble in the live
+-- FOV read lands on the crosshair as position jitter. Subtle at native frame
+-- rate, visible with frame generation (which interpolates the overlay without
+-- motion vectors). Smooth it, but snap on a real change (ADS in/out, scope
+-- zoom) so the crosshair does not drag across the screen during the transition.
+local FOV_SNAP_DEGREES = 4.0
+local FOV_SMOOTH_SPEED = 30.0
+
+local function smoothFov(self, vfov)
+    local now = os.clock()
+    local dt = now - (self._fov_last_t or now)
+    self._fov_last_t = now
+    if dt <= 0 or dt > 0.25 then dt = 1.0 / 60.0 end
+
+    local prev = self._fov_smoothed
+    if not prev or math_abs(vfov - prev) > FOV_SNAP_DEGREES then
+        self._fov_smoothed = vfov
+        return vfov
+    end
+    local alpha = 1.0 - math_exp(-FOV_SMOOTH_SPEED * dt)
+    local out = prev + (vfov - prev) * alpha
+    self._fov_smoothed = out
+    return out
+end
+
 
 function BuiltinCrosshair:_computeOffset(screen_w, screen_h)
     local yaw, pitch, roll = self.camera:getRenderedYPR(self.lead_factor)
@@ -1161,7 +1187,7 @@ function BuiltinCrosshair:_computeOffset(screen_w, screen_h)
             -- multiply. (Was `raw * zoom`, harmless only because the stale
             -- cam.zoom field was always 1.0; with live GetZoom()=1.5 on ADS
             -- the sign matters and `*` drifted the reticle.)
-            vfov = raw / zoom
+            vfov = smoothFov(self, raw / zoom)
         end
     end
     if vfov then

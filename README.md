@@ -184,6 +184,10 @@ JSON has no comment syntax, so the settings worth touching are described here in
 
 ## Troubleshooting
 
+**Reticle shimmers when turning your head, with frame generation on.**
+- The reticle is an overlay drawn once per rendered frame. Frame generation creates extra frames by interpolating between rendered ones, and it has no motion vectors for an injected overlay, so anything that moves quickly across the screen picks up a slight shimmer. That part is inherent to overlays under frame generation and cannot be fixed from the mod side.
+- The mod smooths the live FOV it projects with, which removes the avoidable share of the wobble. If it still bothers you, turning frame generation off removes it entirely.
+
 **Mod not loading.**
 - Confirm CET opens in-game (default key `~`). If it does not, fix CET first.
 - Check `<Cyberpunk 2077>\red4ext\logs\red4ext.log` for `[HeadTrackingAim] UDP receiver listening on port 4242`. If that line is absent, RED4ext did not load the native plugin. Reinstall RED4ext and re-run `install.cmd`.
