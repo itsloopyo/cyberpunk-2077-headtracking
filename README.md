@@ -180,7 +180,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - `crosshair_*`: parallax-correct reticle overlay. Set `crosshair_fov_degrees` to your in-game FOV so the marker tracks the true aim point at extreme head angles.
 - `ads_reticle_*`: custom aim-down-sights reticle drawn at the true aim point while aiming. `ads_reticle_size` is in pixels, `ads_reticle_opacity` runs 0.0 to 1.0.
 - `position_*`: 6DOF translation. Sensitivities are per-axis multipliers, limits are in meters.
-- `yaw_mode`: `"world"` is horizon-locked yaw (default). `"local"` pivots around the camera's current up-axis, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`.
+- `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`, but note this one is **not persisted**: every launch starts back in `"world"`, so the toggle lasts for the session only.
 
 ## Troubleshooting
 

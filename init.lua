@@ -307,12 +307,17 @@ registerForEvent("onInit", function()
         local loaded = settings:load()
         print(loaded and "[HeadTracking] Settings loaded from config.json"
                       or "[HeadTracking] Created default config.json")
-        -- Always start with tracking and the reticle driver on. Either can
-        -- be toggled off during play via hotkey, but every fresh launch
-        -- starts in the useful state instead of a previously-disabled one.
+        -- Always start with tracking and the reticle driver on, and with yaw
+        -- horizon-locked. Each can be toggled during play via hotkey, but every
+        -- fresh launch starts in the useful state instead of whatever the last
+        -- session happened to leave behind. yaw_mode matters most here: local
+        -- yaw is only the A/B counterpart, and because it used to persist
+        -- across launches a single stray PageDown left the camera un-horizon-
+        -- locked permanently, with no way to tell that from it being broken.
         settings:set("enabled", true)
         settings:set("crosshair_enabled", true)
         settings:set("position_enabled", true)
+        settings:set("yaw_mode", "world")
         settings:set("decouple_diag_clean_cam", false)
     end)
 
