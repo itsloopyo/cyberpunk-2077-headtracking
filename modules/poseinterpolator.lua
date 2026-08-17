@@ -18,7 +18,9 @@
 -- maintains velocity continuity for the trailing half of each sample
 -- period, eliminating velocity-drops-to-zero flat spots that read as
 -- micro-stutters on high-refresh displays. Capped to avoid runaway
--- prediction on direction reversals.
+-- prediction on direction reversals, and expired on a wall clock so a
+-- feed that stops entirely settles on the pose the tracker last reported
+-- instead of parking on the prediction (see segmentPosition).
 --
 -- Port of cameraunlock-core/csharp/.../PoseInterpolator.cs.
 
@@ -29,6 +31,16 @@ local INTERVAL_BLEND          = 0.3       -- EMA weight for sample interval esti
 local DEFAULT_SAMPLE_INTERVAL = 1.0 / 30  -- seed estimate until real samples arrive
 local MIN_SAMPLE_INTERVAL     = 0.001
 local MAX_SAMPLE_INTERVAL     = 0.2
+
+-- Seconds a sample may be late before the extrapolation starts expiring.
+-- Sized to outlast an ordinary Wi-Fi loss burst (50-200 ms): a dropped packet
+-- or two is still a live feed and must behave as it always did, because
+-- retreating there would pull the camera BACKWARDS against a head that is
+-- still turning, which reads far worse than the flat spot it replaces.
+local EXTRAPOLATION_HOLD_SECONDS  = 0.25
+-- Seconds over which a genuinely stalled feed converges back to the last
+-- reported sample. Long enough that the correction is a drift, not a snap.
+local EXTRAPOLATION_DECAY_SECONDS = 0.35
 
 function PoseInterpolator.new()
     local self = setmetatable({}, PoseInterpolator)
@@ -46,6 +58,39 @@ function PoseInterpolator:reset()
     self._timeSinceLastNewSample   = 0
     self._hasFirstSample           = false
     self._hasSecondSample          = false
+end
+
+--- Segment position to lerp at, for the given progress and however long the
+--- next sample has already been outstanding.
+---
+--- Progress past 1.0 is extrapolation: a prediction, so it must not outlive
+--- the sample it was predicting from by much. Clamping it and then HOLDING
+--- parks the output at 1.5x the last reported pose for as long as samples stay
+--- away - a tracker app streaming its last value while the face is lost, or a
+--- head so still that consecutive samples are identical and never advance the
+--- sequence number. A 25 degree head turn renders as 37.5 degrees and stays
+--- there.
+---
+--- So the prediction expires, but on a WALL CLOCK rather than on progress:
+--- progress is counted in estimated sample intervals, and that estimate only
+--- moves when a sample arrives, so it is stale by construction in exactly the
+--- stall case. Below the hold threshold this is the old behaviour unchanged;
+--- past it the position eases (smoothstep, so no velocity step at either end)
+--- to 1.0, the pose the tracker actually reported.
+--- @param progress number Progress within the current segment
+--- @return number Segment position to lerp at
+function PoseInterpolator:segmentPosition(progress)
+    if progress < 0 then return 0 end
+    local maxPt = 1.0 + self.maxExtrapolationFraction
+    local pt = progress > maxPt and maxPt or progress
+
+    local late = self._timeSinceLastNewSample - EXTRAPOLATION_HOLD_SECONDS
+    if late <= 0 then return pt end
+
+    local u = late / EXTRAPOLATION_DECAY_SECONDS
+    if u > 1 then u = 1 end
+    local eased = u * u * (3.0 - 2.0 * u)
+    return pt + (1.0 - pt) * eased
 end
 
 --- Advance one frame.
@@ -94,10 +139,10 @@ function PoseInterpolator:update(rawYaw, rawPitch, rawRoll, sampleSeq, deltaTime
 
         -- Capture current interpolated (possibly extrapolated) position
         -- as the new `from`. This preserves continuity through the
-        -- segment transition.
-        local maxP = 1.0 + self.maxExtrapolationFraction
-        local t = self._progress
-        if t < 0 then t = 0 elseif t > maxP then t = maxP end
+        -- segment transition, so it must be read BEFORE
+        -- _timeSinceLastNewSample is reset below - after a stall the position
+        -- on show is the decayed one, not the parked prediction.
+        local t = self:segmentPosition(self._progress)
         self._fromYaw   = self._fromYaw   + (self._toYaw   - self._fromYaw)   * t
         self._fromPitch = self._fromPitch + (self._toPitch - self._fromPitch) * t
         self._fromRoll  = self._fromRoll  + (self._toRoll  - self._fromRoll)  * t
@@ -118,9 +163,7 @@ function PoseInterpolator:update(rawYaw, rawPitch, rawRoll, sampleSeq, deltaTime
     -- known target, avoiding the held-still judder pattern.
     self._progress = self._progress + (deltaTime or 0) / self._sampleInterval
 
-    local maxPt = 1.0 + self.maxExtrapolationFraction
-    local pt = self._progress
-    if pt < 0 then pt = 0 elseif pt > maxPt then pt = maxPt end
+    local pt = self:segmentPosition(self._progress)
 
     local outYaw   = self._fromYaw   + (self._toYaw   - self._fromYaw)   * pt
     local outPitch = self._fromPitch + (self._toPitch - self._fromPitch) * pt
