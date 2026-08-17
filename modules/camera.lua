@@ -1001,6 +1001,13 @@ function Camera:recenter()
     self._pending_recenter_unroll = true
     self._skip_head_peel_once = false
 
+    -- A recenter is a discontinuity, so the previous frame's head quat is not a
+    -- baseline the next frame may extrapolate from: smooth_* just went to zero
+    -- while this still holds the pre-press rotation, and getRenderedYPR would
+    -- lead the reticle by that whole delta. prepareYawModeSwitch and
+    -- tryInitialReset already clear it at their own discontinuities.
+    self._prev_head_quat = nil
+
     -- Also re-capture the position zero point so 6DOF returns to neutral
     -- as part of the same hotkey action.
     self.pos_center_set = false

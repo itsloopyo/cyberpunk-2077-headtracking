@@ -189,4 +189,15 @@ do
         "without the reset, a moving-head press stores a blend (%.3f, never reported)", neutral))
 end
 
+-- (5) A recenter also drops the previous frame's head quat. It is the baseline
+-- getRenderedYPR extrapolates the reticle from, and across a recenter it holds
+-- the pre-press rotation while the current one has just gone to zero.
+do
+    local camera = Camera.new(stubSettings())
+    camera._prev_head_quat = { i = 0.1, j = 0.2, k = 0.3, r = 0.9 }
+    camera:recenter()
+    assert_true(camera._prev_head_quat == nil,
+        "recenter drops the previous-frame head quat")
+end
+
 print("== Recenter capture OK ==")
