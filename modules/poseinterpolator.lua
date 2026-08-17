@@ -22,6 +22,9 @@
 -- feed that stops entirely settles on the pose the tracker last reported
 -- instead of parking on the prediction (see segmentPosition).
 --
+-- Yaw and roll interpolate along the shortest arc; pitch is a plain lerp
+-- because it cannot wrap. See the per-axis note in update().
+--
 -- Port of cameraunlock-core/csharp/.../PoseInterpolator.cs.
 
 local PoseInterpolator = {}
@@ -41,6 +44,34 @@ local EXTRAPOLATION_HOLD_SECONDS  = 0.25
 -- Seconds over which a genuinely stalled feed converges back to the last
 -- reported sample. Long enough that the correction is a drift, not a snap.
 local EXTRAPOLATION_DECAY_SECONDS = 0.35
+
+local math_fmod = math.fmod
+
+--- Wrap an angle into -180..180. Port of cameraunlock-core
+--- math::NormalizeAngle, including its fast path for the range head tracking
+--- actually lives in.
+--- @param angle number degrees
+--- @return number degrees in -180..180
+local function normalizeAngle(angle)
+    if angle >= -180.0 and angle <= 180.0 then return angle end
+    angle = math_fmod(angle, 360.0)
+    if angle > 180.0 then
+        angle = angle - 360.0
+    elseif angle < -180.0 then
+        angle = angle + 360.0
+    end
+    return angle
+end
+
+--- Shortest signed rotation from one angle to another, so a step across the
+--- +-180 seam is the small one it looks like rather than its 360-degree
+--- complement.
+--- @param from number degrees
+--- @param to number degrees
+--- @return number degrees in -180..180
+local function shortestAngleDelta(from, to)
+    return normalizeAngle(to - from)
+end
 
 function PoseInterpolator.new()
     local self = setmetatable({}, PoseInterpolator)
@@ -143,9 +174,11 @@ function PoseInterpolator:update(rawYaw, rawPitch, rawRoll, sampleSeq, deltaTime
         -- _timeSinceLastNewSample is reset below - after a stall the position
         -- on show is the decayed one, not the parked prediction.
         local t = self:segmentPosition(self._progress)
-        self._fromYaw   = self._fromYaw   + (self._toYaw   - self._fromYaw)   * t
+        self._fromYaw   = normalizeAngle(
+            self._fromYaw + shortestAngleDelta(self._fromYaw, self._toYaw) * t)
         self._fromPitch = self._fromPitch + (self._toPitch - self._fromPitch) * t
-        self._fromRoll  = self._fromRoll  + (self._toRoll  - self._fromRoll)  * t
+        self._fromRoll  = normalizeAngle(
+            self._fromRoll + shortestAngleDelta(self._fromRoll, self._toRoll) * t)
 
         -- New sample becomes the target.
         self._toYaw, self._toPitch, self._toRoll = rawYaw, rawPitch, rawRoll
@@ -165,9 +198,19 @@ function PoseInterpolator:update(rawYaw, rawPitch, rawRoll, sampleSeq, deltaTime
 
     local pt = self:segmentPosition(self._progress)
 
-    local outYaw   = self._fromYaw   + (self._toYaw   - self._fromYaw)   * pt
+    -- Yaw and roll traverse the SHORTEST arc. They arrive in -180..180 and can
+    -- step across the seam, where a plain (to - from) turns a 1 degree move
+    -- from 179.5 to -179.5 into a -359 degree sweep the long way round - the
+    -- camera whips a full turn the wrong way and lands correct, so it reads as
+    -- a violent glitch rather than a wrong result. Pitch is bounded to +-90 by
+    -- the tracker's own asin and cannot wrap, so it stays a plain lerp: routing
+    -- it through the same seam logic would be wrong, not merely redundant, once
+    -- a from/to pair spanned more than 180 degrees.
+    local outYaw   = normalizeAngle(
+        self._fromYaw + shortestAngleDelta(self._fromYaw, self._toYaw) * pt)
     local outPitch = self._fromPitch + (self._toPitch - self._fromPitch) * pt
-    local outRoll  = self._fromRoll  + (self._toRoll  - self._fromRoll)  * pt
+    local outRoll  = normalizeAngle(
+        self._fromRoll + shortestAngleDelta(self._fromRoll, self._toRoll) * pt)
     return outYaw, outPitch, outRoll
 end
 

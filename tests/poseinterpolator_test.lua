@@ -4,14 +4,23 @@
 --
 -- The interpolator is pure Lua with no CET dependencies, so it runs directly.
 --
--- The behaviour pinned hardest here is the expiry of the extrapolation. The
--- interpolator predicts up to half a sample period past the newest sample to
--- keep velocity continuous; that prediction used to be clamped and then held
--- forever, so a feed that stopped left the camera parked at 1.5x the last
--- reported pose - a 25 degree turn shown as 37.5 degrees until the tracker
--- came back. A tracker streaming its last value while the face is lost, and a
--- head still enough that consecutive samples never advance the sequence
--- number, both look exactly like that to this module.
+-- Two behaviours are pinned hardest here, both of them latent and silent.
+--
+-- Extrapolation expiry: the interpolator predicts up to half a sample period
+-- past the newest sample to keep velocity continuous; that prediction used to
+-- be clamped and then held forever, so a feed that stopped left the camera
+-- parked at 1.5x the last reported pose - a 25 degree turn shown as 37.5
+-- degrees until the tracker came back. A tracker streaming its last value
+-- while the face is lost, and a head still enough that consecutive samples
+-- never advance the sequence number, both look exactly like that to this
+-- module.
+--
+-- Shortest-arc traversal: yaw and roll arrive wrapped into -180..180, so a
+-- small move can step across the seam. Lerping those linearly sent the camera
+-- the long way round - 175 to -175 is a 10 degree move that rendered as a 350
+-- degree whip in the wrong direction, landing correct, so it reads as a
+-- violent glitch rather than a wrong angle. Pitch cannot wrap and must stay a
+-- plain lerp.
 
 local PoseInterpolator = assert(loadfile("modules/poseinterpolator.lua"))()
 
@@ -177,6 +186,141 @@ do
     assert_true(y == nil, "no output until a sample arrives after reset")
     y = pi:update(7, 7, 7, 9, FRAME)
     assert_near(y, 7, "first sample after reset parks at the sample")
+end
+
+-- ---------------------------------------------------------------------------
+-- Shortest-arc traversal across the +-180 seam.
+-- ---------------------------------------------------------------------------
+
+-- Signed shortest rotation, written differently from the module's own version
+-- (floor-mod rather than fmod) so the test is not just restating it.
+local function arcDelta(from, to)
+    local d = (to - from) % 360
+    if d > 180 then d = d - 360 end
+    return d
+end
+
+local QUARTER = 1.0 / 240.0
+
+--- Drive a 60 Hz feed at 240 fps, the case this module exists for, so the
+--- segment can be observed at quarter steps instead of only at its endpoints.
+--- Two samples of `a` settle the interval estimate at exactly 1/60; the third
+--- sample opens the a -> b segment and lands on progress 0.25.
+--- @param a table {yaw, pitch, roll}
+--- @param b table {yaw, pitch, roll}
+--- @return table interpolator, number yaw, number pitch, number roll
+local function segmentDriver(a, b)
+    local pi = PoseInterpolator.new()
+    pi:update(a[1], a[2], a[3], 1, QUARTER)
+    for _ = 1, 3 do pi:update(nil, nil, nil, nil, QUARTER) end
+    pi:update(a[1], a[2], a[3], 2, QUARTER)
+    for _ = 1, 3 do pi:update(nil, nil, nil, nil, QUARTER) end
+    local y, p, r = pi:update(b[1], b[2], b[3], 3, QUARTER)
+    return pi, y, p, r
+end
+
+--- One more 240 fps frame with no fresh sample.
+local function quarterStep(pi)
+    return pi:update(nil, nil, nil, nil, QUARTER)
+end
+
+-- (9) 175 -> -175 is a 10 degree move. Every intermediate output must stay in
+-- that 10 degree corridor around the seam; the linear lerp put them near 0.
+do
+    local pi, y = segmentDriver({ 175, 0, 175 }, { -175, 0, -175 })
+    local outputs = { y }
+    for _ = 1, 3 do outputs[#outputs + 1] = (quarterStep(pi)) end
+
+    assert_near(outputs[1],  177.5, "quarter across the seam")
+    assert_near(outputs[2],  180.0, "half way sits on the seam itself")
+    assert_near(outputs[3], -177.5, "three quarters, wrapped past the seam")
+    assert_near(outputs[4], -175.0, "segment ends on the reported sample")
+
+    local travel = 0
+    local prev = 175
+    for _, out in ipairs(outputs) do
+        assert_true(math.abs(out) >= 175 - EPS,
+            string.format("stays in the 10 degree corridor (got %.3f)", out))
+        assert_true(math.abs(out) <= 180 + EPS,
+            string.format("output stays wrapped into -180..180 (got %.3f)", out))
+        travel = travel + math.abs(arcDelta(prev, out))
+        prev = out
+    end
+    assert_near(travel, 10, "total travel is the short way (10 deg, not 350)", 1e-3)
+end
+
+-- (10) The other direction across the seam, because a sign error in the delta
+-- passes the forward case and fails this one.
+do
+    local pi, y = segmentDriver({ -175, 0, -175 }, { 175, 0, 175 })
+    local outputs = { y }
+    for _ = 1, 3 do outputs[#outputs + 1] = (quarterStep(pi)) end
+
+    assert_near(outputs[1], -177.5, "quarter across the seam, reversed")
+    assert_near(outputs[2], -180.0, "half way sits on the seam itself, reversed")
+    assert_near(outputs[3],  177.5, "three quarters, wrapped past the seam, reversed")
+    assert_near(outputs[4],  175.0, "segment ends on the reported sample, reversed")
+
+    local travel = 0
+    local prev = -175
+    for _, out in ipairs(outputs) do
+        assert_true(math.abs(out) >= 175 - EPS,
+            string.format("stays in the corridor, reversed (got %.3f)", out))
+        travel = travel + math.abs(arcDelta(prev, out))
+        prev = out
+    end
+    assert_near(travel, 10, "total travel is the short way, reversed", 1e-3)
+end
+
+-- (11) Roll wraps too, and is a separate lerp with its own delta.
+do
+    local pi, _, _, r = segmentDriver({ 0, 0, 179 }, { 0, 0, -179 })
+    local outputs = { r }
+    for _ = 1, 3 do
+        local _y, _p, roll = quarterStep(pi)
+        outputs[#outputs + 1] = roll
+    end
+
+    assert_near(outputs[1],  179.5, "roll quarter across the seam")
+    assert_near(outputs[2],  180.0, "roll half way")
+    assert_near(outputs[3], -179.5, "roll three quarters")
+    assert_near(outputs[4], -179.0, "roll ends on the reported sample")
+end
+
+-- (12) Pitch must NOT take a shortest arc. It is bounded to +-90 by the
+-- tracker's own asin, so -80 to 80 is a real 160 degree sweep through zero,
+-- and routing it through the seam logic would turn that into a 200 degree
+-- move in the wrong direction.
+do
+    local pi, _, p = segmentDriver({ 0, -80, 0 }, { 0, 80, 0 })
+    local outputs = { p }
+    for _ = 1, 3 do
+        local _y, pitch = quarterStep(pi)
+        outputs[#outputs + 1] = pitch
+    end
+
+    assert_near(outputs[1], -40.0, "pitch quarter, straight through")
+    assert_near(outputs[2],   0.0, "pitch half way passes through zero")
+    assert_near(outputs[3],  40.0, "pitch three quarters, straight through")
+    assert_near(outputs[4],  80.0, "pitch ends on the reported sample")
+end
+
+-- (13) Extrapolation past the seam stays wrapped, and the next segment picks up
+-- from where the output actually was. The `from` capture wraps for the same
+-- reason the output does: an unwrapped 190 stored as `from` would make the next
+-- segment's delta the long way round.
+do
+    local pi = segmentDriver({ 175, 0, 0 }, { -175, 0, 0 })
+    for _ = 1, 3 do quarterStep(pi) end            -- reach progress 1.0
+    local at125 = quarterStep(pi)
+    local at150 = quarterStep(pi)
+    assert_near(at125, -172.5, "extrapolation past the seam, quarter over")
+    assert_near(at150, -170.0, "extrapolation capped, half a period over")
+
+    local resumed = pi:update(-165, 0, 0, 4, QUARTER)
+    assert_true(math.abs(arcDelta(at150, resumed)) < 5,
+        string.format("next segment continues from the wrapped position (got %.3f)", resumed))
+    assert_true(math.abs(resumed) <= 180 + EPS, "resumed output stays wrapped")
 end
 
 print("== Pose interpolator OK ==")
