@@ -27,7 +27,8 @@ test-console  = { cmd = "lua tests/console_api_test.lua" }
 test-delegate = { cmd = "lua tests/delegate_equivalence_test.lua" }
 test-aim      = { cmd = "lua tests/aim_compensation_test.lua" }
 test-pose     = { cmd = "lua tests/poseinterpolator_test.lua" }
-test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose"] }
+test-recenter = { cmd = "lua tests/recenter_capture_test.lua" }
+test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-recenter"] }
 
 [target.win-64.tasks]
 # Build native RED4ext C++ plugin

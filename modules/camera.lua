@@ -1015,6 +1015,34 @@ function Camera:recenter()
     print("[HeadTracking] Recenter armed (offset captured next apply)")
 end
 
+--- Make sure the neutral a pending recenter is about to capture comes from a
+--- RAW tracker sample. Call once per frame, before the interpolator runs.
+---
+--- apply() takes whatever pose it is handed as the new neutral, and the
+--- interpolator hands it a blend of the pre-press and post-press poses - or, on
+--- a frame with no fresh packet, the pre-press pose untouched. Capturing that
+--- stores a pose the tracker never reported, and whatever had not resolved yet
+--- becomes a permanent offset: on a tracker CENTER, anywhere from none of the
+--- pre-press drift to all of it, mirrored, because adj is negated against the
+--- offset. At 60 fps on a 60 Hz tracker every frame carries a sample and the
+--- blend has already landed, which is why this read as correct; above the
+--- tracker rate it does not. Resetting parks the interpolator on the next raw
+--- sample, so the captured neutral is that sample exactly at any frame rate.
+--- This is what cameraunlock-core's PoseInterpolator.Reset() is documented for
+--- ("call on recenter, scene transitions, or tracking re-enable").
+---
+--- Keyed off the armed flag rather than off a press, so every path that arms a
+--- recenter is covered: the hotkey, the tracker's own CENTER button arriving
+--- over the HCAM trailer, and the auto-recenter on tracker connection. The
+--- capture stays armed until a sample actually lands, so a frame with no fresh
+--- packet resets again and still captures a raw value.
+--- @param interpolator table PoseInterpolator instance feeding apply()
+function Camera:prepareRecenterCapture(interpolator)
+    if self._pending_recenter_capture then
+        interpolator:reset()
+    end
+end
+
 --- Reset all rotation offsets and smoothed values
 --- Camera returns to game's default orientation
 --- Call this when tracking is disabled or state changes

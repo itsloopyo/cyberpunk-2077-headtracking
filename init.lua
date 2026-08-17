@@ -540,6 +540,11 @@ local function onUpdateImpl(deltaTime)
         if ui then ui:showSuccess("Head Tracking: Recentered", 2.0) end
     end
 
+    -- A pending recenter captures its neutral from whatever pose reaches
+    -- camera:apply below, so that pose has to be a raw tracker sample and not an
+    -- interpolated blend spanning the press. See prepareRecenterCapture.
+    camera:prepareRecenterCapture(pose_interp)
+
     -- Poll for the latest tracking sample. The poll returns nil on frames
     -- with no fresh UDP packet, but the interpolator runs every frame:
     -- it bridges the tracker rate (e.g. 60 Hz) to the render rate (e.g.
