@@ -109,7 +109,9 @@ You can use a VR headset purely as a head tracker. There is no VR rendering, you
 
 Phone trackers generally all speak OpenTrack UDP, but they differ in how much filtering they do on the phone, and that is what decides how you should wire them up:
 
-- **Direct send**: point the app at your PC's LAN IP on port `4242`. Only apps that filter aggressively on-device are usable this way. [Headcam](https://headcam.app) does that filtering, so it is clean sent straight to the mod.
+- **Direct send**: point the app at your PC's LAN IP on port `4242`. This only works if the app filters its own signal on-device. A raw or lightly filtered feed sent straight to the mod will jitter, because the mod's smoothing is sized to take the edge off a clean signal rather than to rescue a noisy one. [Headcam](https://headcam.app) (my free tracking app) filters on-device, so can send directly.
+
+  Not sure about yours? Try direct first. Hold your head still and watch the view: if it drifts or shakes, switch to the OpenTrack route below.
 - **Via OpenTrack**: have the phone send to OpenTrack on a different port (for example 4243), then OpenTrack's Output forwards to `127.0.0.1:4242`. Apps that send a raw or lightly filtered signal need this route so OpenTrack's filters and curve mapping can clean the feed up first.
 
 The mod's own smoothing and deadzone apply either way, but they are sized to take the edge off an already clean signal, not to rescue a noisy one.
@@ -250,6 +252,12 @@ pixi run install    # build the native plugin and deploy to the detected game in
 pixi run package    # produce installer and Nexus ZIPs in release/
 ```
 
+## Community and Support
+
+- [Discord](https://discord.com/invite/dxyZdyFNT9) - setup help, bug reports, and new-release announcements
+- [Lopari](https://lopari.app) - my free launcher for Windows with one-click install and launch of my mods
+- [Headcam](https://headcam.app) - my free phone head-tracker app
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
@@ -269,9 +277,3 @@ Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICE
 ## Disclaimer
 
 This mod is not affiliated with, endorsed by, or supported by CD PROJEKT RED. It is a single-player utility, so do not use it in any multiplayer or competitive context. Use at your own risk.
-
-## Community and Support
-
-- [Discord](https://discord.com/invite/dxyZdyFNT9) - setup help, bug reports, and new-release announcements
-- [Lopari](https://lopari.app) - free Windows launcher with one-click install and launch of head-tracking mods
-- [Headcam](https://headcam.app) - free app that turns your phone into a head tracker
