@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0] - 2026-08-19
+
+### Added
+
+- split smoothing into local and remote, drop the hidden floor
+- gate the RVA-pinned hooks behind a PE build-profile registry
+- stand tracking down while aiming down sights
+
+### Fixed
+
+- expire the extrapolation instead of parking on it
+- interpolate yaw and roll along the shortest arc
+- capture the neutral from a raw sample, not an interpolated blend
+- drop the previous-frame head quat on recenter
+
 ## [Unreleased]
 
 ### Added

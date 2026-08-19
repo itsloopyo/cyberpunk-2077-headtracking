@@ -15,7 +15,7 @@
 set "GAME_ID=cyberpunk-2077"
 set "MOD_DISPLAY_NAME=HeadTracking (Cyberpunk 2077)"
 set "MOD_INTERNAL_NAME=HeadTracking"
-set "MOD_VERSION=0.2.0"
+set "MOD_VERSION=0.3.0"
 set "MOD_CONTROLS=Controls:&echo   Home      - Recenter head tracking&echo   End       - Toggle head tracking on/off&echo   Page Up   - Cycle tracking mode&echo   Page Down - Toggle world/local yaw"
 set "STATE_FILE=.headtracking-state.json"
 :: CET, RED4ext and TweakXL are shared modding frameworks that uninstall never
