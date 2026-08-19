@@ -271,14 +271,22 @@ for key, default_value in pairs(s:getDefaults()) do
         "default value for '" .. key .. "' is accepted by :set()")
 end
 
--- (6) freeze_frame_enabled specifically: settable, and survives a reload.
-assert_true(s:set("freeze_frame_enabled", true), "freeze_frame_enabled=true accepted")
-assert_eq(s:get("freeze_frame_enabled"), true, "freeze_frame_enabled stored as true")
+-- (6) a boolean default is settable, survives a reload, and rejects a string.
+-- Uses whichever boolean default exists rather than naming one: this block
+-- named freeze_frame_enabled and kept asserting it after the setting itself was
+-- removed, so the suite failed on a feature that was deliberately deleted.
+local bool_key
+for key, default_value in pairs(s:getDefaults()) do
+    if type(default_value) == "boolean" then bool_key = key break end
+end
+assert_true(bool_key, "at least one boolean setting exists")
+assert_true(s:set(bool_key, true), bool_key .. "=true accepted")
+assert_eq(s:get(bool_key), true, bool_key .. " stored as true")
 local s3 = Settings.new()
 s3:load()
-assert_eq(s3:get("freeze_frame_enabled"), true, "freeze_frame_enabled survives reload")
-assert_true(s:set("freeze_frame_enabled", false), "freeze_frame_enabled=false accepted")
-assert_false(s:set("freeze_frame_enabled", "yes"), "freeze_frame_enabled string rejected")
+assert_eq(s3:get(bool_key), true, bool_key .. " survives reload")
+assert_true(s:set(bool_key, false), bool_key .. "=false accepted")
+assert_false(s:set(bool_key, "yes"), bool_key .. " string rejected")
 
 print("== All settings tests passed ==")
 

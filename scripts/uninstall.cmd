@@ -109,6 +109,20 @@ if not "!_PS_EC!"=="0" (
 call "!_SHIM_OUT!"
 del "!_SHIM_OUT!" 2>nul
 
+:: See install.cmd: the shim does not verify that an explicit path actually
+:: contains the game, so a mistyped path would otherwise print "Game found".
+if not exist "%GAME_PATH%\%GAME_EXE_RELPATH%" (
+    echo.
+    echo ERROR: No %GAME_EXE% found under:
+    echo   %GAME_PATH%
+    echo.
+    echo That folder is not a %GAME_DISPLAY_NAME% installation. If it does look
+    echo right, Windows may be denying access - right-click uninstall.cmd and
+    echo choose "Run as administrator".
+    echo.
+    exit /b 1
+)
+
 echo Game found: "%GAME_PATH%"
 echo.
 
@@ -120,6 +134,23 @@ if not errorlevel 1 (
     echo.
     exit /b 1
 )
+
+:: -------- Write-permission check --------
+:: Same reason as install.cmd: without it a game folder we cannot write to
+:: surfaces as a PowerShell access-denied trace instead of "run me elevated".
+set "_WTEST=%GAME_PATH%\.headtracking-write-test.tmp"
+( break > "%_WTEST%" ) 2>nul
+if not exist "%_WTEST%" (
+    echo.
+    echo ERROR: No write access to the game folder:
+    echo   %GAME_PATH%
+    echo.
+    echo Close the game and any launcher, then right-click uninstall.cmd and
+    echo choose "Run as administrator".
+    echo.
+    exit /b 1
+)
+del "%_WTEST%" 2>nul
 
 :: -------- Locate uninstall.ps1 --------
 set "UNINSTALL_PS1=%SCRIPT_DIR%uninstall.ps1"

@@ -289,11 +289,35 @@ foreach ($z in @($installerZip, $nexusZip)) {
     if (Test-Path $z) { Remove-Item -Path $z -Force }
 }
 
+# Not Compress-Archive: on Windows PowerShell 5.1 it writes entry names with
+# backslash separators, which the ZIP spec (APPNOTE 4.4.17.1) says must be
+# forward slashes. Windows Explorer, 7-Zip and Expand-Archive all cope, but
+# mod managers and any non-Windows tool are not obliged to, and a Nexus ZIP
+# gets opened by whatever the user happens to have.
+function New-ZipFromDirectory {
+    param([string]$SourceDir, [string]$ZipPath)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $base = (Resolve-Path $SourceDir).Path.TrimEnd('\') + '\'
+    $zip = [System.IO.Compression.ZipFile]::Open($ZipPath, 'Create')
+    try {
+        foreach ($file in (Get-ChildItem -Path $SourceDir -Recurse -File)) {
+            $entryName = $file.FullName.Substring($base.Length) -replace '\\', '/'
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zip, $file.FullName, $entryName,
+                [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+}
+
 Write-Info "Creating installer ZIP..."
-Compress-Archive -Path (Join-Path $installerStaging "*") -DestinationPath $installerZip -Force
+New-ZipFromDirectory -SourceDir $installerStaging -ZipPath $installerZip
 
 Write-Info "Creating Nexus ZIP..."
-Compress-Archive -Path (Join-Path $nexusStaging "*") -DestinationPath $nexusZip -Force
+New-ZipFromDirectory -SourceDir $nexusStaging -ZipPath $nexusZip
 
 # --- Clean up staging ------------------------------------------------------
 Remove-Item -Path $installerStaging -Recurse -Force

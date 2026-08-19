@@ -10,6 +10,7 @@
 #include "CamPropagatorHook.hpp"
 #include "AimProviderHook.hpp"
 #include "AimGetterHook.hpp"
+#include "builds/build_registry.hpp"
 
 // Standard OpenTrack UDP port. If you change this, also change the OpenTrack
 // Output configuration (IP: 127.0.0.1, Port: 4242).
@@ -54,6 +55,12 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
             g_sharedState.Shutdown();
             return false;
         }
+
+        // Fingerprint the running EXE before a single detour goes in. On a
+        // build we do not recognise the RVA-pinned hooks below stay dormant
+        // and log why; the tracking pipeline, the camera and the projectile
+        // aim decoupling resolve their targets by name and carry on.
+        builds::SelectProfile();
 
         NativeRunningHook_Start(aSdk, aHandle);
         CamPropagatorHook_Start(aSdk, aHandle);

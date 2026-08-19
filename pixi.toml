@@ -52,6 +52,11 @@ uninstall = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/uninstall.
 # Validate release readiness (run before tagging)
 validate-release = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/validate-release.ps1" }
 
+# Print the installed game EXE's PE fingerprint plus a paste-ready build-profile
+# stub. First thing to run when a user reports the "unknown build" log line, and
+# step one of a rederive after a game patch.
+check-fingerprint = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/check-fingerprint.ps1" }
+
 # Package release ZIPs (installer + Nexus). Depends on `build` so the
 # bundled native DLL is always rebuilt before zipping - this is the chain
 # described in cameraunlock-core/AGENTS.md (`package` -> `build`). The
@@ -85,6 +90,7 @@ validate-release = { cmd = "echo 'validate-release requires Windows' && exit 1" 
 package = { cmd = "echo 'package requires Windows (bundles an MSVC-built RED4ext plugin)' && exit 1" }
 release = { cmd = "echo 'release requires Windows' && exit 1" }
 update-deps = { cmd = "echo 'update-deps requires Windows (CET/RED4ext/TweakXL loaders)' && exit 1" }
+check-fingerprint = { cmd = "echo 'check-fingerprint requires Windows (reads the installed game EXE)' && exit 1" }
 
 # Clean build artifacts
 clean = { cmd = "rm -rf dist release native/build native/out && echo 'Build artifacts cleaned'" }

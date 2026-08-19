@@ -2,7 +2,45 @@
 
 ## [Unreleased]
 
+### Added
+
+- The native plugin now fingerprints the running `Cyberpunk2077.exe`
+  (TimeDateStamp + SizeOfImage + CheckSum) and routes its hardcoded
+  addresses through a build-profile registry. On a build it does not
+  recognise, every RVA-pinned hook stays dormant and the log names the
+  running fingerprint, each known build, and whether the game is newer,
+  older, or repacked. Previously those hooks were only bounds-checked,
+  so after a game patch they would have been written into whatever
+  function had moved into their place. Head tracking, the camera, and
+  projectile aim decoupling resolve their targets by name and are
+  unaffected either way. Ships with the GOG 2.31 build
+  (`gog-win64-20250827`); further builds are added, never edited in
+  place, so an older game keeps working with a newer mod.
+- `pixi run check-fingerprint` prints an installed game EXE's
+  fingerprint and a paste-ready build-profile stub.
+- `install.cmd` compares an already-installed Cyber Engine Tweaks,
+  RED4ext, or TweakXL against the bundled version. An out-of-date loader
+  is now reported instead of being silently accepted, which was the most
+  likely way for an install to report success and then do nothing in
+  game. Interactive runs offer to replace it; `/y` runs report and leave
+  it alone; the new `/upgrade-deps` flag replaces it unattended.
+- `install.cmd` and `uninstall.cmd` check they can write to the game
+  folder before starting, so a protected install location (Epic's
+  default) says "run as administrator" instead of failing partway
+  through with a PowerShell access-denied trace.
+
 ### Changed
+
+- Vendored TweakXL bumped to 1.11.4.
+- `uninstall.cmd` removes the mod's four hotkeys from CET's shared
+  `bindings.json` and deletes the backup it made at install time, rather
+  than leaving a HeadTracking section behind claiming keys for a mod
+  that is gone. Other mods' bindings are preserved.
+- `install.cmd` and `uninstall.cmd` verify the resolved folder actually
+  contains the game before reporting "Game found".
+- Release ZIPs are written with forward-slash entry names. Windows
+  PowerShell's `Compress-Archive` uses backslashes, which the ZIP spec
+  does not permit and non-Windows tooling does not have to accept.
 
 - Smoothing is now two settings instead of one: `local_smoothing`
   (default `0.0`) for a tracker running on this machine, and

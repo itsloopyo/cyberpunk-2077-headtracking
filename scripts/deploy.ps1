@@ -18,7 +18,19 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
-    [string]$GamePath
+    [string]$GamePath,
+
+    # Non-interactive: never prompt. Set by install.cmd's /y and by the Lopari
+    # launcher. An out-of-date loader is reported loudly and left alone, because
+    # replacing a shared framework other mods depend on is not a decision to
+    # take behind the user's back.
+    [Parameter(Mandatory = $false)]
+    [switch]$AssumeYes,
+
+    # Replace an out-of-date loader with the bundled one without asking. The
+    # non-interactive way to say yes to the upgrade prompt.
+    [Parameter(Mandatory = $false)]
+    [switch]$UpgradeLoaders
 )
 
 Set-StrictMode -Version Latest
@@ -472,6 +484,36 @@ function Deploy-Tweaks {
     return $true
 }
 
+# Version of an installed loader binary, from its Win32 version resource.
+# Trimmed to major.minor.patch: TweakXL stamps a build number into the fourth
+# field (1.11.3.2512252203) that overflows [version]'s Int32 revision.
+function Get-InstalledLoaderVersion {
+    param([string]$BinaryPath)
+
+    if (-not (Test-Path -LiteralPath $BinaryPath)) { return $null }
+    $raw = (Get-Item -LiteralPath $BinaryPath).VersionInfo.FileVersion
+    if (-not $raw) { return $null }
+    $parts = ($raw.Trim().TrimStart('v') -split '[.,]') | Where-Object { $_ -match '^\d+$' }
+    if ($parts.Count -lt 2) { return $null }
+    $take = [Math]::Min(3, $parts.Count)
+    return [version](($parts[0..($take - 1)]) -join '.')
+}
+
+# Version of the loader we ship, read from the sidecar the vendoring step
+# writes. Parsing the tag beats reading the zip: the sidecar is the same file
+# that records the upstream URL and SHA-256 the bytes were fetched under.
+function Get-VendoredLoaderVersion {
+    param([string]$SourceDir, [string]$Slug)
+
+    $readme = Join-Path $SourceDir "vendor\$Slug\README.md"
+    if (-not (Test-Path -LiteralPath $readme)) { return $null }
+    $line = Select-String -Path $readme -Pattern '^\s*-\s*Tag:\s*`?v?([0-9]+(\.[0-9]+)+)`?' | Select-Object -First 1
+    if (-not $line) { return $null }
+    $parts = ($line.Matches[0].Groups[1].Value -split '\.') | Where-Object { $_ -match '^\d+$' }
+    $take = [Math]::Min(3, $parts.Count)
+    return [version](($parts[0..($take - 1)]) -join '.')
+}
+
 function Install-VendoredLoader {
     param(
         [string]$SourceDir,
@@ -481,11 +523,47 @@ function Install-VendoredLoader {
         [string]$DisplayName
     )
 
-    # Already installed (user's own copy, or a prior run) - never clobber it.
     $detect = Join-Path $GameDir $DetectRelPath
     if (Test-Path $detect) {
-        Write-Info "$DisplayName already present - leaving the existing install untouched"
-        return $true
+        $installed = Get-InstalledLoaderVersion -BinaryPath (Join-Path $GameDir $DetectRelPath)
+        $vendored  = Get-VendoredLoaderVersion -SourceDir $SourceDir -Slug $Slug
+
+        if ($null -eq $installed -or $null -eq $vendored) {
+            Write-Info "$DisplayName already present (version unreadable) - leaving the existing install untouched"
+            return $true
+        }
+        if ($installed -ge $vendored) {
+            Write-Info "$DisplayName $installed already present (bundled: $vendored) - leaving it untouched"
+            return $true
+        }
+
+        # An out-of-date loader is the single most common reason a Cyberpunk mod
+        # silently does nothing in game: the loader refuses to initialise on a
+        # newer game build and every mod under it goes dark. Saying "already
+        # present" and reporting success here is how that turns into a bug
+        # report against us.
+        Write-Host ""
+        Write-Host "  !! $DisplayName $installed is OLDER than the bundled $vendored." -ForegroundColor Yellow
+        Write-Host "     An out-of-date loader will not initialise on a current game build," -ForegroundColor Yellow
+        Write-Host "     and every mod that depends on it - including this one - stays dark." -ForegroundColor Yellow
+
+        if (-not ($UpgradeLoaders -or $AssumeYes)) {
+            $answer = Read-Host "     Replace it with the bundled ${vendored}? [Y/n]"
+            if ($answer -and $answer.Trim().ToLower().StartsWith('n')) {
+                Write-Info "Leaving $DisplayName $installed in place at your request"
+                return $true
+            }
+        }
+        elseif (-not $UpgradeLoaders) {
+            # Deliberately not upgrading unattended. Someone holding an older
+            # game build on purpose runs the matching older loader, and taking
+            # that away without asking breaks a working setup.
+            Write-Host "     Not replacing it automatically. Re-run with /upgrade-deps to update it," -ForegroundColor Yellow
+            Write-Host "     or install $DisplayName $vendored yourself." -ForegroundColor Yellow
+            Write-Host ""
+            return $true
+        }
+        Write-Host ""
     }
 
     # Vendored zip ships in the release ZIP at vendor\<slug>\<slug>.zip. Absent
@@ -497,13 +575,15 @@ function Install-VendoredLoader {
         return $false
     }
 
-    Write-Info "Installing bundled $DisplayName into the game folder..."
+    $verb = if (Test-Path $detect) { "Upgrading" } else { "Installing bundled" }
+    Write-Info "$verb $DisplayName in the game folder..."
     Expand-Archive -Path $zip -DestinationPath $GameDir -Force
     if (-not (Test-Path $detect)) {
         Write-Fail "$DisplayName extraction did not produce $DetectRelPath - vendored zip may be corrupt"
         return $false
     }
-    Write-Success "Installed bundled $DisplayName"
+    $now = Get-InstalledLoaderVersion -BinaryPath (Join-Path $GameDir $DetectRelPath)
+    if ($now) { Write-Success "$DisplayName $now installed" } else { Write-Success "Installed bundled $DisplayName" }
     return $true
 }
 

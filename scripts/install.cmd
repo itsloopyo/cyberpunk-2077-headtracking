@@ -61,6 +61,7 @@ set "SCRIPT_DIR=%~dp0"
 
 :: -------- Arg parser (canonical, do not modify) --------
 set "YES_FLAG="
+set "UPGRADE_FLAG="
 set "_GIVEN_PATH="
 :parse_args
 if "%~1"=="" goto :args_done
@@ -68,6 +69,8 @@ set "_ARG=%~1"
 if /i "!_ARG!"=="/y"    ( set "YES_FLAG=1" & shift & goto :parse_args )
 if /i "!_ARG!"=="-y"    ( set "YES_FLAG=1" & shift & goto :parse_args )
 if /i "!_ARG!"=="--yes" ( set "YES_FLAG=1" & shift & goto :parse_args )
+if /i "!_ARG!"=="/upgrade-deps"  ( set "UPGRADE_FLAG=1" & shift & goto :parse_args )
+if /i "!_ARG!"=="--upgrade-deps" ( set "UPGRADE_FLAG=1" & shift & goto :parse_args )
 if "!_ARG:~0,2!"=="--" ( echo ERROR: unknown flag "!_ARG!" & exit /b 2 )
 if "!_ARG:~0,1!"=="/"  ( echo ERROR: unknown flag "!_ARG!" & exit /b 2 )
 if "!_ARG:~0,1!"=="-"  ( echo ERROR: unknown flag "!_ARG!" & exit /b 2 )
@@ -109,6 +112,24 @@ if not "!_PS_EC!"=="0" (
 call "!_SHIM_OUT!"
 del "!_SHIM_OUT!" 2>nul
 
+:: The shim accepts any existing directory as an explicit -GivenPath without
+:: looking for the EXE inside it, so confirm before announcing "Game found" -
+:: otherwise a mistyped path reads as a successful detection and only fails
+:: several steps later, out of deploy.ps1.
+if not exist "%GAME_PATH%\%GAME_EXE_RELPATH%" (
+    echo.
+    echo ERROR: No %GAME_EXE% found under:
+    echo   %GAME_PATH%
+    echo.
+    echo That folder is not a %GAME_DISPLAY_NAME% installation. Pass the folder
+    echo that contains bin\x64\%GAME_EXE%.
+    echo.
+    echo If the folder does look right, Windows may be denying access to it -
+    echo right-click install.cmd and choose "Run as administrator".
+    echo.
+    exit /b 1
+)
+
 echo Game found: "%GAME_PATH%"
 echo.
 
@@ -120,6 +141,26 @@ if not errorlevel 1 (
     echo.
     exit /b 1
 )
+
+:: -------- Write-permission check --------
+:: Epic installs to C:\Program Files\Epic Games\ by default, which is not
+:: user-writable. Without this the first thing the user sees is a PowerShell
+:: UnauthorizedAccessException stack trace out of Expand-Archive, which reads
+:: like the installer is broken rather than like it needs elevating.
+set "_WTEST=%GAME_PATH%\.headtracking-write-test.tmp"
+( break > "%_WTEST%" ) 2>nul
+if not exist "%_WTEST%" (
+    echo.
+    echo ERROR: No write access to the game folder:
+    echo   %GAME_PATH%
+    echo.
+    echo Installing a mod means writing files into that folder, and Windows is
+    echo refusing. Close the game and any launcher, then right-click install.cmd
+    echo and choose "Run as administrator".
+    echo.
+    exit /b 1
+)
+del "%_WTEST%" 2>nul
 
 :: -------- Locate deploy.ps1 --------
 :: Release ZIP layout: scripts\deploy.ps1. Repo layout: same path.
@@ -144,7 +185,10 @@ if exist "%GAME_PATH%\%STATE_FILE%" (
 :: -------- Forward to deploy.ps1 --------
 echo Running deploy.ps1...
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%DEPLOY_PS1%" -GamePath "%GAME_PATH%"
+set "_DEPLOY_ARGS="
+if defined YES_FLAG     set "_DEPLOY_ARGS=!_DEPLOY_ARGS! -AssumeYes"
+if defined UPGRADE_FLAG set "_DEPLOY_ARGS=!_DEPLOY_ARGS! -UpgradeLoaders"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DEPLOY_PS1%" -GamePath "%GAME_PATH%"!_DEPLOY_ARGS!
 set "_DEPLOY_EC=!errorlevel!"
 if not "!_DEPLOY_EC!"=="0" (
     echo.

@@ -39,11 +39,25 @@ Everything is applied through TweakXL, so removing the mod restores stock behavi
 4. Configure your tracker to send OpenTrack UDP to `127.0.0.1:4242` (see [Setting Up OpenTrack](#setting-up-opentrack)).
 5. Launch Cyberpunk 2077.
 
+The installer never downloads anything: Cyber Engine Tweaks, RED4ext, and TweakXL are all bundled in the ZIP. If you already have one of them it is left alone, unless it is older than the bundled copy, in which case the installer says so and asks whether to replace it. Answering no is fine if you are deliberately holding an older game build.
+
 If the installer cannot find your game, point it at the install root explicitly:
 
 ```powershell
 install.cmd "D:\Games\Cyberpunk 2077"
 ```
+
+Full command line:
+
+```
+install.cmd   [GAME_PATH] [/y] [/upgrade-deps]
+uninstall.cmd [GAME_PATH] [/y] [/force]
+```
+
+- `/y` never prompts. An out-of-date loader is reported and left alone rather than replaced silently.
+- `/upgrade-deps` replaces an out-of-date CET, RED4ext, or TweakXL with the bundled version without asking.
+
+If your game lives somewhere Windows protects (Epic's default `C:\Program Files\Epic Games\` does), the installer will tell you it has no write access. Right-click `install.cmd` and choose **Run as administrator**.
 
 Or set the `CYBERPUNK_2077_PATH` environment variable before running `install.cmd`:
 
@@ -187,8 +201,14 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - The reticle is an overlay drawn once per rendered frame. Frame generation creates extra frames by interpolating between rendered ones, and it has no motion vectors for an injected overlay, so anything that moves quickly across the screen picks up a slight shimmer. That part is inherent to overlays under frame generation and cannot be fixed from the mod side.
 - The mod smooths the live FOV it projects with, which removes the avoidable share of the wobble. If it still bothers you, turning frame generation off removes it entirely.
 
+**Head tracking works but gunfire still follows your head after a game patch.**
+- The native plugin pins a few hooks to addresses derived from one specific game build. On a build it does not recognise it stays dormant rather than writing those hooks into whatever moved into their place, which would crash the game.
+- `<Cyberpunk 2077>\red4ext\logs\HeadTrackingAim.log` says which case you are in. `[BuildRegistry] matched build profile ...` means the build is recognised. Otherwise it prints the running EXE's fingerprint, every build it knows about, and whether your game is newer than the mod (check the releases page for an update), older (let your store finish updating), or repacked.
+- Head tracking itself, the camera, and projectile aim decoupling do not depend on those hooks and keep working either way.
+
 **Mod not loading.**
 - Confirm CET opens in-game (default key `~`). If it does not, fix CET first.
+- An out-of-date CET or RED4ext will not initialise on a current game build, and takes every mod under it down with it. Re-run `install.cmd /upgrade-deps` to replace them with the bundled versions.
 - Check `<Cyberpunk 2077>\red4ext\logs\red4ext.log` for `[HeadTrackingAim] UDP receiver listening on port 4242`. If that line is absent, RED4ext did not load the native plugin. Reinstall RED4ext and re-run `install.cmd`.
 - Open the CET console and look for `[HeadTracking]` messages from the Lua side.
 
@@ -214,6 +234,8 @@ Download the new release ZIP and run `install.cmd` again. Your `config.json` is 
 ## Uninstalling
 
 Run `uninstall.cmd`. This removes the mod's Lua tree under `bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\`, the `HeadTrackingAim.dll` native plugin, and the TweakXL yaml under `r6\tweaks\`, which restores stock hitscan gunfire.
+
+It also takes the mod's four hotkeys back out of CET's shared `bindings.json`, leaving every other mod's bindings untouched.
 
 Cyber Engine Tweaks, RED4ext, and TweakXL are shared modding frameworks that your other mods likely depend on, so they are left in place even when you pass `uninstall.cmd /force`. Remove them by hand if you want the game fully vanilla.
 

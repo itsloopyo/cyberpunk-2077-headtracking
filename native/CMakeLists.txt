@@ -36,6 +36,8 @@ add_library(HeadTrackingAim SHARED
     src/AimGetterHook.cpp
     src/UdpReceiver.cpp
     src/TcpServer.cpp
+    src/builds/build_registry.cpp
+    src/builds/gog_offsets.cpp
 )
 
 target_include_directories(HeadTrackingAim PRIVATE

@@ -117,6 +117,51 @@ if (Test-Path $dllPath) {
     Write-Info "Native plugin not present (already removed or never installed)"
 }
 
+# Take our hotkeys back out of CET's shared bindings.json. Leaving a
+# HeadTracking section behind keeps four keys claimed in CET's binding UI for a
+# mod that is no longer installed, and the next mod to want Home or End sees
+# them as taken.
+function Remove-CetBindings {
+    param([string]$GameDir)
+
+    $bindingsPath = Join-Path $GameDir "bin\x64\plugins\cyber_engine_tweaks\bindings.json"
+    if (-not (Test-Path -LiteralPath $bindingsPath)) { return }
+
+    # PSCustomObject rather than -AsHashtable: the latter is PowerShell 7+ and
+    # throws on the 5.1 that ships with Windows.
+    try {
+        $raw = Get-Content -LiteralPath $bindingsPath -Raw -Encoding UTF8
+        if (-not $raw -or $raw.Trim().Length -eq 0) { return }
+        $doc = $raw | ConvertFrom-Json
+    } catch {
+        Write-Info "bindings.json is unreadable ($($_.Exception.Message)) - leaving it alone"
+        return
+    }
+
+    if (-not ($doc.PSObject.Properties.Name -contains 'HeadTracking')) { return }
+
+    $kept = [ordered]@{}
+    foreach ($prop in $doc.PSObject.Properties) {
+        if ($prop.Name -eq 'HeadTracking') { continue }
+        $kept[$prop.Name] = $prop.Value
+    }
+
+    $json = if ($kept.Count -gt 0) { $kept | ConvertTo-Json -Depth 10 } else { "{}" }
+    Set-Content -LiteralPath $bindingsPath -Value $json -Encoding UTF8
+    Write-Info "Removed the HeadTracking section from bindings.json ($($kept.Count) other section(s) preserved)"
+
+    # The .bak is the snapshot deploy.ps1 takes before merging. It exists to
+    # recover from a bad merge during install; once our section is gone it is
+    # just a stale copy of a file we no longer appear in.
+    $backupPath = "$bindingsPath.bak"
+    if (Test-Path -LiteralPath $backupPath) {
+        Remove-Item -LiteralPath $backupPath -Force
+        Write-Info "Removed bindings.json.bak"
+    }
+}
+
+Remove-CetBindings -GameDir $gameDir
+
 Write-Host ""
 if ($removedSomething) {
     Write-Success "HeadTracking uninstalled successfully."

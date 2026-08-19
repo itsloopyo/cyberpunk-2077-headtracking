@@ -48,11 +48,8 @@ local EXPECTED = {
     DiagShoveOnly         = CROSSHAIR_MISSING,
     DiagYawBasis          = CAMERA_MISSING,
     DiagYawMode           = CAMERA_MISSING,
-    DiagHoldClean         = AIM_MISSING,
     DiagShotDiscovery     = AIM_MISSING,
     DiagCleanCam          = "[HeadTracking:DIAG] settings/ui not initialised; mod still booting?",
-    DiagFreezeFrame       = "[HeadTracking:DIAG] aim/ui not initialised; mod still booting?",
-    DiagSnapClean         = "[HeadTracking:DIAG] aim/ui not initialised; mod still booting?",
 
     -- These two intentionally stay SILENT when the crosshair driver is
     -- absent, unlike the 14 above. Pinned so the asymmetry is a deliberate,

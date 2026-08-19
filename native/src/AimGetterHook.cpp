@@ -41,6 +41,7 @@
 #include "NativeRunningHook.hpp"
 #include "QuatMath.hpp"
 #include "SharedState.hpp"
+#include "builds/build_registry.hpp"
 
 extern SharedState g_sharedState;
 
@@ -62,10 +63,13 @@ namespace {
 // across hundreds of rounds, never fired), and the velocity params are not
 // reachable from the provider's stack.
 
-constexpr uintptr_t kGetWorldOrientationRva = 0x802390;
-constexpr uintptr_t kGetWorldTransformRva   = 0x1D92A0;
-constexpr uintptr_t kFireNormaliseCallRva   = 0x84C968;
-constexpr uintptr_t kNormaliseFnRva         = 0x13DE80;
+// All four addresses come from the matched build profile - see
+// builds/build_profile.h. They are zero on a build we have not derived them
+// against, and each lever checks for that before it touches anything.
+inline uintptr_t GetWorldOrientationRva() { return builds::ActiveProfile().Offsets.GetWorldOrientation; }
+inline uintptr_t GetWorldTransformRva()   { return builds::ActiveProfile().Offsets.GetWorldTransform; }
+inline uintptr_t FireNormaliseCallRva()   { return builds::ActiveProfile().Offsets.FireNormaliseCall; }
+inline uintptr_t NormaliseFnRva()         { return builds::ActiveProfile().Offsets.NormaliseFn; }
 
 // entIPlacedComponent worldTransform.Orientation, relative to the local
 // orientation offset the cam resolver already found (+0xD0 -> +0xF0).
@@ -385,8 +389,8 @@ bool PatchFireNormaliseCallsite() {
     // Bounds-check before the opcode read below: on a build whose image is
     // smaller than these RVAs, reading s_callsite[0] is an access violation at
     // plugin load, which the user sees as the mod bricking the game.
-    const uintptr_t normalise = modguard::ResolveCodeRva(kNormaliseFnRva, 16, "AimGetter C (Normalize)");
-    const uintptr_t callsite = modguard::ResolveCodeRva(kFireNormaliseCallRva, 5, "AimGetter C (call site)");
+    const uintptr_t normalise = modguard::ResolveCodeRva(NormaliseFnRva(), 16, "AimGetter C (Normalize)");
+    const uintptr_t callsite = modguard::ResolveCodeRva(FireNormaliseCallRva(), 5, "AimGetter C (call site)");
     if (!normalise || !callsite) return false;
 
     s_origC = reinterpret_cast<NormaliseFn>(normalise);
@@ -397,14 +401,14 @@ bool PatchFireNormaliseCallsite() {
     // would corrupt whatever took its place.
     if (s_callsite[0] != 0xE8) {
         LogWarning("[AimGetter] C: +0x%llX is not a direct call (0x%02X) - lever disabled",
-                   (unsigned long long)kFireNormaliseCallRva, s_callsite[0]);
+                   (unsigned long long)FireNormaliseCallRva(), s_callsite[0]);
         return AbandonCallsitePatch();
     }
     int32_t rel = 0;
     std::memcpy(&rel, s_callsite + 1, 4);
     if (reinterpret_cast<uintptr_t>(s_callsite + 5 + rel) != normalise) {
         LogWarning("[AimGetter] C: +0x%llX does not call Normalize - lever disabled",
-                   (unsigned long long)kFireNormaliseCallRva);
+                   (unsigned long long)FireNormaliseCallRva());
         return AbandonCallsitePatch();
     }
 
@@ -441,7 +445,7 @@ bool PatchFireNormaliseCallsite() {
     DWORD ignored = 0;
     VirtualProtect(s_callsite, sizeof(patch), oldProtect, &ignored);
     LogInfo("[AimGetter] C: call site +0x%llX routed through the head peel",
-            (unsigned long long)kFireNormaliseCallRva);
+            (unsigned long long)FireNormaliseCallRva());
     return true;
 }
 
@@ -451,23 +455,32 @@ bool AimGetterHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle 
     if (s_started.load(std::memory_order_acquire)) return true;
     if (!sdk) return false;
 
+    // Every lever here is a code detour at a hardcoded address. On a build we
+    // have not derived those against they belong to some other function, so all
+    // three stay out rather than being bounds-checked into a false sense of
+    // safety - ResolveCodeRva cannot tell a moved function from a matching one.
+    if (!builds::HasActiveProfile()) {
+        LogInfo("[AimGetter] no matching build profile - levers not installed");
+        return false;
+    }
+
     // Each lever is bounds-checked against the running image independently, so
-    // a build that moved one of them still gets the others rather than a fault.
+    // a profile that carries only some of the RVAs still gets those.
     s_targetA = reinterpret_cast<void*>(
-        modguard::ResolveCodeRva(kGetWorldOrientationRva, 16, "AimGetter A"));
+        modguard::ResolveCodeRva(GetWorldOrientationRva(), 16, "AimGetter A"));
     if (s_targetA &&
         !sdk->hooking->Attach(handle, s_targetA, reinterpret_cast<void*>(&Hook_GetWorldOrientation),
                               reinterpret_cast<void**>(&s_origA))) {
-        LogError("[AimGetter] A: attach failed at +0x%llX", (unsigned long long)kGetWorldOrientationRva);
+        LogError("[AimGetter] A: attach failed at +0x%llX", (unsigned long long)GetWorldOrientationRva());
         s_targetA = nullptr;
     }
 
     s_targetB = reinterpret_cast<void*>(
-        modguard::ResolveCodeRva(kGetWorldTransformRva, 16, "AimGetter B"));
+        modguard::ResolveCodeRva(GetWorldTransformRva(), 16, "AimGetter B"));
     if (s_targetB &&
         !sdk->hooking->Attach(handle, s_targetB, reinterpret_cast<void*>(&Hook_GetWorldTransform),
                               reinterpret_cast<void**>(&s_origB))) {
-        LogError("[AimGetter] B: attach failed at +0x%llX", (unsigned long long)kGetWorldTransformRva);
+        LogError("[AimGetter] B: attach failed at +0x%llX", (unsigned long long)GetWorldTransformRva());
         s_targetB = nullptr;
     }
 

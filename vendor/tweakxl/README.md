@@ -6,12 +6,12 @@ Refresh manually with `pixi run update-deps`, then commit.
 
 ## Snapshot
 
-- Asset: `TweakXL-1.11.3.zip`
-- Tag: `v1.11.3`
-- Commit: `e8e2f0121af424cf4b9d89cb7683e3f74ef9dced`
-- Upstream URL: https://github.com/psiberx/cp2077-tweak-xl/releases/download/v1.11.3/TweakXL-1.11.3.zip
-- SHA-256: `c5024cbc087b1958f7c0ac66c2a6030ba36546a8c3b4f367c50c6a5381834213`
-- Fetched at: 2026-08-10T16:16:42.1625659+01:00
+- Asset: `TweakXL-1.11.4.zip`
+- Tag: `v1.11.4`
+- Commit: `f8da6be4fb7b8340d5744d822a85de1400f2cafb`
+- Upstream URL: https://github.com/psiberx/cp2077-tweak-xl/releases/download/v1.11.4/TweakXL-1.11.4.zip
+- SHA-256: `13033a1f10cb1dbfa534964b22e3405aa33e8f29145f17164d318b021402883f`
+- Fetched at: 2026-08-19T01:12:52.4861591+01:00
 - Source: github
 
 Do not edit this directory by hand. Run ``pixi run package`` (or CI release) to refresh.

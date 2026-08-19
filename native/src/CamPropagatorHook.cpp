@@ -11,6 +11,7 @@
 #include "NativeRunningHook.hpp"
 #include "QuatMath.hpp"
 #include "SharedState.hpp"
+#include "builds/build_registry.hpp"
 
 extern SharedState g_sharedState;
 
@@ -18,8 +19,6 @@ void LogInfo(const char* fmt, ...);
 void LogError(const char* fmt, ...);
 
 namespace {
-
-constexpr uintptr_t kPropagatorOffset = 0x1D8558;
 
 using PropagatorFn = void (*)(void* self, bool markDirty);
 
@@ -142,7 +141,20 @@ bool CamPropagatorHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHan
 
     // A detour written at an RVA that no longer belongs to this build lands in
     // whatever occupies the address instead, which crashes the game seconds in.
-    const uintptr_t target = modguard::ResolveCodeRva(kPropagatorOffset, 16, "CamPropagator");
+    // The fingerprint gate is what rules that out; ResolveCodeRva below is only
+    // a bounds check and cannot tell a moved function from a matching one.
+    if (!builds::HasActiveProfile()) {
+        LogInfo("[CamPropagator] no matching build profile - hook not installed");
+        return false;
+    }
+    const uintptr_t rva = builds::ActiveProfile().Offsets.Propagator;
+    if (rva == 0) {
+        LogInfo("[CamPropagator] profile %s carries no propagator RVA - hook not installed",
+                builds::ActiveProfile().Name);
+        return false;
+    }
+
+    const uintptr_t target = modguard::ResolveCodeRva(rva, 16, "CamPropagator");
     if (!target) return false;
 
     s_target = reinterpret_cast<void*>(target);
@@ -152,7 +164,7 @@ bool CamPropagatorHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHan
                                                reinterpret_cast<void**>(&s_original));
     if (!attached) {
         LogError("[CamPropagator] attach failed at +0x%llX",
-                 static_cast<unsigned long long>(kPropagatorOffset));
+                 static_cast<unsigned long long>(rva));
         s_target = nullptr;
         s_original = nullptr;
         return false;
@@ -160,7 +172,7 @@ bool CamPropagatorHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHan
 
     s_hooked.store(true, std::memory_order_release);
     LogInfo("[CamPropagator] hook installed at +0x%llX",
-            static_cast<unsigned long long>(kPropagatorOffset));
+            static_cast<unsigned long long>(rva));
     return true;
 }
 
