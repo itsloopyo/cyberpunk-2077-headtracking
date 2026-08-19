@@ -26,7 +26,7 @@ State.REASON = {
     SCENE = "scene",
     DISABLED = "disabled",
     NO_PLAYER = "no_player",
-    HIPFIRE = "hipfire",  -- Hip-firing - disable head tracking (aim coupled to camera center)
+    ADS = "ads",  -- Aiming down sights - the game owns the sight picture
     WARMUP = "warmup"  -- Post-scene-load warmup window; prevents applying stale tracking to mid-load camera
 }
 
@@ -51,13 +51,31 @@ local REASON_DESCRIPTIONS = {
     [State.REASON.SCENE]      = "Tracking paused: Cinematic",
     [State.REASON.DISABLED]   = "Head tracking disabled",
     [State.REASON.NO_PLAYER]  = "Tracking paused: No player",
-    [State.REASON.HIPFIRE]    = "Tracking paused: Hip-fire (aim coupled)",
+    [State.REASON.ADS]        = "Tracking paused: Aiming down sights",
     [State.REASON.WARMUP]     = "Tracking paused: Warming up after scene load",
 }
 
 -- CameraUnlock rule: ~1.5s warmup after a scene/session/load so the camera
 -- component has time to initialize before we try to modify it.
 local WARMUP_SECONDS = 1.5
+
+-- gameSceneTier values above Tier3_LimitedGameplay are scripted cinematics.
+-- At or below it the player still owns the camera, which is what "plain
+-- gameplay" has to mean before we clear a GameUI latch as stale.
+local SCENE_TIER_LIMITED_GAMEPLAY = 3
+
+-- Live state is re-probed at most this often; between probes the cached
+-- verdict stands. Bounding the cache by TIME - not only by a GameUI event -
+-- is what lets a missed close event heal itself instead of stranding
+-- tracking off until the user reloads mods.
+local STATE_CACHE_TTL_S = 0.1
+
+-- How long live state and a GameUI latch must disagree before the latch is
+-- treated as stale. The observer edge and the blackboard do not flip on the
+-- same frame, so an instantaneous disagreement is just that race and clearing
+-- on it would drop a latch the moment its menu opened. A disagreement that
+-- outlives this window is a close event that is never coming.
+local STALE_LATCH_GRACE_S = 1.0
 
 --- Create a new state tracker instance
 --- @return table State instance
@@ -68,6 +86,11 @@ function State.new()
     self.cached_allowed = true
     self.cached_reason = State.REASON.ALLOWED
     self.cache_valid = false
+    self.cache_time = 0
+
+    -- os.clock() when live state first contradicted a GameUI latch, nil while
+    -- the two agree. See STALE_LATCH_GRACE_S.
+    self.latch_disagree_since = nil
 
     -- Reference to camera module for reset on state changes
     self.camera = nil
@@ -86,11 +109,9 @@ function State.new()
         state_transitions = 0
     }
 
-    -- Weapon/aiming state tracking
-    -- We ENABLE head tracking during ADS - game's ADS provides decoupled aim
-    -- Hip-fire DISABLES head tracking - bullets go to screen center (coupled aim)
-    self.is_aiming = false  -- True when ADS (aiming down sights)
-    self.has_weapon = false -- True when weapon is drawn
+    -- True when a weapon is drawn. ADS deliberately has no mirrored flag: it
+    -- is polled live from the player state machine instead, see isAdsLive().
+    self.has_weapon = false
 
     -- Warmup deadline (os.clock()); tracking suppressed until this passes.
     -- nil means "no warmup active". Armed on loading-finish and session-start.
@@ -151,24 +172,19 @@ function State:init(camera, settings)
         end)
     end
 
-    -- Register weapon/aiming state observers
-    -- ADS = head tracking enabled (decoupled aim), hipfire = head tracking disabled
+    -- Weapon and ADS observers. The ADS pair deliberately latches nothing -
+    -- the gate polls the state machine - they only drop the cached verdict so
+    -- the ADS edge is acted on the frame it arrives rather than up to
+    -- STATE_CACHE_TTL_S later.
     local this = self
 
-    -- Observe when player starts aiming down sights
     Observe("AimingStateEvents", "OnEnter", function(_, stateContext, scriptInterface)
-        this.is_aiming = true
         this:invalidateCache()
-        print("[HeadTracking:State] ADS entered - head tracking ENABLED (decoupled aim)")
     end)
 
-    -- Observe when player stops aiming down sights
     Observe("AimingStateEvents", "OnExit", function(_, stateContext, scriptInterface)
-        this.is_aiming = false
         this:invalidateCache()
-        print("[HeadTracking:State] ADS exited - head tracking DISABLED (hipfire)")
     end)
-
 
     -- Observe when weapon is readied (drawn)
     Observe("ReadyEvents", "OnEnter", function(_, stateContext, scriptInterface)
@@ -180,9 +196,8 @@ function State:init(camera, settings)
     -- Observe when weapon is unreadied (holstered)
     Observe("ReadyEvents", "OnExit", function(_, stateContext, scriptInterface)
         this.has_weapon = false
-        this.is_aiming = false  -- Can't be aiming without weapon
         this:invalidateCache()
-        print("[HeadTracking:State] Weapon holstered - head tracking enabled")
+        print("[HeadTracking:State] Weapon holstered")
     end)
 end
 
@@ -222,12 +237,68 @@ end
 
 --- Live ADS check, latch-free. Uses the polled UpperBody==Aim state, which
 --- reflects the current state rather than a transition event - so it stays
---- correct through firing, unlike the AimingStateEvents-driven is_aiming flag
---- (kept only as a fallback for the rare frame the blackboard can't be read).
+--- correct through firing, unlike AimingStateEvents whose OnExit is not
+--- guaranteed to arrive.
+---
+--- A frame the blackboard cannot be read reports false, not "still aiming".
+--- This gates head tracking now, and an unreadable blackboard stranding
+--- tracking off for the rest of a session is far worse than one frame of
+--- tracking leaking into ADS.
 --- @return boolean
 function State:isAdsLive()
-    if self:probeUpperBodyState() == PSM_UPPERBODY_AIM then return true end
-    return self.is_aiming == true
+    return self:probeUpperBodyState() == PSM_UPPERBODY_AIM
+end
+
+--- Probe live UI state from the blackboards. This is the CURRENT state, not a
+--- transition event, so unlike the GameUI latches it cannot stick after a
+--- missed close event. Returns nil when the game is not up far enough to
+--- answer (no player, no blackboard yet); the caller then leaves the latched
+--- state alone rather than guessing.
+--- @return table|nil { in_menu = boolean, plain_gameplay = boolean }
+function State:probeLiveUi()
+    local ok, res = pcall(function()
+        local player = Game.GetPlayer()
+        if not player then return nil end
+        local defs = GetAllBlackboardDefs()
+        local bbs = Game.GetBlackboardSystem()
+
+        local uiBB = bbs:Get(defs.UI_System)
+        if not uiBB then return nil end
+        local in_menu = uiBB:GetBool(defs.UI_System.IsInMenu) and true or false
+
+        local psmBB = bbs:GetLocalInstanced(player:GetEntityID(), defs.PlayerStateMachine)
+        if not psmBB then return nil end
+        local tier = psmBB:GetInt(defs.PlayerStateMachine.SceneTier)
+        if not tier then return nil end
+
+        return {
+            in_menu = in_menu,
+            plain_gameplay = (not in_menu) and tier <= SCENE_TIER_LIMITED_GAMEPLAY,
+        }
+    end)
+    if ok then return res end
+    return nil
+end
+
+--- Record a verdict, stamp the cache, and log the transition. Transition
+--- logging is unconditional: a gate that blocks in silence is exactly what
+--- made a stuck menu latch invisible for a whole session.
+--- @param allowed boolean
+--- @param reason string
+--- @return boolean the verdict, so callers can `return self:setVerdict(...)`
+function State:setVerdict(allowed, reason)
+    if allowed ~= self.cached_allowed or reason ~= self.cached_reason then
+        if allowed then
+            print("[HeadTracking:State] tracking RESUMED")
+        else
+            print("[HeadTracking:State] tracking BLOCKED: " .. tostring(reason))
+        end
+    end
+    self.cached_allowed = allowed
+    self.cached_reason = reason
+    self.cache_valid = true
+    self.cache_time = os.clock()
+    return allowed
 end
 
 --- Handle state change events for smooth transitions
@@ -250,10 +321,6 @@ function State:onStateChange(event)
     self.was_tracking_allowed = now_allowed
 end
 
--- Debug logging control for state
-local STATE_DEBUG_LOG_INTERVAL = 180  -- Log every N cache misses
-local state_debug_counter = 0
-
 --- Check if head tracking is currently allowed
 --- Returns false during menus, loading screens, cutscenes, braindance, photo mode
 --- Uses cached value when valid to avoid repeated API calls per frame
@@ -261,15 +328,15 @@ local state_debug_counter = 0
 function State:isTrackingAllowed()
     self.stats.state_checks = self.stats.state_checks + 1
 
-    -- Return cached value if still valid (optimization for per-frame calls)
-    if self.cache_valid then
+    -- Return cached value while it is still fresh (optimization for per-frame
+    -- calls). The TTL is the self-healing part: a GameUI close event that never
+    -- arrives can no longer pin the verdict for the rest of the session.
+    if self.cache_valid and (os.clock() - self.cache_time) < STATE_CACHE_TTL_S then
         self.stats.cache_hits = self.stats.cache_hits + 1
         return self.cached_allowed
     end
 
     self.stats.cache_misses = self.stats.cache_misses + 1
-    state_debug_counter = state_debug_counter + 1
-    local should_log = (state_debug_counter % STATE_DEBUG_LOG_INTERVAL == 1)
 
     -- Check if tracking is manually disabled via settings. Gate is open if
     -- EITHER rotation or position tracking is on - the position-only mode
@@ -278,59 +345,83 @@ function State:isTrackingAllowed()
         local rot_on = self.settings:get("enabled") and true or false
         local pos_on = self.settings:get("position_enabled") and true or false
         if not rot_on and not pos_on then
-            self.cached_allowed = false
-            self.cached_reason = State.REASON.DISABLED
-            self.cache_valid = true
-            if should_log then
-                print("[HeadTracking:State:DEBUG] Tracking DISABLED via settings (rot+pos both off)")
-            end
-            return false
+            return self:setVerdict(false, State.REASON.DISABLED)
         end
     end
 
     -- GameUI not available - allow tracking (fail open)
     if not GameUI then
-        self.cached_allowed = true
-        self.cached_reason = State.REASON.ALLOWED
-        self.cache_valid = true
-        if should_log then
-            print("[HeadTracking:State:DEBUG] GameUI not available, allowing tracking (fail open)")
-        end
-        return true
+        return self:setVerdict(true, State.REASON.ALLOWED)
+    end
+
+    -- Live menu state blocks on its own: it is the current state, so it is
+    -- right even on the frames the observer edge has not landed yet.
+    local live = self:probeLiveUi()
+    if live and live.in_menu then
+        return self:setVerdict(false, State.REASON.MENU)
     end
 
     -- Post-load warmup - suppress tracking until the camera component has
-    -- had time to settle after a scene load / session start.
-    -- Intentionally does NOT mark cache_valid: re-check time each frame so
-    -- warmup naturally expires.
+    -- had time to settle after a scene load / session start. The cache TTL is
+    -- what expires the window; the deadline is re-read on the next probe.
     if self.warmup_deadline then
         if os.clock() < self.warmup_deadline then
-            self.cached_allowed = false
-            self.cached_reason = State.REASON.WARMUP
-            return false
+            return self:setVerdict(false, State.REASON.WARMUP)
         end
         self.warmup_deadline = nil
     end
 
     -- Walk GameUI predicates in order of likelihood; first truthy wins.
+    local latched_reason = nil
     for _, check in ipairs(GAMEUI_BLOCK_CHECKS) do
         local method = GameUI[check.method]
         if method and method() then
-            self.cached_allowed = false
-            self.cached_reason = check.reason
-            self.cache_valid = true
-            return false
+            latched_reason = check.reason
+            break
         end
     end
 
-    -- All checks passed - tracking is allowed
-    self.cached_allowed = true
-    self.cached_reason = State.REASON.ALLOWED
-    self.cache_valid = true
-    if should_log then
-        print("[HeadTracking:State:DEBUG] Tracking ALLOWED (all checks passed)")
+    -- A latch that says "blocked" while live state says the player owns the
+    -- camera is a close event that never arrived. That is what applying
+    -- graphics or audio settings does: the game re-creates the menu
+    -- controller, the open edge fires again, the close edge does not, and the
+    -- gate used to stay shut for the rest of the session.
+    if latched_reason and live and live.plain_gameplay then
+        local now = os.clock()
+        self.latch_disagree_since = self.latch_disagree_since or now
+        if (now - self.latch_disagree_since) >= STALE_LATCH_GRACE_S then
+            self.latch_disagree_since = nil
+            local cleared = GameUI.ResyncStaleUiLatches()
+            if cleared then
+                print("[HeadTracking:State] cleared stale GameUI latch(es): " .. cleared ..
+                      " (live state says gameplay)")
+                latched_reason = nil
+                -- Clearing a stale loading latch fires LoadingFinish, which
+                -- re-arms the warmup this call already walked past.
+                if self.warmup_deadline and os.clock() < self.warmup_deadline then
+                    return self:setVerdict(false, State.REASON.WARMUP)
+                end
+            end
+        end
+    else
+        self.latch_disagree_since = nil
     end
-    return true
+
+    if latched_reason then
+        return self:setVerdict(false, latched_reason)
+    end
+
+    -- Aiming down sights: the game pulls the camera onto the weapon's sight
+    -- line, and that sight picture IS the aim. Head rotation would swing the
+    -- view off the sights while the rounds kept going where the sights point,
+    -- so tracking stands down for the duration and resumes on the way out.
+    -- Last in the walk so a menu or cinematic still reports its own reason
+    -- when both are true at once.
+    if self:isAdsLive() then
+        return self:setVerdict(false, State.REASON.ADS)
+    end
+
+    return self:setVerdict(true, State.REASON.ALLOWED)
 end
 
 --- Get the reason why tracking is currently allowed or denied

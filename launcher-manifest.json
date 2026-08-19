@@ -26,7 +26,6 @@
     { "source": "LICENSE", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/LICENSE" },
     { "source": "THIRD-PARTY-NOTICES.md", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/THIRD-PARTY-NOTICES.md" },
     { "source": "init.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/init.lua" },
-    { "source": "modules/ads_reticle.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/ads_reticle.lua" },
     { "source": "modules/aim.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/aim.lua" },
     { "source": "modules/builtin_crosshair.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/builtin_crosshair.lua" },
     { "source": "modules/camera.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/camera.lua" },

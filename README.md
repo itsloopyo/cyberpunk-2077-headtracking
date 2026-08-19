@@ -8,6 +8,7 @@ Use a webcam, phone, or VR headset to drive Night City's first-person camera wit
 
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim
 - **6DOF positional tracking** - lean into corners and peek around cover with your head position
+- **Stands down while aiming down sights** - raising the sights hands the camera back to the game so the sight picture stays true, and tracking resumes the moment you lower the weapon
 
 ## Gameplay Changes
 
@@ -166,10 +167,6 @@ Edit it directly, or use the in-game Native Settings UI if you have it installed
   "crosshair_fov_degrees": 84.0,
   "crosshair_lead_factor": 0.0,
 
-  "ads_reticle_enabled": true,
-  "ads_reticle_size": 12,
-  "ads_reticle_opacity": 0.8,
-
   "position_enabled": true,
   "position_sens_x": 1.0,
   "position_sens_y": 1.0,
@@ -192,7 +189,6 @@ JSON has no comment syntax, so the settings worth touching are described here in
   The mod picks between the two from the source address of each tracking packet, so switching from a local OpenTrack instance to a phone on WiFi swaps the value with no restart. Both cover rotation and position, so there is no separate position smoothing setting. Local defaults to zero because a same-machine tracker is already stable and any smoothing there is pure added latency.
 - `clamp_*` (degrees): rotation caps, so head rotation cannot fight the aim system.
 - `crosshair_*`: parallax-correct reticle overlay. Set `crosshair_fov_degrees` to your in-game FOV so the marker tracks the true aim point at extreme head angles.
-- `ads_reticle_*`: custom aim-down-sights reticle drawn at the true aim point while aiming. `ads_reticle_size` is in pixels, `ads_reticle_opacity` runs 0.0 to 1.0.
 - `position_*`: 6DOF translation. Sensitivities are per-axis multipliers, limits are in meters.
 - `deadzone_yaw` / `deadzone_pitch` / `deadzone_roll`: degrees of head movement ignored around centre, to stop tracker noise drifting the view while you hold still. Roll defaults higher than the other two because head-roll noise is the usual cause of the view slowly rolling on its own; raise it if you still see that.
 - `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`, but note this one is **not persisted**: every launch starts back in `"world"`, so the toggle lasts for the session only.
@@ -224,6 +220,10 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - Raise the smoothing parameter that matches your tracker: `remote_smoothing` for a phone or other device on the network, `local_smoothing` for a tracker running on this PC. 0.3 to 0.5 is a heavy but usable setting.
 - If a phone tracker is sending straight to port `4242` and it does not filter heavily on-device, relay it through OpenTrack with a low-pass filter instead.
 - High-FPS displays show micro-jitter more readily. There is no internal minimum any more, so if a local tracker looks jittery at the default `local_smoothing` of 0.0, raise it.
+
+**Head tracking stops while aiming down sights.**
+- That is deliberate. Aiming down sights puts the camera on the weapon's sight line and that sight picture is the aim, so head rotation would swing the view off the sights while the rounds kept going where the sights point. Tracking pauses for as long as the sights are up and resumes when you lower the weapon.
+- It does not recentre on the way out: your neutral pose is the same before and after, so repeatedly aiming will not walk the centre around.
 
 **Wrong rotation axis (camera moves the wrong way).**
 - Invert the offending axis in OpenTrack under **Output > Mapping** rather than in the mod. The mod has no inversion setting on purpose.

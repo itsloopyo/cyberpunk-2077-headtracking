@@ -310,10 +310,27 @@ bool OnUpdate(RED4ext::CGameApplication*) {
         // pre-render hook can rotate outMatrix's cached forward vectors
         // without ever touching SHM (SHM access
         // from inside the render trampoline has crashed the game).
-        g_headQuat[0] = w->quat_i;
-        g_headQuat[1] = w->quat_j;
-        g_headQuat[2] = w->quat_k;
-        g_headQuat[3] = w->quat_r;
+        //
+        // `enabled` gates the mirror, not just the consumers. While tracking
+        // is suppressed - menus, cinematics, aiming down sights - Lua peels
+        // its rotation back out of the camera and stops publishing fresh
+        // quats, so the last one it wrote describes a rotation that is no
+        // longer in the view. AimProviderHook and AimGetterHook decide whether
+        // to peel from the quat alone, so mirroring a stale one has them peel
+        // a rotation nothing applied and throws the player's shots off by
+        // whatever head angle they were holding when tracking stood down.
+        // Identity here is what "nothing to peel" looks like to both.
+        if (w->enabled) {
+            g_headQuat[0] = w->quat_i;
+            g_headQuat[1] = w->quat_j;
+            g_headQuat[2] = w->quat_k;
+            g_headQuat[3] = w->quat_r;
+        } else {
+            g_headQuat[0] = 0.0f;
+            g_headQuat[1] = 0.0f;
+            g_headQuat[2] = 0.0f;
+            g_headQuat[3] = 1.0f;
+        }
 
         // Resolve the cam instance pointer periodically even without a
         // Needed so `g_camInstance` is populated as

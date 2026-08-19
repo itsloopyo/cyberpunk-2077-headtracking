@@ -333,6 +333,11 @@ end
 
 -- Module-level state shared with Override callback
 -- Must be outside the class for the Override closure to access it
+-- "No head rotation is applied." Sent to the native side while tracking is
+-- suppressed, because the aim hooks decide whether to peel from the quat they
+-- were last handed.
+local IDENTITY_QUAT = { i = 0, j = 0, k = 0, r = 1 }
+
 local aim_state = {
     enabled = false,
     is_ads = false,
@@ -696,6 +701,20 @@ function Aim:setEnabled(enabled)
     updateSharedMemory(aim_state.smooth_yaw, aim_state.smooth_pitch, enabled,
                        aim_state.is_ads, aim_state.ads_scale,
                        aim_state.smooth_roll, aim_state.head_quat)
+end
+
+--- Stage "tracking is off, nothing is applied" for the next native push.
+---
+--- The suppressed path has to keep publishing rather than fall silent. The
+--- native aim hooks decide whether to peel a head rotation off the player's
+--- aim from the quat they were last handed, so a mod that stops talking
+--- leaves them peeling a rotation that is no longer in the camera - which put
+--- rounds fired down the sights exactly the head angle off target, mirrored
+--- to the far side. Identity is the truthful value here: while suppressed we
+--- apply no head rotation at all.
+function Aim:publishSuppressedState()
+    if not (aim_state.udp and aim_state.udp.setNativeState) then return end
+    aim_state.udp:setNativeState(0, 0, 0, false, false, IDENTITY_QUAT, false)
 end
 
 --- Set ADS (Aiming Down Sights) state

@@ -45,11 +45,6 @@ local VALIDATION_RULES = {
     -- delta. Tune up if reticle trails the target during head motion (drifts
     -- in motion direction, settles correct at rest); leave at 0 if no drift.
     crosshair_lead_factor = { type = "number", min = 0.0, max = 2.0 },
-    -- Custom ADS reticle (extra ImGui crosshair drawn only while aiming down
-    -- sights, since iron sights/scopes aren't eye-levelled under head tracking).
-    ads_reticle_enabled = { type = "boolean" },
-    ads_reticle_size    = { type = "number", min = 2.0, max = 64.0 },
-    ads_reticle_opacity = { type = "number", min = 0.0, max = 1.0 },
     -- Position tracking placeholders (6DOF). Disabled by default until the
     -- camera translation path is wired. Settings exist so the hotkey contract
     -- and Native Settings UI stay complete.
@@ -210,11 +205,6 @@ function Settings.new()
         crosshair_enabled = true,
         crosshair_fov_degrees = 84.0,
         crosshair_lead_factor = 0.0,
-        -- Custom ADS reticle overlay (our own ImGui crosshair at the true aim
-        -- point while aiming down sights).
-        ads_reticle_enabled = true,
-        ads_reticle_size    = 12,
-        ads_reticle_opacity = 0.8,
         -- Position tracking (6DOF) - placeholders, disabled by default
         position_enabled = true,
         position_sens_x = 1.0,

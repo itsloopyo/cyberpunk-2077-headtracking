@@ -369,46 +369,6 @@ function NativeSettingsIntegration:registerSettings()
     )
     self.widgetRefs["crosshair_lead_factor"] = "/HeadTracking/Crosshair/LeadFactor"
 
-    -- Custom ADS reticle (extra ImGui crosshair drawn only while aiming down sights)
-    ns.addSwitch(
-        "/HeadTracking/Crosshair/AdsReticleEnabled",
-        "ADS Reticle",
-        "Draw an extra crosshair at the true aim point while aiming down sights. Iron sights and scopes are not eye-levelled under head tracking, so this marks where you are actually aiming.",
-        self.settings:get("ads_reticle_enabled"),
-        self.settings:getDefaults().ads_reticle_enabled,
-        function(state)
-            self.settings:set("ads_reticle_enabled", state)
-        end
-    )
-    self.widgetRefs["ads_reticle_enabled"] = "/HeadTracking/Crosshair/AdsReticleEnabled"
-
-    ns.addRangeInt(
-        "/HeadTracking/Crosshair/AdsReticleSize",
-        "ADS Reticle Size",
-        "Half-length of the ADS reticle arms in pixels.",
-        2, 64, 1,
-        self.settings:get("ads_reticle_size"),
-        self.settings:getDefaults().ads_reticle_size,
-        function(value)
-            self.settings:set("ads_reticle_size", value)
-        end
-    )
-    self.widgetRefs["ads_reticle_size"] = "/HeadTracking/Crosshair/AdsReticleSize"
-
-    ns.addRangeFloat(
-        "/HeadTracking/Crosshair/AdsReticleOpacity",
-        "ADS Reticle Opacity",
-        "Opacity of the ADS reticle (0 = invisible, 1 = solid).",
-        0.0, 1.0, 0.05,
-        "%.2f",
-        self.settings:get("ads_reticle_opacity"),
-        self.settings:getDefaults().ads_reticle_opacity,
-        function(value)
-            self.settings:set("ads_reticle_opacity", value)
-        end
-    )
-    self.widgetRefs["ads_reticle_opacity"] = "/HeadTracking/Crosshair/AdsReticleOpacity"
-
     -- Network section removed: UDP 4242 is owned by the native RED4ext plugin,
     -- nothing here is user-configurable. Point OpenTrack at 127.0.0.1:4242.
 

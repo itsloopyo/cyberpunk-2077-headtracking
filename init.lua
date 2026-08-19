@@ -67,7 +67,6 @@ local Settings = safeRequire("modules/settings")
 local State = safeRequire("modules/state")
 local UI = safeRequire("modules/ui")
 local BuiltinCrosshair = safeRequire("modules/builtin_crosshair")
-local AdsReticle = safeRequire("modules/ads_reticle")
 local Aim = safeRequire("modules/aim")
 local NativeSettingsIntegration = safeRequire("modules/nativesettings")
 local Perf = safeRequire("modules/perf")
@@ -200,7 +199,6 @@ local settings = nil
 local state = nil
 local ui = nil
 local crosshair = nil  -- Drives the game's built-in reticle widget so the engine-drawn crosshair marks the true aim point under head tracking
-local ads_reticle = nil  -- Custom ImGui crosshair drawn only during ADS, marking the true aim point
 local aim = nil  -- Decoupled aim compensation via Override hook
 local nativeUI = nil
 local perf = nil  -- Optional performance monitoring (low overhead)
@@ -407,18 +405,6 @@ registerForEvent("onInit", function()
         end
     end
 
-    do
-        local ok, err = pcall(function()
-            ads_reticle = AdsReticle.new(settings, camera)
-        end)
-        if ok then
-            print("[HeadTracking] ADS reticle initialized")
-        else
-            ads_reticle = nil
-            print("[HeadTracking] ADS reticle FAILED (non-fatal): " .. tostring(err))
-        end
-    end
-
     if init_failure_error then
         print("[HeadTracking] Initialization ABORTED - see step '" .. tostring(init_failure_step) .. "' error above")
         return
@@ -497,7 +483,17 @@ local function onUpdateImpl(deltaTime)
         -- still the rotation actually baked in the camera. This restores the
         -- clean view for the suppressed period and clears last_head_quat so the
         -- resume frame doesn't peel a stale quat against an engine-reset camera.
-        camera:reset()
+        --
+        -- ADS suspends rather than resets. It is measured in seconds and
+        -- happens many times a firefight, so it must not re-arm the
+        -- auto-recenter (the neutral pose would drift with every shot lined
+        -- up) or throw away the smoothing state (lowering the weapon would
+        -- swing the view back through the whole head angle).
+        if state:getReason() == State.REASON.ADS then
+            camera:suspend()
+        else
+            camera:reset()
+        end
     end
     was_tracking_allowed = tracking_allowed
 
@@ -520,6 +516,18 @@ local function onUpdateImpl(deltaTime)
             diag_last_log_time = now
         end
         aim:setEnabled(false)
+        -- Keep talking to the native plugin while suppressed. The command
+        -- udp:poll() sends is the ONLY channel that reaches the native side -
+        -- the CET sandbox strips LuaJIT FFI on this build, so aim.lua's
+        -- shared-memory writes never land - and poll() lives below this early
+        -- return. Going silent froze the native side on the last state we
+        -- published, so its aim hooks kept peeling a head rotation the camera
+        -- no longer carried and threw ADS rounds the head angle off target.
+        -- Pumping here also keeps hotkey edges arriving during menus, which
+        -- is what lets a recenter pressed in one queue for the return to
+        -- gameplay.
+        aim:publishSuppressedState()
+        udp:poll()
         if crosshair then crosshair:tick(false) end
         if pose_interp then pose_interp:reset() end
         return
@@ -592,10 +600,13 @@ local function onUpdateImpl(deltaTime)
         if camera.noteFreshPacket then camera:noteFreshPacket() end
     end
 
+    -- Order matters: aim:update stages the native push using aim_state.enabled,
+    -- so flipping the flag first keeps the resume frame from publishing a live
+    -- head rotation still labelled "tracking off".
+    aim:setEnabled(true)
     local rotation = camera:getSmoothedRotation()
     aim:update(rotation.yaw, rotation.pitch, rotation.roll,
                camera:getHeadQuat())
-    aim:setEnabled(true)
     if aim.summarizeDiscovery then aim:summarizeDiscovery() end
 
     if crosshair then crosshair:tick(true) end
@@ -624,10 +635,6 @@ registerForEvent("onUpdate", guarded("onUpdate", onUpdateImpl))
 local function onDrawImpl()
     if ui then
         ui:draw()
-    end
-
-    if ads_reticle and state then
-        ads_reticle:draw(state:isAdsLive())
     end
 end
 registerForEvent("onDraw", guarded("onDraw", onDrawImpl))

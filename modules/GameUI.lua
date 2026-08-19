@@ -210,6 +210,29 @@ local function updateFastTravelState(isFastTravel)
     end
 end
 
+--- Clear UI latches that the caller has established are no longer true.
+---
+--- isMenu / isLoading / isScene / isPhoto are driven by paired
+--- OnInitialize+OnUninitialize (and OnEnter+OnLeave) observers. When the game
+--- re-creates a menu controller without tearing the previous one down - which
+--- is what applying graphics or audio settings does - the "open" edge arrives
+--- with no matching "close" and the flag stays set for the rest of the
+--- session. Everything downstream then reads gameplay as a menu.
+---
+--- The caller supplies the live-state verdict; this module deliberately does
+--- not read blackboards itself. Fires the normal close/finish events for each
+--- flag cleared so listeners see the same edges they would have.
+--- @return string|nil Comma-separated names of the flags cleared, nil if none
+function GameUI.ResyncStaleUiLatches()
+    local cleared = {}
+    if state.isMenu    then updateMenuState(false, nil); cleared[#cleared + 1] = "menu"    end
+    if state.isLoading then updateLoadingState(false);   cleared[#cleared + 1] = "loading" end
+    if state.isScene   then updateSceneState(false);     cleared[#cleared + 1] = "scene"   end
+    if state.isPhoto   then updatePhotoState(false);     cleared[#cleared + 1] = "photo"   end
+    if #cleared == 0 then return nil end
+    return table.concat(cleared, ",")
+end
+
 -- =============================================================================
 -- CET GAME OBSERVERS - Register for game state changes
 -- =============================================================================

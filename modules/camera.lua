@@ -1083,9 +1083,57 @@ function Camera:prepareRecenterCapture(interpolator)
     end
 end
 
---- Reset all rotation offsets and smoothed values
---- Camera returns to game's default orientation
---- Call this when tracking is disabled or state changes
+--- Stop influencing the camera, leaving calibration alone.
+---
+--- Peels our baked head rotation back out of cam.localOrientation and returns
+--- the local position offset to neutral. The recenter offset, the smoothing
+--- state and the auto-recenter arming are all left untouched, which is what
+--- makes this the right teardown for a short, frequent suppression: aiming
+--- down sights happens many times a firefight, and re-arming the auto-recenter
+--- on every one of them would walk the neutral pose around all session.
+---
+--- The peel is conditional on the engine having KEPT our last write. Camera
+--- state events - ADS in/out among them - overwrite cam.localOrientation with
+--- the engine's own clean value, and peeling last_head_quat off a value that
+--- is already clean snaps the view off by the head angle. Same divergence test
+--- apply() uses for the same reason.
+function Camera:suspend()
+    local cam = getFPPCamera()
+
+    if self.last_head_quat then
+        if cam then
+            local ok, current = pcall(_callGetLocalOrientation, cam)
+            local engine_kept_our_write = ok and current
+                and isValidNumber(current.i) and isValidNumber(current.j)
+                and isValidNumber(current.k) and isValidNumber(current.r)
+                and self._last_written_final_quat
+                and quatDelta(current, self._last_written_final_quat) <= PEEL_DIVERGENCE_THRESHOLD
+            if engine_kept_our_write then
+                local clean = quatNormalize(quatMul(current, quaternionInverse(self.last_head_quat)))
+                pcall(_callSetLocalOrientation, cam, clean)
+            end
+        end
+        self.last_head_quat = nil
+        self._last_written_final_quat = nil
+    end
+
+    -- cam.localPosition is written absolute, so unlike the orientation it does
+    -- not need a peel - but it also does not decay on its own. Left alone it
+    -- would freeze the last 6DOF offset into the suppressed period, which on
+    -- ADS reads as sights that no longer line up.
+    if self.pos_applied then
+        if cam then pcall(_callSetLocalPosition, cam, Vector4.new(0, 0, 0, 1.0)) end
+        self.pos_applied = false
+        self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
+        self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = 0, 0, 0
+    end
+end
+
+--- Full teardown: suspend, then discard the smoothed values and peel-state
+--- caches and re-arm the auto-recenter, so the camera is back at the game's
+--- default orientation. For the long suppressions (menus, loading, the user
+--- toggling tracking off) where resuming should start from a clean neutral
+--- rather than continue mid-motion.
 function Camera:reset()
     self.smooth_yaw = 0
     self.smooth_pitch = 0
@@ -1094,24 +1142,7 @@ function Camera:reset()
     self.stabilization_frames = 0
     self.last_clean_local_quat = nil
 
-    -- If we baked a head rotation into the camera, peel it off now so
-    -- toggling tracking off actually returns to the clean pose. Cyberpunk
-    -- does not fully overwrite cam.localOrientation each frame, so our
-    -- last write persists until we undo it. Forcing identity (the previous
-    -- behaviour) was the wrong escape hatch: it wiped mouse pitch along
-    -- with head rotation.
-    if self.last_head_quat then
-        local cam = getFPPCamera()
-        if cam then
-            local ok, current = pcall(_callGetLocalOrientation, cam)
-            if ok and current and isValidNumber(current.i) and isValidNumber(current.j)
-                              and isValidNumber(current.k) and isValidNumber(current.r) then
-                local clean = quatMul(current, quaternionInverse(self.last_head_quat))
-                pcall(_callSetLocalOrientation, cam, clean)
-            end
-        end
-        self.last_head_quat = nil
-    end
+    self:suspend()
 end
 
 function Camera:prepareYawModeSwitch()
