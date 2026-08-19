@@ -18,7 +18,11 @@ local VALIDATION_RULES = {
     sensitivity_yaw = { type = "number", min = 0.1, max = 5.0 },
     sensitivity_pitch = { type = "number", min = 0.1, max = 5.0 },
     sensitivity_roll = { type = "number", min = 0.0, max = 5.0 },
-    smoothing_factor = { type = "number", min = 0.0, max = 0.99 },
+    -- Smoothing is two parameters, picked per connection by source address.
+    -- Both cover rotation and position; there is no separate position
+    -- smoothing setting.
+    local_smoothing = { type = "number", min = 0.0, max = 1.0 },
+    remote_smoothing = { type = "number", min = 0.0, max = 1.0 },
     -- "Soft Look" rotation caps (per-axis, degrees). These are a Cyberpunk-
     -- specific safety limit to keep head rotation from fighting the aim
     -- system, not the CameraUnlock position limits.
@@ -58,7 +62,6 @@ local VALIDATION_RULES = {
     position_limit_y_down = { type = "number", min = 0.0, max = 0.5 },
     position_limit_z_fwd = { type = "number", min = 0.0, max = 0.5 },
     position_limit_z_back = { type = "number", min = 0.0, max = 0.5 },
-    position_smoothing = { type = "number", min = 0.0, max = 0.99 },
     -- Yaw mode: "world" (default, horizon-locked world-space yaw) or "local"
     -- (legacy camera-local yaw that tilts with mouse pitch). See camera.lua.
     yaw_mode = { type = "string" },
@@ -68,6 +71,65 @@ local VALIDATION_RULES = {
     -- modules/camera.lua and Camera:apply().
     decouple_diag_clean_cam = { type = "boolean" },
 }
+
+-- Keys that used to hold the single smoothing value, in the order they are
+-- reported. Both are still sitting in every config.json written before the
+-- split, and both are now ignored.
+local RETIRED_SMOOTHING_KEYS = { "smoothing_factor", "position_smoothing" }
+
+-- Warned once per session rather than once per load: settings are re-read when
+-- the mod hot-reloads, and repeating this every time buries it in the log.
+local warned_retired_smoothing_key = false
+
+--- Say once that a retired smoothing key in config.json is being ignored.
+--- Without this the key is dropped in silence: the user's tuned value reverts
+--- to a default they never picked, while the dead line is still in their
+--- config.json arguing that they did pick it.
+---
+--- The old value is deliberately NOT migrated into local_smoothing or
+--- remote_smoothing. It carried a hidden 0.15 floor, so the number in an
+--- existing config does not mean what it used to: copying 0.5 across would hand
+--- a same-machine user smoothing they never chose under the new semantics, and
+--- copying it into only one of the two would be a guess about which connection
+--- they were on.
+--- @param loaded table Raw decoded config.json contents
+--- @param defaults table Current default values, so the quoted defaults in the
+---        message cannot drift away from the ones actually applied
+--- @return string|nil message The warning that was printed, or nil if none was
+local function warnRetiredSmoothingKeys(loaded, defaults)
+    -- Guard order is load-bearing. The one-shot is checked BEFORE presence, so
+    -- a config without these keys can never consume the single warning and
+    -- leave a later load that does have them silent.
+    if warned_retired_smoothing_key then
+        return nil
+    end
+
+    local present = {}
+    for _, key in ipairs(RETIRED_SMOOTHING_KEYS) do
+        if loaded[key] ~= nil then
+            present[#present + 1] = "'" .. key .. "'"
+        end
+    end
+    if #present == 0 then
+        return nil
+    end
+
+    warned_retired_smoothing_key = true
+
+    local many = #present > 1
+    local message = "[HeadTracking] Config " .. (many and "keys " or "key ")
+        .. table.concat(present, " and ") .. (many and " have" or " has")
+        .. " been retired and " .. (many and "are" or "is") .. " IGNORED."
+        .. " Smoothing is now two keys: 'local_smoothing' (default "
+        .. tostring(defaults.local_smoothing) .. ", applies to a tracker on this"
+        .. " machine) and 'remote_smoothing' (default "
+        .. tostring(defaults.remote_smoothing) .. ", applies to a tracker on the"
+        .. " network). The old value is not migrated because the semantics changed -"
+        .. " it carried a hidden " .. tostring(defaults.remote_smoothing) .. " floor"
+        .. " that no longer exists. Set the two new keys."
+    print(message)
+    return message
+end
 
 --- Validate a single value against its rule
 --- @param key string Setting key
@@ -129,7 +191,12 @@ function Settings.new()
         sensitivity_yaw = 1.0,
         sensitivity_pitch = 1.0,
         sensitivity_roll = 1.0,
-        smoothing_factor = 0.0,                 -- 0 = minimum (0.15 floor applied internally)
+        -- Smoothing applied when the tracker runs on this machine
+        -- (loopback). 0 = no smoothing, 1 = heavy.
+        local_smoothing = 0.0,
+        -- Smoothing applied when the tracker is a remote device on the
+        -- network. 0 = no smoothing, 1 = heavy.
+        remote_smoothing = 0.15,
         -- "Soft Look" rotation caps (Cyberpunk-specific, not CameraUnlock position limits)
         clamp_yaw = 120.0,
         clamp_pitch = 80.0,
@@ -158,7 +225,6 @@ function Settings.new()
         position_limit_y_down = 0.05,
         position_limit_z_fwd = 0.40,
         position_limit_z_back = 0.10,
-        position_smoothing = 0.15,
         -- Yaw mode: "world" (default) = horizon-locked yaw. Head yaw always
         -- rotates around the world-vertical axis regardless of where the
         -- mouse is pitched, so the horizon stays where yaw lives.
@@ -227,6 +293,12 @@ function Settings:load()
                     print("[HeadTracking] Resetting unknown yaw_mode '" .. tostring(loaded.yaw_mode) .. "' to 'world'")
                     loaded.yaw_mode = "world"
                 end
+
+                -- Retired smoothing keys. Unlike the obsolete port keys above
+                -- these are not nil'd out: the merge below only walks
+                -- self.defaults, so they are already ignored. What was missing
+                -- was any word to the user that their tuned value is gone.
+                warnRetiredSmoothingKeys(loaded, self.defaults)
 
                 -- Merge and validate loaded values with defaults
                 for k, default_value in pairs(self.defaults) do

@@ -37,6 +37,7 @@ local FLAG_RECENTER         = 4   -- bit 2
 local FLAG_TOGGLE_TRACKING  = 8   -- bit 3
 local FLAG_CYCLE_MODE       = 16  -- bit 4
 local FLAG_TOGGLE_YAW       = 32  -- bit 5
+local FLAG_REMOTE_CONNECTION = 64 -- bit 6, live status (not an edge)
 
 local function hasFlag(flags, bit)
     return (math.floor(flags / bit) % 2) >= 1
@@ -253,6 +254,15 @@ end
 
 function TrackingInput:isNativeCameraHookActive()
     return hasFlag(native_flags, FLAG_CAMERA_ACTIVE)
+end
+
+--- True when the tracking data is arriving from a remote network device
+--- rather than from this machine. The native UDP receiver classifies the
+--- sender address (loopback = local, anything else = remote) and publishes
+--- it as a live status bit, so this re-evaluates on every poll.
+--- @return boolean
+function TrackingInput:isRemoteConnection()
+    return hasFlag(native_flags, FLAG_REMOTE_CONNECTION)
 end
 
 -- One-shot edge consumers. Each returns true exactly once per native

@@ -73,22 +73,41 @@ local function _callSetLocalPosition(cam, v)
     cam:SetLocalPosition(v)
 end
 
--- CameraUnlock baseline smoothing floor. Below this, high-refresh displays
--- show visible jitter - especially with wireless trackers. User-facing
--- smoothing_factor still reads 0.0 as "minimum"; the floor applies internally.
-local BASELINE_SMOOTHING = 0.15
+-- Smoothing defaults, mirroring cameraunlock-core SmoothingUtils
+-- (DefaultLocalSmoothing / DefaultRemoteSmoothing). Local defaults to zero
+-- because a same-machine tracker is already stable and any smoothing there
+-- is pure added latency; remote defaults to 0.15 because WiFi/phone
+-- trackers jitter over the network.
+local DEFAULT_LOCAL_SMOOTHING = 0.0
+local DEFAULT_REMOTE_SMOOTHING = 0.15
+
+--- Pick the smoothing value for the current connection. Port of
+--- cameraunlock-core SmoothingUtils.GetEffectiveSmoothing. This is the only
+--- path by which a smoothing value reaches the smoother; never pick with an
+--- inline `if` at the call site.
+--- @param localSmoothing number Smoothing 0-1 for same-machine trackers
+--- @param remoteSmoothing number Smoothing 0-1 for remote network trackers
+--- @param isRemoteConnection boolean True when the sender is off-box
+--- @return number Effective smoothing 0-1
+local function getEffectiveSmoothing(localSmoothing, remoteSmoothing, isRemoteConnection)
+    if isRemoteConnection then return remoteSmoothing end
+    return localSmoothing
+end
 
 --- Frame-rate independent smoothing factor. Port of cameraunlock-core
---- SmoothingUtils.CalculateSmoothingFactor: speed = lerp(50, 0.1, smoothing),
---- alpha = 1 - exp(-speed * dt). At the 0.15 baseline floor and 60 fps this
---- gives ~0.5/frame, settling in ~100-150ms.
---- @param smoothing number Smoothing 0-1 (baseline floor already applied)
+--- SmoothingUtils.CalculateSmoothingFactor: speed = lerp(50, 0.1, smoothing)
+--- clamped to [0.1, 50], alpha = 1 - exp(-speed * dt). There is no snap
+--- branch: at smoothing 0 the 50.0 speed already resolves the step within a
+--- frame or two, and short-circuiting to 1.0 would hand local users raw
+--- stepped output on a high-refresh display.
+--- @param smoothing number Effective smoothing 0-1
 --- @param deltaTime number|nil Frame delta in seconds; defaults to 1/60
 --- @return number Interpolation factor in (0, 1)
 local function calculateSmoothingFactor(smoothing, deltaTime)
     local dt = deltaTime
     if not dt or dt <= 0 then dt = 1.0 / 60.0 end
     local speed = 50.0 + (0.1 - 50.0) * smoothing
+    if speed < 0.1 then speed = 0.1 elseif speed > 50.0 then speed = 50.0 end
     return 1.0 - math_exp(-speed * dt)
 end
 
@@ -250,7 +269,8 @@ function Camera.new(settings)
         sensitivity_yaw = 1.0,
         sensitivity_pitch = 1.0,
         sensitivity_roll = 1.0,
-        smoothing_factor = 0.5,
+        local_smoothing = DEFAULT_LOCAL_SMOOTHING,
+        remote_smoothing = DEFAULT_REMOTE_SMOOTHING,
         clamp_yaw = 120.0,
         clamp_pitch = 80.0,
         clamp_roll = 45.0,
@@ -268,9 +288,14 @@ function Camera.new(settings)
         position_limit_y_down = 0.05,
         position_limit_z_fwd = 0.40,
         position_limit_z_back = 0.10,
-        position_smoothing = 0.15,
     }
-    -- Position pipeline state (separate from rotation smoothing).
+    -- Connection locality, fed from the receiver each frame via
+    -- setRemoteConnection. Decides which of the two smoothing parameters
+    -- the pipeline uses, re-evaluated per frame so switching between a
+    -- local OpenTrack instance and a phone on WiFi takes effect live.
+    self.is_remote_connection = false
+
+    -- Position pipeline state (shares the rotation smoothing parameters).
     self.pos_center = { x = 0, y = 0, z = 0 }
     self.pos_center_set = false
     self.pos_smooth = { x = 0, y = 0, z = 0 }
@@ -288,6 +313,14 @@ function Camera.new(settings)
     return self
 end
 
+--- Feed the receiver's connection locality in. Called every frame from the
+--- update loop, so a user switching between a local OpenTrack instance and a
+--- phone on WiFi gets the other smoothing parameter without a game restart.
+--- @param isRemote boolean True when the tracking sender is off-box
+function Camera:setRemoteConnection(isRemote)
+    self.is_remote_connection = isRemote and true or false
+end
+
 --- Refresh all cached settings values
 --- Called on init and when settings change
 function Camera:refreshSettingsCache()
@@ -295,7 +328,8 @@ function Camera:refreshSettingsCache()
     self.cached_settings.sensitivity_yaw = s:get("sensitivity_yaw") or 1.0
     self.cached_settings.sensitivity_pitch = s:get("sensitivity_pitch") or 1.0
     self.cached_settings.sensitivity_roll = s:get("sensitivity_roll") or 1.0
-    self.cached_settings.smoothing_factor = s:get("smoothing_factor") or 0.5
+    self.cached_settings.local_smoothing = s:get("local_smoothing") or DEFAULT_LOCAL_SMOOTHING
+    self.cached_settings.remote_smoothing = s:get("remote_smoothing") or DEFAULT_REMOTE_SMOOTHING
     self.cached_settings.clamp_yaw = s:get("clamp_yaw") or 120.0
     self.cached_settings.clamp_pitch = s:get("clamp_pitch") or 80.0
     self.cached_settings.clamp_roll = s:get("clamp_roll") or 45.0
@@ -317,7 +351,6 @@ function Camera:refreshSettingsCache()
     self.cached_settings.position_limit_y_down = s:get("position_limit_y_down") or 0.05
     self.cached_settings.position_limit_z_fwd = s:get("position_limit_z_fwd") or 0.40
     self.cached_settings.position_limit_z_back = s:get("position_limit_z_back") or 0.10
-    self.cached_settings.position_smoothing = s:get("position_smoothing") or 0.15
 end
 
 --- Internal: Handle settings change notification
@@ -533,10 +566,10 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     adj_roll  = clamp(adj_roll,  -cache.clamp_roll,  cache.clamp_roll)
 
     -- Step 4: Apply smoothing (exponential moving average)
-    -- smoothing_factor: 0.0 = no smoothing (instant), 1.0 = maximum smoothing (slow)
-    -- Baseline floor (CameraUnlock rule) enforced here, not in settings, so the
-    -- user-visible default stays 0.0.
-    local smoothing = math_max(cache.smoothing_factor, BASELINE_SMOOTHING)
+    -- 0.0 = no smoothing (instant), 1.0 = maximum smoothing (slow). Which of
+    -- the two parameters applies is decided by the packet source address.
+    local smoothing = getEffectiveSmoothing(
+        cache.local_smoothing, cache.remote_smoothing, self.is_remote_connection)
     local factor = calculateSmoothingFactor(smoothing, deltaTime)
 
     -- Apply exponential moving average
@@ -1172,8 +1205,11 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
     -- 3) cm -> m
     dx, dy, dz = dx * 0.01, dy * 0.01, dz * 0.01
 
-    -- 4) exponential smoothing, frame-rate independent.
-    local s = math_max(c.position_smoothing, BASELINE_SMOOTHING)
+    -- 4) exponential smoothing, frame-rate independent. Position uses the
+    --    same connection-selected value as rotation; there is no separate
+    --    position smoothing setting.
+    local s = getEffectiveSmoothing(
+        c.local_smoothing, c.remote_smoothing, self.is_remote_connection)
     local alpha = calculateSmoothingFactor(s, deltaTime)
     self.pos_smooth.x = self.pos_smooth.x + (dx - self.pos_smooth.x) * alpha
     self.pos_smooth.y = self.pos_smooth.y + (dy - self.pos_smooth.y) * alpha

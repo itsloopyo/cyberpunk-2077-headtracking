@@ -135,7 +135,8 @@ Edit it directly, or use the in-game Native Settings UI if you have it installed
   "sensitivity_yaw": 1.0,
   "sensitivity_pitch": 1.0,
   "sensitivity_roll": 1.0,
-  "smoothing_factor": 0.0,
+  "local_smoothing": 0.0,
+  "remote_smoothing": 0.15,
 
   "clamp_yaw": 120.0,
   "clamp_pitch": 80.0,
@@ -162,7 +163,6 @@ Edit it directly, or use the in-game Native Settings UI if you have it installed
   "position_limit_y_down": 0.05,
   "position_limit_z_fwd": 0.40,
   "position_limit_z_back": 0.10,
-  "position_smoothing": 0.15,
 
   "yaw_mode": "world"
 }
@@ -171,7 +171,9 @@ Edit it directly, or use the in-game Native Settings UI if you have it installed
 JSON has no comment syntax, so the settings worth touching are described here instead:
 
 - `sensitivity_*` (0.1 to 5.0): per-axis rotation multiplier. Raise pitch if you want more vertical range from less head movement.
-- `smoothing_factor` (0.0 to 0.99): 0 is snappy, 0.9 is heavy. A floor of 0.15 is enforced internally to suppress jitter on high-refresh displays.
+- `local_smoothing` (0.0 to 1.0, default 0.0): smoothing applied when the tracker runs on this machine (loopback). 0 = no smoothing, 1 = heavy.
+- `remote_smoothing` (0.0 to 1.0, default 0.15): smoothing applied when the tracker is a remote device on the network. 0 = no smoothing, 1 = heavy.
+  The mod picks between the two from the source address of each tracking packet, so switching from a local OpenTrack instance to a phone on WiFi swaps the value with no restart. Both cover rotation and position, so there is no separate position smoothing setting. Local defaults to zero because a same-machine tracker is already stable and any smoothing there is pure added latency.
 - `clamp_*` (degrees): rotation caps, so head rotation cannot fight the aim system.
 - `crosshair_*`: parallax-correct reticle overlay. Set `crosshair_fov_degrees` to your in-game FOV so the marker tracks the true aim point at extreme head angles.
 - `ads_reticle_*`: custom aim-down-sights reticle drawn at the true aim point while aiming. `ads_reticle_size` is in pixels, `ads_reticle_opacity` runs 0.0 to 1.0.
@@ -197,9 +199,9 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - If `red4ext.log` shows `Failed to bind UDP port 4242`, another app is holding the port (a second head-tracking mod, or a leftover game process). Close it and tracking comes back on its own within about half a second. The receiver retries the port every 500ms in the background and logs `Bound UDP port 4242` when it gets in, so no game restart is needed.
 
 **Jittery or unstable tracking.**
-- Raise `smoothing_factor` toward 0.3 to 0.5.
+- Raise the smoothing parameter that matches your tracker: `remote_smoothing` for a phone or other device on the network, `local_smoothing` for a tracker running on this PC. 0.3 to 0.5 is a heavy but usable setting.
 - If a phone tracker is sending straight to port `4242` and it does not filter heavily on-device, relay it through OpenTrack with a low-pass filter instead.
-- High-FPS displays show micro-jitter more readily. The 0.15 internal floor is the minimum that is ever applied.
+- High-FPS displays show micro-jitter more readily. There is no internal minimum any more, so if a local tracker looks jittery at the default `local_smoothing` of 0.0, raise it.
 
 **Wrong rotation axis (camera moves the wrong way).**
 - Invert the offending axis in OpenTrack under **Output > Mapping** rather than in the mod. The mod has no inversion setting on purpose.

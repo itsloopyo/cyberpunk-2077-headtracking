@@ -200,20 +200,35 @@ function NativeSettingsIntegration:registerSettings()
     -- =====================================================================
     ns.addSubcategory("/HeadTracking/Smoothing", "Smoothing")
 
-    -- Smoothing factor
+    -- Local smoothing (tracker on this machine)
     ns.addRangeFloat(
-        "/HeadTracking/Smoothing/Factor",
-        "Smoothing",
-        "Camera movement smoothing. 0 = instant/responsive (may be jittery), 0.9 = very smooth (adds lag).",
-        0.0, 0.95, 0.05,
+        "/HeadTracking/Smoothing/Local",
+        "Local Smoothing",
+        "Smoothing applied when the tracker runs on this machine (loopback). 0 = no smoothing, 1 = heavy.",
+        0.0, 1.0, 0.05,
         "%.2f",
-        self.settings:get("smoothing_factor"),
-        self.settings:getDefaults().smoothing_factor,
+        self.settings:get("local_smoothing"),
+        self.settings:getDefaults().local_smoothing,
         function(value)
-            self.settings:set("smoothing_factor", value)
+            self.settings:set("local_smoothing", value)
         end
     )
-    self.widgetRefs["smoothing_factor"] = "/HeadTracking/Smoothing/Factor"
+    self.widgetRefs["local_smoothing"] = "/HeadTracking/Smoothing/Local"
+
+    -- Remote smoothing (tracker is a device elsewhere on the network)
+    ns.addRangeFloat(
+        "/HeadTracking/Smoothing/Remote",
+        "Remote Smoothing",
+        "Smoothing applied when the tracker is a remote device on the network. 0 = no smoothing, 1 = heavy.",
+        0.0, 1.0, 0.05,
+        "%.2f",
+        self.settings:get("remote_smoothing"),
+        self.settings:getDefaults().remote_smoothing,
+        function(value)
+            self.settings:set("remote_smoothing", value)
+        end
+    )
+    self.widgetRefs["remote_smoothing"] = "/HeadTracking/Smoothing/Remote"
 
     -- =====================================================================
     -- ROTATION LIMITS SECTION

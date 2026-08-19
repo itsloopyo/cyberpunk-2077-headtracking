@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Smoothing is now two settings instead of one: `local_smoothing`
+  (default `0.0`) for a tracker running on this machine, and
+  `remote_smoothing` (default `0.15`) for a remote device sending over
+  the network. Both cover rotation and position, so `smoothing_factor`
+  and `position_smoothing` are gone. Both appear as sliders under
+  Settings > Head Tracking > Smoothing.
+- Removed the hidden `0.15` baseline floor. It silently overrode the
+  configured value, so local users now get zero-latency tracking by
+  default instead of a forced 0.15.
+- The native RED4ext plugin now reports whether tracking packets are
+  arriving from off-box (loopback sender = local, anything else =
+  remote) as a live status bit on the TCP protocol, and Lua re-reads it
+  every frame. Switching between a local OpenTrack instance and a phone
+  on WiFi takes effect without a game restart.
+
 ## [0.2.0] - 2026-08-11
 
 ### Changed

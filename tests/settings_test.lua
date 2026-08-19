@@ -148,9 +148,91 @@ assert_false(s:set("sensitivity_yaw", "lots"), "sensitivity_yaw string rejected"
 local nan = 0/0
 assert_false(s:set("sensitivity_yaw", nan), "sensitivity_yaw NaN rejected")
 -- Smoothing factor is bounded.
-assert_true(s:set("smoothing_factor", 0.5), "smoothing_factor 0.5 accepted")
-assert_true(s:set("smoothing_factor", 2.0), "smoothing_factor 2.0 clamps")
-assert_eq(s:get("smoothing_factor"), 0.99, "smoothing_factor clamped to max=0.99")
+assert_true(s:set("local_smoothing", 0.5), "local_smoothing 0.5 accepted")
+assert_true(s:set("local_smoothing", 2.0), "local_smoothing 2.0 clamps")
+assert_eq(s:get("local_smoothing"), 1.0, "local_smoothing clamped to max=1.0")
+assert_true(s:set("local_smoothing", 0.0), "local_smoothing 0.0 accepted (no floor)")
+assert_eq(s:get("local_smoothing"), 0.0, "local_smoothing 0.0 survives, never floored")
+assert_true(s:set("remote_smoothing", 0.15), "remote_smoothing 0.15 accepted")
+assert_eq(s:get("remote_smoothing"), 0.15, "remote_smoothing round-trips")
+
+-- (2b) retired smoothing keys warn once and migrate nothing.
+-- A separate instance on its own path so this does not disturb the config.json
+-- the .bak rotation checks below depend on.
+do
+    local printed = {}
+    local real_print = print
+    _G.print = function(...)
+        local parts = {}
+        for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+        printed[#printed + 1] = table.concat(parts, " ")
+    end
+
+    local retired_path = "retired_config.json"
+
+    -- Guard order: a config with no retired key must not consume the one-shot.
+    local cf = io.open(retired_path, "w")
+    cf:write('{"sensitivity_yaw":1.0}')
+    cf:close()
+    local s_clean = Settings.new()
+    s_clean.path = retired_path
+    s_clean:load()
+    local clean_warnings = 0
+    for _, line in ipairs(printed) do
+        if line:match("has been retired") or line:match("have been retired") then
+            clean_warnings = clean_warnings + 1
+        end
+    end
+    assert_eq(clean_warnings, 0, "no warning when no retired key is present")
+    printed = {}
+
+    -- Both retired keys present, with values a user would have tuned.
+    local rf = io.open(retired_path, "w")
+    rf:write('{"smoothing_factor":0.5,"position_smoothing":0.75,"sensitivity_yaw":1.0}')
+    rf:close()
+
+    local s_retired = Settings.new()
+    s_retired.path = retired_path
+    s_retired:load()
+
+    local warning = nil
+    for _, line in ipairs(printed) do
+        if line:match("retired") then warning = line end
+    end
+    _G.print = real_print
+
+    assert_true(warning, "retired smoothing keys produce a warning")
+    -- Both retired spellings and both replacements have to be named, or the
+    -- message does not tell the user what to edit.
+    assert_true(warning:match("'smoothing_factor'"), "warning names smoothing_factor")
+    assert_true(warning:match("'position_smoothing'"), "warning names position_smoothing")
+    assert_true(warning:match("IGNORED"), "warning says the key is ignored")
+    assert_true(warning:match("'local_smoothing'"), "warning names local_smoothing")
+    assert_true(warning:match("'remote_smoothing'"), "warning names remote_smoothing")
+    assert_true(warning:match("not migrated"), "warning says the value is not migrated")
+    assert_true(warning:match("0%.15"), "warning names the retired hidden floor")
+
+    -- Nothing carried over: 0.5 and 0.75 are gone, both new keys are defaults.
+    assert_eq(s_retired:get("local_smoothing"), 0.0, "local_smoothing kept its default")
+    assert_eq(s_retired:get("remote_smoothing"), 0.15, "remote_smoothing kept its default")
+
+    -- Once only. The settings are re-read whenever the mod hot-reloads.
+    printed = {}
+    _G.print = function(...)
+        local parts = {}
+        for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+        printed[#printed + 1] = table.concat(parts, " ")
+    end
+    local s_again = Settings.new()
+    s_again.path = retired_path
+    s_again:load()
+    _G.print = real_print
+    for _, line in ipairs(printed) do
+        assert_false(line:match("retired"), "second load repeats no retired-key warning")
+    end
+
+    os.remove(retired_path)
+end
 
 -- (3) save crash-recovery rotation: after a successful save against an
 -- existing config the previous file is preserved as .bak. Settings:set

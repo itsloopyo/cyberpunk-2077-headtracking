@@ -553,6 +553,9 @@ local function onUpdateImpl(deltaTime)
     -- value and camera:apply gets skipped, leaving visible judder on
     -- high-refresh displays.
     local data = udp:poll()
+    -- Re-read connection locality every frame: it picks LocalSmoothing vs
+    -- RemoteSmoothing and must follow a tracker swap without a restart.
+    camera:setRemoteConnection(udp:isRemoteConnection())
     if data and not diag_first_packet_logged then
         dlog(string.format(
             "[HeadTracking:DIAG] FIRST packet received: yaw=%.2f pitch=%.2f roll=%.2f",

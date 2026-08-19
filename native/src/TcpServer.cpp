@@ -21,13 +21,15 @@ namespace {
 
 // Bit layout for the tracking-data "flags" field, mirrored in modules/udp.lua.
 // Bits 0-1 are live status; bits 2-5 are one-shot edges that Lua clears on
-// consume. Keep both sides in sync when adding new flags.
-constexpr uint32_t kFlagHitscanActive   = 1u << 0;
-constexpr uint32_t kFlagCameraActive    = 1u << 1;
-constexpr uint32_t kFlagRecenter        = 1u << 2;
-constexpr uint32_t kFlagToggleTracking  = 1u << 3;
-constexpr uint32_t kFlagCycleMode       = 1u << 4;
-constexpr uint32_t kFlagToggleYaw       = 1u << 5;
+// consume; bit 6 is live status again. Keep both sides in sync when adding
+// new flags.
+constexpr uint32_t kFlagHitscanActive    = 1u << 0;
+constexpr uint32_t kFlagCameraActive     = 1u << 1;
+constexpr uint32_t kFlagRecenter         = 1u << 2;
+constexpr uint32_t kFlagToggleTracking   = 1u << 3;
+constexpr uint32_t kFlagCycleMode        = 1u << 4;
+constexpr uint32_t kFlagToggleYaw        = 1u << 5;
+constexpr uint32_t kFlagRemoteConnection = 1u << 6;
 
 std::atomic<bool> s_running{ false };
 std::atomic<bool> s_wsaStarted{ false };
@@ -178,6 +180,10 @@ void ServeClient(SOCKET client) {
         if (edges.toggleTracking) flags |= kFlagToggleTracking;
         if (edges.cycleMode)      flags |= kFlagCycleMode;
         if (edges.yawMode)        flags |= kFlagToggleYaw;
+        // Live status, not an edge: Lua re-reads it every poll so a user
+        // switching between a local OpenTrack instance and a phone on WiFi
+        // gets the other smoothing parameter without a game restart.
+        if (UdpReceiver_IsRemoteConnection()) flags |= kFlagRemoteConnection;
         int written = std::snprintf(outbuf, sizeof(outbuf),
                                     "%u,%.4f,%.4f,%.4f,%u,%.4f,%.4f,%.4f\r\n",
                                     s_seq,

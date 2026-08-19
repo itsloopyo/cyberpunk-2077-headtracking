@@ -72,3 +72,7 @@ void UdpReceiver_PublishLatest() {
 bool UdpReceiver_TryConsumeRecenterRequest() {
     return s_receiver.TryConsumeRecenterRequest();
 }
+
+bool UdpReceiver_IsRemoteConnection() {
+    return s_receiver.IsRemoteConnection();
+}
