@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1] - 2026-08-20
+
+### Added
+
+- retire the recenter hotkey and truncate the Lua diag logs per launch
+- replace the RedSocket TCP transport with direct RTTI script calls
+
 ## [1.0.0] - 2026-08-20
 
 ### Added
