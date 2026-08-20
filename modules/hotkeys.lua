@@ -26,11 +26,6 @@ local VK_SHIFT = 281474976710656  -- 2^48
 -- Ordered list (not a keyed table) so conflict resolution is deterministic
 -- across runs. Matches scripts/deploy.ps1 Merge-CetBindings exactly.
 local CHOICES = {
-    { action = "RecenterHeadTracking",   opts = {
-        { vk = 0x24, name = "Home"     },
-        { vk = 0x67, name = "Numpad7"  },
-        { vk = 0x7C, name = "F13"      },
-    }},
     { action = "ToggleHeadTracking",     opts = {
         { vk = 0x23, name = "End"      },
         { vk = 0x61, name = "Numpad1"  },

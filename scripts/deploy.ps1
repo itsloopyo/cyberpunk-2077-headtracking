@@ -223,11 +223,6 @@ function Merge-CetBindings {
     }
 
     $choices = [ordered]@{
-        RecenterHeadTracking   = @(
-            @{ vk = 0x24; name = "Home"     },
-            @{ vk = 0x67; name = "Numpad7"  },
-            @{ vk = 0x7C; name = "F13"      }
-        )
         ToggleHeadTracking     = @(
             @{ vk = 0x23; name = "End"      },
             @{ vk = 0x61; name = "Numpad1"  },
@@ -249,7 +244,6 @@ function Merge-CetBindings {
     # they're stale - replace with the preferred pick. Anything else is treated
     # as a deliberate customization and left alone.
     $legacy = @{
-        RecenterHeadTracking = [int64]52917295621603328   # VK_OEM_COMMA
         ToggleHeadTracking   = [int64]53480245575024640   # VK_OEM_PERIOD
     }
 

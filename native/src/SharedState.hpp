@@ -8,7 +8,7 @@
 // Field order, sizes and padding must be identical in aim.lua's ffi.cdef.
 //
 // Three logical sections:
-//   1. Lua -> native (processed pose): Lua writes the smoothed, recentered,
+//   1. Lua -> native (processed pose): Lua writes the smoothed,
 //      clamped, signed head rotation that it would otherwise feed to
 //      cam:SetLocalOrientation. When the C++ camera hook is live, it picks
 //      up the rotation from these fields and injects it into the view

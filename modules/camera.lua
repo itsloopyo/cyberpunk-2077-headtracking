@@ -8,7 +8,6 @@
 -- - Per-axis sensitivity multipliers
 -- - Per-axis rotation clamping
 -- - Exponential smoothing with configurable factor
--- - Recenter calibration for neutral position offset
 -- - Quaternion composition with game camera orientation
 -- - Frame-rate independent smoothing using delta time
 
@@ -225,16 +224,9 @@ function Camera.new(settings)
     self.smooth_pitch = 0
     self.smooth_roll = 0
 
-    -- Recenter offset (neutral position calibration)
-    -- When user recenters, current tracker position becomes zero offset
-    self.recenter_offset = {
-        yaw = 0,
-        pitch = 0,
-        roll = 0
-    }
 
-    -- Last raw values from tracker (before any processing)
-    -- Used for recenter functionality
+    -- Last raw values from tracker (before any processing), exposed through
+    -- the console API.
     self.last_raw_yaw = 0
     self.last_raw_pitch = 0
     self.last_raw_roll = 0
@@ -289,10 +281,6 @@ function Camera.new(settings)
     self.is_remote_connection = false
 
     -- Position pipeline state (shares the rotation smoothing parameters).
-    self.pos_center = { x = 0, y = 0, z = 0 }
-    -- Identity until the hotkey asks otherwise. pos_center_set doubles as the
-    -- hotkey's deferred-capture latch, so it starts true rather than absent.
-    self.pos_center_set = true
     self.pos_smooth = { x = 0, y = 0, z = 0 }
     self.pos_local = { x = 0, y = 0, z = 0 }
     self.pos_applied = false   -- have we ever written a non-zero position?
@@ -488,24 +476,10 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         return
     end
 
-    -- Store raw values for recenter functionality
+    -- Store raw values for the console API
     self.last_raw_yaw = yaw
     self.last_raw_pitch = pitch
     self.last_raw_roll = roll
-
-    -- Deferred recenter capture. recenter() runs in the per-frame hook BEFORE
-    -- the UDP poll + interpolator update, so snapshotting last_raw_* there
-    -- captures the PREVIOUS frame's interpolator output. Tracker jitter +
-    -- extrapolation between frames meant adj_* was non-zero after a press
-    -- and the user had to mash Home several times for the residual to
-    -- converge. Capture here against the current frame's input instead -
-    -- single press zeroes adj_* exactly.
-    if self._pending_recenter_capture then
-        self.recenter_offset.yaw = yaw
-        self.recenter_offset.pitch = pitch
-        self.recenter_offset.roll = roll
-        self._pending_recenter_capture = false
-    end
 
     -- Get camera component and player
     local cam, player = getFPPCamera()
@@ -526,13 +500,13 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         consecutive_null_camera_frames = 0
     end
 
-    -- Step 1: Apply recenter offset
-    -- After recentering, the stored offset is subtracted so that position becomes neutral
+    -- Step 1: Take the tracker's pose as absolute. The tracker owns the centre;
+    -- the mod keeps none of its own, so there is nothing to subtract.
     -- Invert yaw so looking left turns camera left (natural mapping)
     -- Invert roll so tilting head left tilts camera left
-    local adj_yaw = -(yaw - self.recenter_offset.yaw)
-    local adj_pitch = pitch - self.recenter_offset.pitch
-    local adj_roll = -(roll - self.recenter_offset.roll)
+    local adj_yaw = -yaw
+    local adj_pitch = pitch
+    local adj_roll = -roll
 
     -- Step 2: Apply per-axis deadzone (smooth activation). Eats tracker noise
     -- so a still head doesn't accumulate sub-degree drift through the
@@ -631,37 +605,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         and quatDelta(current_quat, self._last_written_final_quat) <= PEEL_DIVERGENCE_THRESHOLD
 
     local clean_quat
-    if self._pending_recenter_unroll then
-        -- Hard recenter (Home key panic-button): strip roll from the current
-        -- cam.localOrientation and discard every peel-state cache. Covers the
-        -- "stuck rolled" symptom where clean_quat itself has accumulated roll
-        -- (engine mid-session reset, or progressively-corrupted writes through
-        -- a stale last_head_quat). Mouse yaw/pitch are preserved so we don't
-        -- yank the player's aim.
-        --
-        -- Peel last_head_quat FIRST so we get the TRUE mouse-only base before
-        -- stripping roll. current_quat carries last frame's head rotation
-        -- incrementally (cyberpunk persists our writes); reading p/y straight
-        -- off it preserves the old head pitch+yaw and bakes it permanently
-        -- into the new "clean" base, leaving the view stuck off-center after
-        -- recenter. With the peel, the recenter genuinely returns to
-        -- mouse-only orientation in one press.
-        local base_quat = current_quat
-        if self.last_head_quat then
-            base_quat = quatNormalize(quatMul(current_quat, quaternionInverse(self.last_head_quat)))
-        end
-        local p, y, _r = quatToPYR(base_quat)
-        if p and y then
-            clean_quat = quatNormalize(EulerAngles.new(p, y, 0):ToQuat())
-        else
-            clean_quat = Quaternion.new(0, 0, 0, 1)
-        end
-        self.last_head_quat = nil
-        self.last_clean_local_quat = nil
-        self._last_written_final_quat = nil
-        self._pending_recenter_unroll = false
-        self._skip_head_peel_once = false
-    elseif self._skip_head_peel_once then
+    if self._skip_head_peel_once then
         clean_quat = engine_kept_our_write
             and quatNormalize(quatMul(current_quat, quaternionInverse(self.last_head_quat)))
             or current_quat
@@ -961,10 +905,6 @@ function Camera:tryInitialReset()
     self.last_clean_local_quat = nil
     self._computed_head_quat = nil
     self._prev_head_quat = nil
-    self.pos_center.x = 0
-    self.pos_center.y = 0
-    self.pos_center.z = 0
-    self.pos_center_set = true
     self.pos_smooth.x = 0
     self.pos_smooth.y = 0
     self.pos_smooth.z = 0
@@ -976,87 +916,11 @@ function Camera:tryInitialReset()
     print("[HeadTracking] Initial reset applied (cam.localOrientation -> identity)")
 end
 
---- Store current head position as the neutral/center position
---- After recentering, looking straight ahead = no camera offset
---- Call this when user presses the recenter hotkey (F9)
-function Camera:recenter()
-    -- Defer the offset capture into apply(). recenter() runs in the per-frame
-    -- hook BEFORE udp:poll + pose_interp:update, so self.last_raw_* still
-    -- holds the previous frame's interpolator output. Capturing here meant
-    -- the offset was always one frame stale (and worse with extrapolation +
-    -- tracker jitter), so a single press left a residual the user had to
-    -- mash Home to converge. Flag instead, and let apply() snapshot the
-    -- current frame's actual input as the neutral.
-    self._pending_recenter_capture = true
-
-    -- Reset smoothed values so the new neutral resolves to ~zero head rotation.
-    self.smooth_yaw = 0
-    self.smooth_pitch = 0
-    self.smooth_roll = 0
-
-    -- Home is the panic-button: signal apply() to strip roll from the current
-    -- cam.localOrientation and drop every peel-state cache. Fixes the "stuck
-    -- rolled, Home does nothing" symptom that the plain peel can't recover
-    -- from once clean_quat itself has accumulated roll. apply() runs in the
-    -- same frame as us (init.lua onUpdate calls recenter() then apply()), so
-    -- the single-write invariant is preserved (apply does the only write).
-    self._pending_recenter_unroll = true
-    self._skip_head_peel_once = false
-
-    -- A recenter is a discontinuity, so the previous frame's head quat is not a
-    -- baseline the next frame may extrapolate from: smooth_* just went to zero
-    -- while this still holds the pre-press rotation, and getRenderedYPR would
-    -- lead the reticle by that whole delta. prepareYawModeSwitch and
-    -- tryInitialReset already clear it at their own discontinuities.
-    self._prev_head_quat = nil
-
-    -- Also re-capture the position zero point so 6DOF returns to neutral
-    -- as part of the same hotkey action.
-    self.pos_center_set = false
-    self.pos_smooth.x = 0
-    self.pos_smooth.y = 0
-    self.pos_smooth.z = 0
-    self.pos_local.x = 0
-    self.pos_local.y = 0
-    self.pos_local.z = 0
-    self.pos_applied = false
-
-    print("[HeadTracking] Recenter armed (offset captured next apply)")
-end
-
---- Make sure the neutral a pending recenter is about to capture comes from a
---- RAW tracker sample. Call once per frame, before the interpolator runs.
----
---- apply() takes whatever pose it is handed as the new neutral, and the
---- interpolator hands it a blend of the pre-press and post-press poses - or, on
---- a frame with no fresh packet, the pre-press pose untouched. Capturing that
---- stores a pose the tracker never reported, and whatever had not resolved yet
---- becomes a permanent offset: on a tracker CENTER, anywhere from none of the
---- pre-press drift to all of it, mirrored, because adj is negated against the
---- offset. At 60 fps on a 60 Hz tracker every frame carries a sample and the
---- blend has already landed, which is why this read as correct; above the
---- tracker rate it does not. Resetting parks the interpolator on the next raw
---- sample, so the captured neutral is that sample exactly at any frame rate.
---- This is what cameraunlock-core's PoseInterpolator.Reset() is documented for
---- ("call on recenter, scene transitions, or tracking re-enable").
----
---- Keyed off the armed flag rather than off a press, so every path that arms a
---- recenter is covered: the hotkey and the tracker's own CENTER button arriving
---- over the HCAM trailer. The
---- capture stays armed until a sample actually lands, so a frame with no fresh
---- packet resets again and still captures a raw value.
---- @param interpolator table PoseInterpolator instance feeding apply()
-function Camera:prepareRecenterCapture(interpolator)
-    if self._pending_recenter_capture then
-        interpolator:reset()
-    end
-end
-
 --- Stop influencing the camera, leaving calibration alone.
 ---
 --- Peels our baked head rotation back out of cam.localOrientation and returns
---- the local position offset to neutral. The recenter offset and the smoothing
---- state are left untouched, which is what makes this the right teardown for a
+--- the local position offset to neutral. The smoothing state is left
+--- untouched, which is what makes this the right teardown for a
 --- short, frequent suppression: aiming down sights happens many times a
 --- firefight, and discarding the neutral pose on every one of them would walk
 --- it around all session.
@@ -1118,51 +982,15 @@ function Camera:prepareYawModeSwitch()
     -- right-multiplied into cam.localOrientation last frame, so apply()'s
     -- normal peel undoes it cleanly regardless of which yaw mode produced it.
     -- Skipping the peel here caused each PageDown press to bake the current
-    -- head pose permanently into the "clean" base (drift accumulated, and
-    -- recenter then locked onto the drifted orientation).
+    -- head pose permanently into the "clean" base, so drift accumulated.
     self.last_clean_local_quat = nil
     self._computed_head_quat = nil
     self._prev_head_quat = nil
 end
 
---- Get the current recenter offset values
---- @return table {yaw, pitch, roll} offset values in degrees
-function Camera:getRecenterOffset()
-    return {
-        yaw = self.recenter_offset.yaw,
-        pitch = self.recenter_offset.pitch,
-        roll = self.recenter_offset.roll
-    }
-end
-
---- Set the recenter offset directly (for advanced use cases)
---- @param yaw number Yaw offset in degrees
---- @param pitch number Pitch offset in degrees
---- @param roll number Roll offset in degrees
-function Camera:setRecenterOffset(yaw, pitch, roll)
-    if isValidNumber(yaw) then self.recenter_offset.yaw = yaw end
-    if isValidNumber(pitch) then self.recenter_offset.pitch = pitch end
-    if isValidNumber(roll) then self.recenter_offset.roll = roll end
-end
-
---- Recenter the position pipeline. Captures the current raw input as the
---- new zero point. Driven by the hotkey, through the deferred latch.
-function Camera:recenterPosition(rx, ry, rz)
-    self.pos_center.x = rx or 0
-    self.pos_center.y = ry or 0
-    self.pos_center.z = rz or 0
-    self.pos_center_set = true
-    self.pos_smooth.x = 0
-    self.pos_smooth.y = 0
-    self.pos_smooth.z = 0
-    self.pos_local.x = 0
-    self.pos_local.y = 0
-    self.pos_local.z = 0
-end
-
 --- Apply 6DOF head translation to the FPP camera.
 --- Inputs are raw OpenTrack cm values (lateral, vertical, longitudinal).
---- Pipeline: recenter -> per-axis sensitivity -> exponential smoothing ->
+--- Pipeline: per-axis sensitivity -> exponential smoothing ->
 ---           cm to m -> axis remap -> asymmetric clamp -> SetLocalPosition.
 --- Cyberpunk local cam frame (smoke-test confirmed): +Z is up; we map
 ---   OT y (vertical, +up)   -> cam Z
@@ -1185,19 +1013,14 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
         return
     end
 
-    if not self.pos_center_set then
-        self:recenterPosition(rx, ry, rz)
-        return
-    end
-
     local cam = getFPPCamera()
     if not cam then return end
 
-    -- 1) recenter, 2) sensitivity (per OT axis, before remap so user-facing
-    --    knobs match OT conventions)
-    local dx = (rx - self.pos_center.x) * c.position_sens_x
-    local dy = (ry - self.pos_center.y) * c.position_sens_y
-    local dz = (rz - self.pos_center.z) * c.position_sens_z
+    -- 1) sensitivity (per OT axis, before remap so user-facing knobs match
+    --    OT conventions)
+    local dx = rx * c.position_sens_x
+    local dy = ry * c.position_sens_y
+    local dz = rz * c.position_sens_z
 
     -- 3) cm -> m
     dx, dy, dz = dx * 0.01, dy * 0.01, dz * 0.01
@@ -1455,7 +1278,6 @@ function Camera:getStats()
         last_applied_yaw = self.stats.last_applied_yaw,
         last_applied_pitch = self.stats.last_applied_pitch,
         last_applied_roll = self.stats.last_applied_roll,
-        recenter_offset = self:getRecenterOffset()
     }
 end
 

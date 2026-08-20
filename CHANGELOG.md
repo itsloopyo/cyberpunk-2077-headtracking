@@ -19,6 +19,12 @@
 
 ### Added
 
+- `red4ext/logs/HeadTrackingAim.log` now starts fresh on every game
+  launch, keeping the previous launch as `HeadTrackingAim.prev.log`.
+  It was opened in append mode, so the two 3s heartbeats grew it by
+  roughly 325 KB per hour of play with no upper bound across
+  sessions, and the startup lines worth reading ended up buried.
+
 - The native plugin now fingerprints the running `Cyberpunk2077.exe`
   (TimeDateStamp + SizeOfImage + CheckSum) and routes its hardcoded
   addresses through a build-profile registry. On a build it does not
@@ -46,6 +52,15 @@
 
 ### Changed
 
+- Recentring is gone entirely: the hotkey (`Home` / `Ctrl+Shift+T`), the Native
+  Settings "Recenter Now" button, and the whole centre-offset pipeline. Your
+  tracker owns the centre now. Centre it there - OpenTrack's Center bind,
+  SteamVR, or your phone app - and the mod applies what it sends without
+  keeping a second centre of its own.
+
+  Two centres in series was the problem: when the view was off, you could not
+  tell which side was wrong, and switching between trackers meant recentring in
+  both. With one centre there is nothing to disagree about.
 - The mod no longer captures a centre on its own. Every tracker centres itself,
   so that was a second centre in series with the tracker's own: pressing Center
   in opentrack left the view parked at the negated drift until the recenter

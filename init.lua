@@ -92,7 +92,7 @@ end
 -- build a traceback via debug.traceback, which is unavailable here (the PROBE
 -- lines show _G/ffi stripped), so it fails with "error in error handling" and
 -- the error escapes to the Lua panic path, which abort()s the process - a hard
--- crash to desktop. Observed by mashing the recenter hotkey: HeadTracking.log
+-- crash to desktop. Observed by mashing a hotkey: HeadTracking.log
 -- shows "attempt to call a nil value" / "attempt to call a string value" right
 -- before the game dies, while the native plugin keeps logging cleanly.
 --
@@ -225,17 +225,6 @@ local init_failure_error = nil
 local HOTKEY_DEBOUNCE_SECONDS = 0.3
 local hotkey_last_fire = {}
 
--- Recenter is requested from the hotkey/chord but PERFORMED in onUpdate, in
--- the same per-frame context as camera:apply. Mashing Home only re-sets this
--- flag, so a burst collapses to a single recenter instead of doing game/CET
--- object work from the hotkey callback.
-local recenter_pending = false
-
--- Set once the "queued" toast has been shown for the current pending
--- recenter, so the blocked-in-menu path notifies once per press instead
--- of every frame. Cleared when the recenter is performed.
-local recenter_deferred_notified = false
-
 -- Tracks the previous frame's tracking-allowed state so onUpdate can detect
 -- the allowed->not-allowed edge itself. camera:reset() (which peels our baked
 -- head rotation back off and clears last_head_quat) is otherwise only driven by
@@ -245,8 +234,7 @@ local recenter_deferred_notified = false
 -- one of those suppresses tracking, the engine repositions the camera while
 -- last_head_quat stays stale; on resume apply() peels the stale quat against
 -- the engine's fresh orientation, baking in a permanent inverse-head rotation
--- (view ends up rolled and off-forward, and Home can't recover it because
--- recenter peels the same stale quat). Resetting on the per-frame edge catches
+-- (view ends up rolled and off-forward). Resetting on the per-frame edge catches
 -- every cause uniformly, while last_head_quat is still validly baked.
 local was_tracking_allowed = true
 
@@ -268,7 +256,7 @@ end
 -- either key fires the handler exactly once.
 
 -- Forward declarations so the onUpdate dispatch resolves the upvalue at call.
-local handleRecenter, handleToggleTracking, handleCycleMode,
+local handleToggleTracking, handleCycleMode,
       handleToggleYawMode
 
 -- Lifecycle: Called when mod initializes.
@@ -470,9 +458,7 @@ local function onUpdateImpl(deltaTime)
     -- reading them here (before udp:poll below) loses nothing. This must sit
     -- ABOVE the tracking-allowed gate: with tracking toggled off the gate
     -- closes, and dispatching below it would leave no way to turn tracking
-    -- back on. It also lets a recenter pressed in a menu queue for the first
-    -- gameplay frame instead of being dropped.
-    if udp:consumeNativeRecenterRequested()       then handleRecenter()       end
+    -- back on.
     if udp:consumeNativeToggleTrackingRequested() then handleToggleTracking() end
     if udp:consumeNativeCycleModeRequested()      then handleCycleMode()      end
     if udp:consumeNativeToggleYawRequested()      then handleToggleYawMode()  end
@@ -496,13 +482,6 @@ local function onUpdateImpl(deltaTime)
     end
     was_tracking_allowed = tracking_allowed
 
-    -- A pending recenter survives menus/loading: keep the flag set and apply
-    -- it on the first frame tracking is allowed again.
-    if recenter_pending and not tracking_allowed and not recenter_deferred_notified then
-        recenter_deferred_notified = true
-        if ui then ui:showWarning("Recenter: queued (applies on return to gameplay)", 1.5) end
-    end
-
     if not tracking_allowed then
         if should_diag then
             dlog(string.format(
@@ -522,9 +501,8 @@ local function onUpdateImpl(deltaTime)
         -- return. Going silent froze the native side on the last state we
         -- published, so its aim hooks kept peeling a head rotation the camera
         -- no longer carried and threw ADS rounds the head angle off target.
-        -- Pumping here also keeps hotkey edges arriving during menus, which
-        -- is what lets a recenter pressed in one queue for the return to
-        -- gameplay.
+        -- Pumping here also keeps hotkey edges arriving during menus, so a
+        -- press in one queues for the return to gameplay.
         aim:publishSuppressedState()
         udp:poll()
         if crosshair then crosshair:tick(false) end
@@ -533,24 +511,6 @@ local function onUpdateImpl(deltaTime)
     end
 
     perf:updateStart()
-
-    -- Perform a pending recenter here, in the per-frame camera-update context
-    -- (not the hotkey callback). handleRecenter only sets the flag; mashing
-    -- Home coalesces to a single recenter. recenter() itself writes nothing to
-    -- the camera - it only updates offset/smooth/position state and leaves
-    -- last_head_quat intact, so camera:apply (below, same frame) does the one
-    -- and only orientation write via its normal peel. One write per frame.
-    if recenter_pending then
-        recenter_pending = false
-        recenter_deferred_notified = false
-        camera:recenter()
-        if ui then ui:showSuccess("Head Tracking: Recentered", 2.0) end
-    end
-
-    -- A pending recenter captures its neutral from whatever pose reaches
-    -- camera:apply below, so that pose has to be a raw tracker sample and not an
-    -- interpolated blend spanning the press. See prepareRecenterCapture.
-    camera:prepareRecenterCapture(pose_interp)
 
     -- Poll for the latest tracking sample. The poll returns nil on frames
     -- with no fresh UDP packet, but the interpolator runs every frame:
@@ -719,18 +679,6 @@ end
 -- End / Ctrl+Shift+Y are polled natively in TcpServer.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build (same as Home), so do
 -- not bind End here.
-
--- Home  /  Ctrl+Shift+T - Recenter
-function handleRecenter()
-    dlog("[HeadTracking:HOTKEY] RecenterHeadTracking fired")
-    if hotkeyDebounced("RecenterHeadTracking") then return end
-    if not camera then return end
-
-    recenter_pending = true
-    dlog("[HeadTracking] Recenter requested")
-end
--- Recenter is polled natively in TcpServer.cpp. CET registerHotkey dispatch
--- crashes before entering Lua on this game build, so do not bind Home here.
 
 -- PageUp  /  Ctrl+Shift+G - Cycle tracking mode (3-state cycle).
 -- 6DOF isn't wired to the Cyberpunk camera yet; the setting flips so the

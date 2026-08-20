@@ -33,14 +33,23 @@ FILE* OpenLogFile() {
         if (slash == std::wstring::npos) return nullptr;
         path.resize(slash);
     }
-    path += L"\\red4ext\\logs\\HeadTrackingAim.log";
+    const std::wstring logPath = path + L"\\red4ext\\logs\\HeadTrackingAim.log";
 
-    g_logFile = _wfopen(path.c_str(), L"a");
+    // Rotate one generation per launch. The two 3s heartbeats alone add about
+    // 325 KB per hour of play, so appending across every session the mod has
+    // ever run buries the startup chain a user is asked to read. One previous
+    // generation is kept because the session worth diagnosing is usually the
+    // one that just crashed, and the user relaunches before sending it.
+    MoveFileExW(logPath.c_str(),
+                (path + L"\\red4ext\\logs\\HeadTrackingAim.prev.log").c_str(),
+                MOVEFILE_REPLACE_EXISTING);
+
+    g_logFile = _wfopen(logPath.c_str(), L"w");
     if (g_logFile) {
         SYSTEMTIME st;
         GetLocalTime(&st);
         fprintf(g_logFile,
-                "\n=== HeadTrackingAim log opened %04d-%02d-%02d %02d:%02d:%02d ===\n",
+                "=== HeadTrackingAim log opened %04d-%02d-%02d %02d:%02d:%02d ===\n",
                 st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
         fflush(g_logFile);
     }

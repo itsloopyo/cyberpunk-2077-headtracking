@@ -25,7 +25,6 @@ namespace {
 // new flags.
 constexpr uint32_t kFlagHitscanActive    = 1u << 0;
 constexpr uint32_t kFlagCameraActive     = 1u << 1;
-constexpr uint32_t kFlagRecenter         = 1u << 2;
 constexpr uint32_t kFlagToggleTracking   = 1u << 3;
 constexpr uint32_t kFlagCycleMode        = 1u << 4;
 constexpr uint32_t kFlagToggleYaw        = 1u << 5;
@@ -37,7 +36,6 @@ std::atomic<bool> s_loggedProcessedState{ false };
 std::atomic<bool> s_loggedBadStateCommand{ false };
 SOCKET s_listenSocket = INVALID_SOCKET;
 std::thread s_thread;
-bool s_recenterKeyWasDown = false;
 bool s_toggleTrackingChordWasDown = false;
 bool s_cycleModeChordWasDown = false;
 bool s_yawModeChordWasDown = false;
@@ -94,14 +92,13 @@ bool HandleStateCommand(const char* buf, size_t len) {
     return true;
 }
 
-// Polls the four standard CameraUnlock chords (Ctrl+Shift+{T,Y,G,H}) plus the
-// Home nav-cluster recenter alias. Each chord is paired with the canonical
-// nav-cluster key as a parallel edge source; either firing produces one edge.
+// Polls the standard CameraUnlock chords (Ctrl+Shift+{Y,G,H}). Each chord is
+// paired with the canonical nav-cluster key as a parallel edge source; either
+// firing produces one edge.
 // LuaJIT FFI is stripped in the CET sandbox on this build, so chord polling
 // must happen here in native and be surfaced to CET as bit flags on the
 // existing tracking-data TCP response.
 struct ChordEdges {
-    bool recenter;
     bool toggleTracking;
     bool cycleMode;
     bool yawMode;
@@ -116,9 +113,6 @@ ChordEdges ConsumeChordEdges() {
                            ((GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0);
     const bool modsDown = ctrlDown && shiftDown;
 
-    const bool recenterDown =
-        ((GetAsyncKeyState(VK_HOME) & 0x8000) != 0) ||
-        (modsDown && ((GetAsyncKeyState('T') & 0x8000) != 0));
     const bool toggleDown =
         ((GetAsyncKeyState(VK_END) & 0x8000) != 0) ||
         (modsDown && ((GetAsyncKeyState('Y') & 0x8000) != 0));
@@ -130,11 +124,9 @@ ChordEdges ConsumeChordEdges() {
         (modsDown && ((GetAsyncKeyState('H') & 0x8000) != 0));
 
     ChordEdges e{};
-    e.recenter       = recenterDown && !s_recenterKeyWasDown;
     e.toggleTracking = toggleDown   && !s_toggleTrackingChordWasDown;
     e.cycleMode      = cycleDown    && !s_cycleModeChordWasDown;
     e.yawMode        = yawDown      && !s_yawModeChordWasDown;
-    s_recenterKeyWasDown        = recenterDown;
     s_toggleTrackingChordWasDown = toggleDown;
     s_cycleModeChordWasDown     = cycleDown;
     s_yawModeChordWasDown       = yawDown;
@@ -175,8 +167,6 @@ void ServeClient(SOCKET client) {
         const bool hasProcessedState = state.enabled && state.applied_frame > 0;
         if (state.camera_hook_active && hasProcessedState)  flags |= kFlagCameraActive;
         const ChordEdges edges = ConsumeChordEdges();
-        const bool trackerRecenter = UdpReceiver_TryConsumeRecenterRequest();
-        if (edges.recenter || trackerRecenter) flags |= kFlagRecenter;
         if (edges.toggleTracking) flags |= kFlagToggleTracking;
         if (edges.cycleMode)      flags |= kFlagCycleMode;
         if (edges.yawMode)        flags |= kFlagToggleYaw;

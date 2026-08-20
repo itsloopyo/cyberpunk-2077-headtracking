@@ -176,7 +176,7 @@ do
         "expiry pulls an unfinished segment to the sample too")
 end
 
--- (8) Reset clears the stall clock along with everything else, so a recenter
+-- (8) Reset clears the stall clock along with everything else, so a scene change
 -- or scene transition cannot leave the next segment starting mid-decay.
 do
     local pi = primed(0, 25)

@@ -32,7 +32,7 @@ function NativeSettingsIntegration.isAvailable()
     return ok and ns ~= nil
 end
 
---- Set camera reference for recenter functionality
+--- Set camera reference so the settings UI can read live tracking state.
 --- @param camera_ref table Reference to Camera module instance
 function NativeSettingsIntegration:setCamera(camera_ref)
     self.camera = camera_ref
@@ -376,24 +376,6 @@ function NativeSettingsIntegration:registerSettings()
     -- ACTIONS SECTION
     -- =====================================================================
     ns.addSubcategory("/HeadTracking/Actions", "Actions")
-
-    -- Recenter button
-    ns.addButton(
-        "/HeadTracking/Actions/Recenter",
-        "Recenter",
-        "Set current head position as neutral (same as F9 hotkey).",
-        "Recenter Now",
-        45,
-        function()
-            if self.camera then
-                self.camera:recenter()
-                if self.ui then
-                    self.ui:showNotification("Head Tracking: Recentered", 2.0)
-                end
-                print("[HeadTracking] Recentered via Native Settings")
-            end
-        end
-    )
 
     -- Reset all settings button
     ns.addButton(

@@ -69,10 +69,6 @@ void UdpReceiver_PublishLatest() {
     s_lastPublishedTimestamp = timestamp;
 }
 
-bool UdpReceiver_TryConsumeRecenterRequest() {
-    return s_receiver.TryConsumeRecenterRequest();
-}
-
 bool UdpReceiver_IsRemoteConnection() {
     return s_receiver.IsRemoteConnection();
 }

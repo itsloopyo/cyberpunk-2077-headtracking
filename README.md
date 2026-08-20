@@ -97,7 +97,7 @@ You can use a VR headset purely as a head tracker. There is no VR rendering, you
 1. Connect the headset to your PC with Air Link, Virtual Desktop, or a link cable, and start SteamVR.
 2. In OpenTrack, set **Input** to *SteamVR / OpenVR*. OpenTrack reads the headset's orientation from SteamVR.
 3. Set Output to *UDP over network* targeting `127.0.0.1:4242` as above, then click **Start**.
-4. Recenter in-game (`Home` or `Ctrl+Shift+T`) once you are looking forward at the screen.
+4. Centre the headset in SteamVR or OpenTrack while looking forward at the screen. The mod has no centre of its own.
 
 ### Webcam Setup
 
@@ -123,7 +123,6 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 
 | Action              | Nav-cluster | Chord           |
 |---------------------|-------------|-----------------|
-| Recenter            | `Home`      | `Ctrl+Shift+T`  |
 | Toggle tracking     | `End`       | `Ctrl+Shift+Y`  |
 | Cycle tracking mode | `Page Up`   | `Ctrl+Shift+G`  |
 | Toggle yaw mode     | `Page Down` | `Ctrl+Shift+H`  |
@@ -204,17 +203,21 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - `<Cyberpunk 2077>\red4ext\logs\HeadTrackingAim.log` says which case you are in. `[BuildRegistry] matched build profile ...` means the build is recognised. Otherwise it prints the running EXE's fingerprint, every build it knows about, and whether your game is newer than the mod (check the releases page for an update), older (let your store finish updating), or repacked.
 - Head tracking itself, the camera, and projectile aim decoupling do not depend on those hooks and keep working either way.
 
+**Which log to send when you report a problem.**
+- `<Cyberpunk 2077>\red4ext\logs\HeadTrackingAim.log`. It starts fresh every time the game launches, and the launch before it is kept alongside as `HeadTrackingAim.prev.log`. If the game crashed and you have already restarted it, the session you want is the `.prev` one.
+- The Lua side prints to the CET console, saved to `bin\x64\plugins\cyber_engine_tweaks\scripting.log`.
+
 **Mod not loading.**
 - Confirm CET opens in-game (default key `~`). If it does not, fix CET first.
 - An out-of-date CET or RED4ext will not initialise on a current game build, and takes every mod under it down with it. Re-run `install.cmd /upgrade-deps` to replace them with the bundled versions.
-- Check `<Cyberpunk 2077>\red4ext\logs\red4ext.log` for `[HeadTrackingAim] UDP receiver listening on port 4242`. If that line is absent, RED4ext did not load the native plugin. Reinstall RED4ext and re-run `install.cmd`.
+- Check `<Cyberpunk 2077>\red4ext\logs\HeadTrackingAim.log` for `[HeadTrackingAim] UDP receiver listening on port 4242`. If the file is not there at all, RED4ext did not load the native plugin, and `red4ext.log` in the same folder says why. Reinstall RED4ext and re-run `install.cmd`.
 - Open the CET console and look for `[HeadTracking]` messages from the Lua side.
 
 **No tracking response.**
 - Make sure OpenTrack (or your phone app) is sending UDP to `127.0.0.1:4242` and has been **Start**ed.
 - Allow UDP 4242 through Windows Firewall.
 - If the tracker runs on a different machine, send to your gaming PC's LAN IP, not `127.0.0.1`.
-- If `red4ext.log` shows `Failed to bind UDP port 4242`, another app is holding the port (a second head-tracking mod, or a leftover game process). Close it and tracking comes back on its own within about half a second. The receiver retries the port every 500ms in the background and logs `Bound UDP port 4242` when it gets in, so no game restart is needed.
+- If `HeadTrackingAim.log` shows `Failed to bind UDP port 4242`, another app is holding the port (a second head-tracking mod, or a leftover game process). Close it and tracking comes back on its own within about half a second. The receiver retries the port every 500ms in the background and logs `Bound UDP port 4242` when it gets in, so no game restart is needed.
 
 **Jittery or unstable tracking.**
 - Raise the smoothing parameter that matches your tracker: `remote_smoothing` for a phone or other device on the network, `local_smoothing` for a tracker running on this PC. 0.3 to 0.5 is a heavy but usable setting.
