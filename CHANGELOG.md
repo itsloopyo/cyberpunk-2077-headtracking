@@ -46,6 +46,11 @@
 
 ### Changed
 
+- The mod no longer captures a centre on its own. Every tracker centres itself,
+  so that was a second centre in series with the tracker's own: pressing Center
+  in opentrack left the view parked at the negated drift until the recenter
+  hotkey was pressed too. The centre is now identity until the hotkey or a
+  Headcam CENTER press asks for one.
 - Vendored TweakXL bumped to 1.11.4.
 - `uninstall.cmd` removes the mod's four hotkeys from CET's shared
   `bindings.json` and deletes the backup it made at install time, rather

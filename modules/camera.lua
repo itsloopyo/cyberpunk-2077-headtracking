@@ -246,13 +246,6 @@ function Camera.new(settings)
     -- Each frame: undo last offset, then apply new offset
     self.last_head_quat = nil
 
-    -- Auto-recenter on first fresh packet (CameraUnlock rule 8).
-    -- Counts stabilization frames while armed and fires recenter() once the
-    -- tracker has had a few frames to stabilize. Armed at startup and on
-    -- world load / session start only - never re-armed by a data gap, so a
-    -- tracker that stops and resumes (face lost mid-session) keeps its center.
-    self.stabilization_frames = 0
-    self.pending_auto_recenter = true  -- true on startup so first-ever packets trigger recenter
     self.pending_initial_reset = true  -- one-shot hard reset on first frame cam is available
 
     -- Statistics for debugging
@@ -297,7 +290,9 @@ function Camera.new(settings)
 
     -- Position pipeline state (shares the rotation smoothing parameters).
     self.pos_center = { x = 0, y = 0, z = 0 }
-    self.pos_center_set = false
+    -- Identity until the hotkey asks otherwise. pos_center_set doubles as the
+    -- hotkey's deferred-capture latch, so it starts true rather than absent.
+    self.pos_center_set = true
     self.pos_smooth = { x = 0, y = 0, z = 0 }
     self.pos_local = { x = 0, y = 0, z = 0 }
     self.pos_applied = false   -- have we ever written a non-zero position?
@@ -953,11 +948,6 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     self.stats.last_applied_roll = self.smooth_roll
 end
 
---- Stabilization frames required after arming before we auto-recenter. The
---- first few packets from a freshly connected tracker are often garbage
---- (initialization, warmup).
-local AUTO_RECENTER_STABILIZATION_FRAMES = 5
-
 --- One-shot startup reset: forces cam.localOrientation to identity and
 --- clears the undo-chain caches the first frame the FPP cam is available.
 --- Independent of tracker packets so the camera lands in a clean state
@@ -971,7 +961,10 @@ function Camera:tryInitialReset()
     self.last_clean_local_quat = nil
     self._computed_head_quat = nil
     self._prev_head_quat = nil
-    self.pos_center_set = false
+    self.pos_center.x = 0
+    self.pos_center.y = 0
+    self.pos_center.z = 0
+    self.pos_center_set = true
     self.pos_smooth.x = 0
     self.pos_smooth.y = 0
     self.pos_smooth.z = 0
@@ -981,30 +974,6 @@ function Camera:tryInitialReset()
     self.pos_applied = false
     self.pending_initial_reset = false
     print("[HeadTracking] Initial reset applied (cam.localOrientation -> identity)")
-end
-
---- Note that a fresh packet was just applied. Ticks the stabilization counter
---- and fires auto-recenter on the Nth fresh packet after arming.
-function Camera:noteFreshPacket()
-    if self.pending_auto_recenter then
-        self.stabilization_frames = self.stabilization_frames + 1
-        if self.stabilization_frames >= AUTO_RECENTER_STABILIZATION_FRAMES then
-            self:recenter()
-            self.pending_auto_recenter = false
-            self.stabilization_frames = 0
-            print("[HeadTracking] Auto-recentered after tracker connection")
-        end
-    end
-end
-
---- Arm a fresh auto-recenter. The next batch of fresh packets (after the
---- stabilization window) will be captured as the new neutral pose. Called on
---- world load / session start so every spawn re-centers on the player's
---- current head pose, instead of relying on the one-shot first-connection
---- recenter which can fire stale or be missed.
-function Camera:armAutoRecenter()
-    self.pending_auto_recenter = true
-    self.stabilization_frames = 0
 end
 
 --- Store current head position as the neutral/center position
@@ -1072,8 +1041,8 @@ end
 --- ("call on recenter, scene transitions, or tracking re-enable").
 ---
 --- Keyed off the armed flag rather than off a press, so every path that arms a
---- recenter is covered: the hotkey, the tracker's own CENTER button arriving
---- over the HCAM trailer, and the auto-recenter on tracker connection. The
+--- recenter is covered: the hotkey and the tracker's own CENTER button arriving
+--- over the HCAM trailer. The
 --- capture stays armed until a sample actually lands, so a frame with no fresh
 --- packet resets again and still captures a raw value.
 --- @param interpolator table PoseInterpolator instance feeding apply()
@@ -1086,11 +1055,11 @@ end
 --- Stop influencing the camera, leaving calibration alone.
 ---
 --- Peels our baked head rotation back out of cam.localOrientation and returns
---- the local position offset to neutral. The recenter offset, the smoothing
---- state and the auto-recenter arming are all left untouched, which is what
---- makes this the right teardown for a short, frequent suppression: aiming
---- down sights happens many times a firefight, and re-arming the auto-recenter
---- on every one of them would walk the neutral pose around all session.
+--- the local position offset to neutral. The recenter offset and the smoothing
+--- state are left untouched, which is what makes this the right teardown for a
+--- short, frequent suppression: aiming down sights happens many times a
+--- firefight, and discarding the neutral pose on every one of them would walk
+--- it around all session.
 ---
 --- The peel is conditional on the engine having KEPT our last write. Camera
 --- state events - ADS in/out among them - overwrite cam.localOrientation with
@@ -1130,16 +1099,13 @@ function Camera:suspend()
 end
 
 --- Full teardown: suspend, then discard the smoothed values and peel-state
---- caches and re-arm the auto-recenter, so the camera is back at the game's
---- default orientation. For the long suppressions (menus, loading, the user
+--- caches, so the camera is back at the game's default orientation. For the long suppressions (menus, loading, the user
 --- toggling tracking off) where resuming should start from a clean neutral
 --- rather than continue mid-motion.
 function Camera:reset()
     self.smooth_yaw = 0
     self.smooth_pitch = 0
     self.smooth_roll = 0
-    self.pending_auto_recenter = true
-    self.stabilization_frames = 0
     self.last_clean_local_quat = nil
 
     self:suspend()
@@ -1180,7 +1146,7 @@ function Camera:setRecenterOffset(yaw, pitch, roll)
 end
 
 --- Recenter the position pipeline. Captures the current raw input as the
---- new zero point. Called explicitly and also on first packet.
+--- new zero point. Driven by the hotkey, through the deferred latch.
 function Camera:recenterPosition(rx, ry, rz)
     self.pos_center.x = rx or 0
     self.pos_center.y = ry or 0

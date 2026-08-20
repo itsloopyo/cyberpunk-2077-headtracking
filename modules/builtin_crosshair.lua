@@ -38,29 +38,6 @@ local function _readCamZoom(cam) return cam:GetZoom() end
 local function _getRootWidget(ctrl) return ctrl:GetRootWidget() end
 local function _getRootCompoundWidget(ctrl) return ctrl:GetRootCompoundWidget() end
 local function _rootSetMargin(root, m) root:SetMargin(m) end
-local function _widgetSetTranslation(widget, x, y)
-    local ok = pcall(function() widget:SetTranslation(x, y) end)
-    if ok then return true end
-    ok = pcall(function() widget:SetTranslation(Vector2.new({ X = x, Y = y })) end)
-    if ok then return true end
-    ok = pcall(function() widget:SetTranslation(Vector2.new({ x = x, y = y })) end)
-    if ok then return true end
-    ok = pcall(function() widget:SetTranslation(inkVector2.new({ X = x, Y = y })) end)
-    if ok then return true end
-    return false
-end
-local function _widgetSetOffset(widget, x, y)
-    pcall(_rootSetMargin, widget,
-        inkMargin.new({ left = x, top = y, right = 0, bottom = 0 }))
-    _widgetSetTranslation(widget, x, y)
-end
-local function _widgetSetHidden(widget, hidden)
-    local visible = not hidden
-    local ok = pcall(function() widget:SetVisible(visible) end)
-    if not ok then
-        pcall(function() widget:SetOpacity(visible and 1.0 or 0.0) end)
-    end
-end
 
 -- Lock-on gating. The in-car / combat reticle is the SAME widget the engine
 -- moves onto an enemy when a target is locked: when locked the game writes the
@@ -106,6 +83,17 @@ local LOCK_CHILD_TRANSLATION_PX = 8.0
 -- with the head"). Disabled: the margin-based _engineDriving signal still backs
 -- off for a genuine root-margin lock projection, without the spread false-fire.
 local USE_LOCK_CHILD_GATE = false
+
+-- Controllers that draw an on-hit / on-kill marker. Each one is a separate
+-- inkGameController owning its own root widget in the HUD layer, so the
+-- reticle shove (which only reaches crosshair controller roots) leaves them
+-- pinned at screen centre. Sources, from the game's script table:
+--   cyberpunk\UI\weapons\crosshairs\kill_marker.script
+--   cyberpunk\UI\widgets\cpo\targetHitIndicator.script
+local HIT_MARKER_CLASSES = {
+    'KillMarkerGameController',
+    'TargetHitIndicatorGameController',
+}
 
 -- DebugLog is required lazily on first use so this module's file-scope is
 -- side-effect free and cannot fail at require-time inside CET's sandbox.
@@ -169,10 +157,12 @@ function BuiltinCrosshair.new(settings, camera)
     -- margin does nothing, but we never read back where the GAME places them
     -- each frame. _np_probe_frames > 0 enables the per-frame read logger.
     self.nameplates = {}
-    -- Read-only probe targets: controllers that might draw the on-hit "plink"
-    -- but are NOT crosshair controllers (so never written by _writeOffset).
-    -- Populated by the DamageIndicator observer; scanned by the hit-marker probe.
-    self.probe_extra = {}
+    -- On-hit / on-kill marker controllers. Each is its own inkGameController
+    -- with its own root widget in the HUD layer (kill_marker.script,
+    -- targetHitIndicator.script), NOT a child of the crosshair, so the reticle
+    -- shove never reaches them and they draw at screen centre while the reticle
+    -- sits on the true aim point. They get the same offset as the reticle.
+    self.hit_markers = {}
     self._np_probe_frames = 0
     self._ch_probe_frames = 0
     self._hm_probe_frames = 0
@@ -192,7 +182,10 @@ function BuiltinCrosshair.new(settings, camera)
     -- the game already projects correctly through the head-rotated cam) versus
     -- a genuine separate-camera projection. Toggle via DiagCrosshairSuppress.
     self._suppress_writes = false
-    self._suppress_hitmarker = true
+
+    -- Diagnostic: when false, the hit/kill marker controllers are left where
+    -- the game puts them (screen centre). Toggle via DiagShoveHitMarker.
+    self._shove_hitmarker = true
 
     -- Scale factor applied to the in-car bracket offset. A margin unit on the
     -- DriverCombat bracket canvas is half a screen pixel (the dot's controller
@@ -298,6 +291,24 @@ function BuiltinCrosshair:_untrackNameplate(this)
     for i = #self.nameplates, 1, -1 do
         if self.nameplates[i] == this then
             table.remove(self.nameplates, i)
+            return
+        end
+    end
+end
+
+function BuiltinCrosshair:_trackHitMarker(class, this)
+    for i = 1, #self.hit_markers do
+        if self.hit_markers[i].ctrl == this then return end
+    end
+    self.hit_markers[#self.hit_markers + 1] = { ctrl = this, class = class }
+    dlog(string.format("[HeadTracking:HitMarker] captured (%s); live count=%d",
+        class, #self.hit_markers))
+end
+
+function BuiltinCrosshair:_untrackHitMarker(this)
+    for i = #self.hit_markers, 1, -1 do
+        if self.hit_markers[i].ctrl == this then
+            table.remove(self.hit_markers, i)
             return
         end
     end
@@ -850,15 +861,12 @@ function BuiltinCrosshair:_resolveRoot(entry)
 end
 
 -- Per-frame probe (throttled every 3rd frame). Scans every captured crosshair
--- controller AND every read-only probe_extra controller (DamageIndicator). For
--- each, logs the root margin we wrote alongside each visible widget the FIRST
--- time its name appears during the armed window. The always-present reticle
--- parts log once; a transient on-hit plink logs when it pops, with its trans
--- and owning controller. Read it like this: if the plink's controller is a
--- crosshair one whose rootMargin is our offset, the plink should follow us
--- (so it's likely a counter-centred child or a separate controller); if it's
--- DamageIndicator (or any non-crosshair controller, rootMargin ~0), that
--- controller's root is what we must shove by our offset.
+-- controller AND every captured hit/kill marker controller. For each, logs the
+-- root margin we wrote alongside each visible widget the FIRST time its name
+-- appears during the armed window. The always-present reticle parts log once; a
+-- transient on-hit marker logs when it pops, with its translation and owning
+-- controller. If a marker pops under a controller whose rootMargin is ~0 while
+-- ours is off-centre, that controller's root is one we are not yet shoving.
 function BuiltinCrosshair:_probeHitMarkerTick()
     self._hm_probe_frames = self._hm_probe_frames - 1
     self._hm_probe_log_ctr = (self._hm_probe_log_ctr or 0) + 1
@@ -885,7 +893,7 @@ function BuiltinCrosshair:_probeHitMarkerTick()
     end
 
     for i = 1, #self.controllers do scan(self.controllers[i], "ctrl[" .. i .. "]") end
-    for i = 1, #self.probe_extra do scan(self.probe_extra[i], "extra[" .. i .. "]") end
+    for i = 1, #self.hit_markers do scan(self.hit_markers[i], "marker[" .. i .. "]") end
 end
 
 --- Arm the hit-marker discovery probe for `seconds` (default 10). Run with
@@ -898,8 +906,8 @@ function BuiltinCrosshair:probeHitMarker(seconds)
     self._hm_probe_frames = math.floor(s * 60)
     self._hm_probe_log_ctr = 0
     self._hm_seen = {}
-    dlog(string.format("[HeadTracking:HitMarker] armed for ~%ds (%d frames). probe_extra=%d. Turn head off-centre and fire at an enemy repeatedly.",
-        s, self._hm_probe_frames, #self.probe_extra))
+    dlog(string.format("[HeadTracking:HitMarker] armed for ~%ds (%d frames). markers=%d. Turn head off-centre and fire at an enemy repeatedly.",
+        s, self._hm_probe_frames, #self.hit_markers))
 end
 
 --- Start the read-probe for `seconds` of gameplay (default 6s @ 60fps).
@@ -1052,66 +1060,17 @@ function BuiltinCrosshair:_installObservers()
         this_self:_untrackNameplate(this)
     end)
 
-    -- Damage indicator (candidate owner of the on-hit "plink"). Read-only
-    -- probe target; never written. Tracked separately so _writeOffset leaves
-    -- it alone while the hit-marker probe inspects it.
-    tryBind('ObserveAfter', 'gameuiDamageIndicatorGameController', 'OnInitialize', function(this)
-        for i = 1, #this_self.probe_extra do
-            if this_self.probe_extra[i].ctrl == this then return end
-        end
-        this_self.probe_extra[#this_self.probe_extra + 1] =
-            { ctrl = this, class = 'gameuiDamageIndicatorGameController' }
-        dlog(string.format("[HeadTracking:HitMarker] DamageIndicator captured; probe_extra=%d", #this_self.probe_extra))
-    end)
-    tryBind('Observe', 'gameuiDamageIndicatorGameController', 'OnUpdate', function(this, dt)
-        for i = 1, #this_self.probe_extra do
-            if this_self.probe_extra[i].ctrl == this then
-                if this_self._suppress_hitmarker then
-                    this_self:_suppressHitMarker()
-                end
-                return
-            end
-        end
-        this_self.probe_extra[#this_self.probe_extra + 1] =
-            { ctrl = this, class = 'gameuiDamageIndicatorGameController' }
-        if this_self._suppress_hitmarker then
-            this_self:_suppressHitMarker()
-        end
-    end)
-    tryBind('Observe', 'gameuiDamageIndicatorGameController', 'OnUninitialize', function(this)
-        for i = #this_self.probe_extra, 1, -1 do
-            if this_self.probe_extra[i].ctrl == this then table.remove(this_self.probe_extra, i) end
-        end
-    end)
-
-    tryBind('ObserveAfter', 'gameuiDamageIndicatorPartLogicController', 'OnInitialize', function(this)
-        for i = 1, #this_self.probe_extra do
-            if this_self.probe_extra[i].ctrl == this then return end
-        end
-        this_self.probe_extra[#this_self.probe_extra + 1] =
-            { ctrl = this, class = 'gameuiDamageIndicatorPartLogicController' }
-        dlog(string.format("[HeadTracking:HitMarker] DamageIndicatorPart captured; probe_extra=%d", #this_self.probe_extra))
-    end)
-    tryBind('Observe', 'gameuiDamageIndicatorPartLogicController', 'OnUpdate', function(this, dt)
-        for i = 1, #this_self.probe_extra do
-            if this_self.probe_extra[i].ctrl == this then
-                if this_self._suppress_hitmarker then
-                    this_self:_suppressHitMarker()
-                end
-                return
-            end
-        end
-        this_self.probe_extra[#this_self.probe_extra + 1] =
-            { ctrl = this, class = 'gameuiDamageIndicatorPartLogicController' }
-        if this_self._suppress_hitmarker then
-            this_self:_suppressHitMarker()
-        end
-    end)
-    tryBind('Observe', 'gameuiDamageIndicatorPartLogicController', 'OnUninitialize', function(this)
-        for i = #this_self.probe_extra, 1, -1 do
-            if this_self.probe_extra[i].ctrl == this then table.remove(this_self.probe_extra, i) end
-        end
-    end)
+    -- On-hit / on-kill markers. Both live in their own inkGameController with
+    -- their own HUD root widget, so the reticle shove leaves them at screen
+    -- centre; capture them here and give them the reticle's offset each frame.
+    for _, cls in ipairs(HIT_MARKER_CLASSES) do
+        tryBind('ObserveAfter', cls, 'OnInitialize', function(this)
+            this_self:_trackHitMarker(cls, this)
+        end)
+        tryBind('Observe', cls, 'OnUninitialize', function(this)
+            this_self:_untrackHitMarker(this)
+        end)
+    end
 
     for _, cls in ipairs(classes) do
         tryBind('Observe', cls, 'OnInitialize', function(this)
@@ -1456,73 +1415,28 @@ function BuiltinCrosshair:_writeNameplates(dx, dy)
     end
 end
 
--- Collect all descendants whose name equals `target` into `out` (depth-capped).
-local function _collectByName(widget, target, depth, max_depth, out)
-    if widget == nil or depth > max_depth then return end
-    local name
-    pcall(function()
-        local n = widget:GetName()
-        name = (Game and Game.NameToString and Game.NameToString(n)) or tostring(n)
-    end)
-    if name == target then out[#out + 1] = widget end
-    local ok_n, n = pcall(function() return widget:GetNumChildren() end)
-    if ok_n and type(n) == "number" and n > 0 then
-        for i = 0, n - 1 do
-            local ok_c, child = pcall(function() return widget:GetWidgetByIndex(i) end)
-            if ok_c and child ~= nil then
-                _collectByName(child, target, depth + 1, max_depth, out)
-            end
-        end
-    end
-end
-
--- Shove the on-hit confirmation container by the dot offset. Depending on HUD
--- state it can live under a crosshair controller or the damage-indicator
--- controller, and it does not inherit the crosshair root margin.
-function BuiltinCrosshair:_writeHitMarker(dx, dy)
-    local function writeEntry(entry, write_root)
-        local root = self:_resolveRoot(entry)
+-- Shove the on-hit / on-kill marker roots by the reticle offset so the marker
+-- confirms the shot where the reticle is drawn, not at screen centre. These
+-- controllers own their own HUD root widget and inherit nothing from the
+-- crosshair, so nothing else in this module reaches them.
+function BuiltinCrosshair:_writeHitMarkers(dx, dy)
+    for i = 1, #self.hit_markers do
+        local root = self:_resolveRoot(self.hit_markers[i])
         if root ~= nil then
-            if write_root then
-                _widgetSetOffset(root, dx, dy)
-            end
-            local found = {}
-            _collectByName(root, "root", 0, 10, found)
-            for j = 1, #found do
-                _widgetSetOffset(found[j], dx, dy)
-            end
+            pcall(_rootSetMargin, root,
+                inkMargin.new({ left = dx, top = dy, right = 0, bottom = 0 }))
         end
-    end
-    for i = 1, #self.controllers do
-        writeEntry(self.controllers[i], false)
-    end
-    for i = 1, #self.probe_extra do
-        writeEntry(self.probe_extra[i], true)
     end
 end
 
-function BuiltinCrosshair:_suppressHitMarker()
-    local function hideEntry(entry)
-        local root = self:_resolveRoot(entry)
-        if root ~= nil then
-            local found = {}
-            _collectByName(root, "root", 0, 10, found)
-            for j = 1, #found do
-                _widgetSetHidden(found[j], true)
-            end
-        end
-    end
-    for i = 1, #self.probe_extra do
-        hideEntry(self.probe_extra[i])
-    end
-end
-
---- Diagnostic toggle for the on-hit 'root' confirmation widget offset.
----   GetMod("HeadTracking").DiagShoveHitMarker(true)
+--- Diagnostic toggle for the on-hit / on-kill marker offset. Off leaves the
+--- marker where the game draws it (screen centre).
+---   GetMod("HeadTracking").DiagShoveHitMarker(false)
 function BuiltinCrosshair:setShoveHitMarker(on)
-    self._suppress_hitmarker = not on
-    if self._suppress_hitmarker then self:_suppressHitMarker() end
-    dlog(string.format("[HeadTracking:HitMarker] stock plink %s", self._suppress_hitmarker and "suppressed" or "visible"))
+    self._shove_hitmarker = on and true or false
+    if not self._shove_hitmarker then self:_writeHitMarkers(0, 0) end
+    dlog(string.format("[HeadTracking:HitMarker] shove %s (live markers=%d)",
+        self._shove_hitmarker and "ON" or "OFF", #self.hit_markers))
 end
 
 --- TEST toggle: ride the nameplate roots with the dot offset.
@@ -1539,7 +1453,7 @@ function BuiltinCrosshair:_resetAll()
     self._last_dy = 0
     self:_writeOffset(0, 0)
     self:_writeBrackets(0, 0)
-    if self._suppress_hitmarker then self:_suppressHitMarker() end
+    self:_writeHitMarkers(0, 0)
     if self._shove_nameplate then self:_writeNameplates(0, 0) end
 end
 
@@ -1601,7 +1515,7 @@ function BuiltinCrosshair:tick(tracking_allowed)
     -- nameplate no longer suppresses the free-aim compensation.
     self:_writeBrackets(dx, dy)
     if self._shove_nameplate then self:_writeNameplates(dx, dy) end
-    if self._suppress_hitmarker then self:_suppressHitMarker() end
+    if self._shove_hitmarker then self:_writeHitMarkers(dx, dy) end
 end
 
 --- Arm the FOV/zoom diagnostic for `seconds` (default 8). Run it, then aim
@@ -1635,8 +1549,9 @@ function BuiltinCrosshair:isEnabled() return self.enabled end
 
 function BuiltinCrosshair:dumpStatus()
     dlog("==== [HeadTracking:Reticle] status dump ====")
-    dlog(string.format("  enabled=%s  live_ctrls=%d  last_dx=%.1f last_dy=%.1f",
-        tostring(self.enabled), #self.controllers, self._last_dx, self._last_dy))
+    dlog(string.format("  enabled=%s  live_ctrls=%d  hit_markers=%d  last_dx=%.1f last_dy=%.1f",
+        tostring(self.enabled), #self.controllers, #self.hit_markers,
+        self._last_dx, self._last_dy))
     for k, v in pairs(self._stat) do
         dlog(string.format("  %s = %s", k, tostring(v)))
     end

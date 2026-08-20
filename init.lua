@@ -485,10 +485,9 @@ local function onUpdateImpl(deltaTime)
         -- resume frame doesn't peel a stale quat against an engine-reset camera.
         --
         -- ADS suspends rather than resets. It is measured in seconds and
-        -- happens many times a firefight, so it must not re-arm the
-        -- auto-recenter (the neutral pose would drift with every shot lined
-        -- up) or throw away the smoothing state (lowering the weapon would
-        -- swing the view back through the whole head angle).
+        -- happens many times a firefight, so it must not throw away the
+        -- smoothing state: lowering the weapon would swing the view back
+        -- through the whole head angle.
         if state:getReason() == State.REASON.ADS then
             camera:suspend()
         else
@@ -597,7 +596,6 @@ local function onUpdateImpl(deltaTime)
 
     if data then
         perf:recordPacket()
-        if camera.noteFreshPacket then camera:noteFreshPacket() end
     end
 
     -- Order matters: aim:update stages the native push using aim_state.enabled,
@@ -764,12 +762,6 @@ function handleCycleMode()
     settings:set("position_enabled", next_pos)
     if state then state:refresh() end
 
-    -- When position toggles on (or the rotation switch nudges anything),
-    -- re-capture the zero point on the next packet so the head doesn't
-    -- snap to whatever raw offset was last cached.
-    if camera and next_pos and not pos_on then
-        camera.pos_center_set = false
-    end
     -- When rotation flips off, peel any baked head rotation back out of
     -- cam.localOrientation so we don't leave the player frozen-headed.
     if camera and rot_on and not next_rot then

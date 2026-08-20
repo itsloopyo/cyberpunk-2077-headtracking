@@ -155,14 +155,12 @@ function State:init(camera, settings)
 
         GameUI.Listen("LoadingFinish", function()
             self:startWarmup()
-            if self.camera and self.camera.armAutoRecenter then self.camera:armAutoRecenter() end
             self:onStateChange("loading_finish")
         end)
 
         -- Session events
         GameUI.Listen("SessionStart", function()
             self:startWarmup()
-            if self.camera and self.camera.armAutoRecenter then self.camera:armAutoRecenter() end
             self:onStateChange("session_start")
         end)
 
