@@ -118,8 +118,8 @@ if (Test-Path $dllPath) {
 }
 
 # Take our hotkeys back out of CET's shared bindings.json. Leaving a
-# HeadTracking section behind keeps four keys claimed in CET's binding UI for a
-# mod that is no longer installed, and the next mod to want Home or End sees
+# HeadTracking section behind keeps three keys claimed in CET's binding UI for a
+# mod that is no longer installed, and the next mod to want End or PageUp sees
 # them as taken.
 function Remove-CetBindings {
     param([string]$GameDir)

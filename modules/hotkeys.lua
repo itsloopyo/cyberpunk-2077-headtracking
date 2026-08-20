@@ -143,11 +143,10 @@ function Hotkeys.ensure()
 
     doc.HeadTracking = doc.HeadTracking or {}
     local ht = doc.HeadTracking
-    local used = collectUsedVks(doc)
 
     -- Retired actions: clear any stale bindings from previous mod versions
-    -- so the keys (Insert here) are returned to the user / other mods.
-    local RETIRED = { "ToggleReticle" }
+    -- so whatever keys they held are returned to the user / other mods.
+    local RETIRED = { "ToggleReticle", "RecenterHeadTracking" }
     local dirty = false
     for _, action in ipairs(RETIRED) do
         if ht[action] ~= nil then
@@ -156,6 +155,10 @@ function Hotkeys.ensure()
             print("[HeadTracking:Hotkeys] cleared retired bind for " .. action)
         end
     end
+
+    -- Scan after the retired clear, so a key a retired action was holding is
+    -- available to allocate on this run rather than one launch later.
+    local used = collectUsedVks(doc)
 
     local bound = {}
     local kept = {}

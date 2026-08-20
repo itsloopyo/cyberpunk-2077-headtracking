@@ -32,6 +32,10 @@
   roughly 325 KB per hour of play with no upper bound across
   sessions, and the startup lines worth reading ended up buried.
 
+- The Lua side's `crash-trace.log` and `yaw-diag.log` are emptied at startup.
+  Both were append-only, so a file sent in for diagnosis carried every earlier
+  session's errors alongside the one being reported.
+
 - The native plugin now fingerprints the running `Cyberpunk2077.exe`
   (TimeDateStamp + SizeOfImage + CheckSum) and routes its hardcoded
   addresses through a build-profile registry. On a build it does not
@@ -68,13 +72,8 @@
   Two centres in series was the problem: when the view was off, you could not
   tell which side was wrong, and switching between trackers meant recentring in
   both. With one centre there is nothing to disagree about.
-- The mod no longer captures a centre on its own. Every tracker centres itself,
-  so that was a second centre in series with the tracker's own: pressing Center
-  in opentrack left the view parked at the negated drift until the recenter
-  hotkey was pressed too. The centre is now identity until the hotkey or a
-  Headcam CENTER press asks for one.
 - Vendored TweakXL bumped to 1.11.4.
-- `uninstall.cmd` removes the mod's four hotkeys from CET's shared
+- `uninstall.cmd` removes the mod's three hotkeys from CET's shared
   `bindings.json` and deletes the backup it made at install time, rather
   than leaving a HeadTracking section behind claiming keys for a mod
   that is gone. Other mods' bindings are preserved.

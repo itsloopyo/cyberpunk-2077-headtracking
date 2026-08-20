@@ -102,6 +102,25 @@ end
 -- subsequent crash can't lose it) AND prints to console. The next repro names
 -- the faulting site so the root cause can be fixed; meanwhile a stray error
 -- can no longer take the whole game down.
+-- Start each launch with an empty crash-trace.log. It is opened append-only at
+-- every write so a crash cannot lose the tail, which without this would carry
+-- every previous session's errors into the file a user is asked to send. The
+-- session that crashed is still recoverable: CET keeps the console output in
+-- rotated scripting.N.log generations, and the native plugin keeps its own
+-- HeadTrackingAim.prev.log.
+local function _truncateCrashTrace()
+    local f = io.open("crash-trace.log", "w")
+    if f then f:close() end
+end
+
+-- Emptied per launch rather than per probe: DiagYawMode and DiagYawBasis are
+-- separate console commands that both append here, so truncating when the probe
+-- arms would throw away a basis block the user had just captured.
+local function _truncateYawDiag()
+    local f = io.open("yaw-diag.log", "w")
+    if f then f:close() end
+end
+
 -- Per-callback log throttle: a per-frame Override that throws would otherwise
 -- fsync crash-trace.log 60x/sec. Always log the FIRST occurrence of a given
 -- callback name immediately, then at most once every 2s for that name.
@@ -276,6 +295,8 @@ end
 
 registerForEvent("onInit", function()
     if DebugLog and DebugLog.init then pcall(DebugLog.init) end
+    _truncateCrashTrace()
+    _truncateYawDiag()
     dlog("[HeadTracking] Initializing...")
 
     if #require_errors > 0 then
@@ -651,8 +672,8 @@ local function diagCleanCam(force)
 end
 
 -- Standard CameraUnlock hotkey contract.
--- Defaults per rule: Home / End / PageUp / PageDown / Insert (nav cluster) with
--- Ctrl+Shift+{T,Y,G,H,U} chord alternatives drawn from the T/Y/U/G/H/J cluster.
+-- Defaults per rule: End / PageUp / PageDown (nav cluster) with
+-- Ctrl+Shift+{Y,G,H} chord alternatives drawn from the T/Y/U/G/H/J cluster.
 -- Keys are user-rebindable from CET's Bindings menu; see bindings.json for
 -- shipped defaults.
 
@@ -677,8 +698,8 @@ function handleToggleTracking()
     end
 end
 -- End / Ctrl+Shift+Y are polled natively in TcpServer.cpp. CET registerHotkey
--- dispatch crashes before entering Lua on this game build (same as Home), so do
--- not bind End here.
+-- dispatch crashes before entering Lua on this game build, so do not bind End
+-- here.
 
 -- PageUp  /  Ctrl+Shift+G - Cycle tracking mode (3-state cycle).
 -- 6DOF isn't wired to the Cyberpunk camera yet; the setting flips so the
@@ -720,8 +741,8 @@ function handleCycleMode()
     print("[HeadTracking] tracking mode -> rot=" .. tostring(next_rot) .. " pos=" .. tostring(next_pos))
 end
 -- PageUp / Ctrl+Shift+G are polled natively in TcpServer.cpp. CET registerHotkey
--- dispatch crashes before entering Lua on this game build (same as Home), so do
--- not bind PageUp here.
+-- dispatch crashes before entering Lua on this game build, so do not bind
+-- PageUp here.
 
 -- PageDown - Toggle yaw mode (world <-> local)
 function handleToggleYawMode()
@@ -744,8 +765,8 @@ function handleToggleYawMode()
     print("[HeadTracking] yaw_mode -> " .. next_mode)
 end
 -- PageDown / Ctrl+Shift+H are polled natively in TcpServer.cpp. CET registerHotkey
--- dispatch crashes before entering Lua on this game build (same as Home), so do
--- not bind PageDown here.
+-- dispatch crashes before entering Lua on this game build, so do not bind
+-- PageDown here.
 
 -- Public API for the CET console. Reachable as
 --   GetMod("HeadTracking").DiagCleanCam(true)

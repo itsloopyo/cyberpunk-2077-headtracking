@@ -284,6 +284,9 @@ function Merge-CetBindings {
     if ($ht.Contains("ToggleReticle")) {
         $ht.Remove("ToggleReticle")
     }
+    if ($ht.Contains("RecenterHeadTracking")) {
+        $ht.Remove("RecenterHeadTracking")
+    }
 
     # Collect VK values already claimed by anything in the file, INCLUDING our
     # own section (for the actions we're going to keep). We'll add to this as
@@ -665,7 +668,7 @@ if (-not $result) {
     exit 1
 }
 
-# Seed / migrate CET hotkey bindings so Home/End/PageUp/Insert/PageDown work
+# Seed / migrate CET hotkey bindings so End/PageUp/PageDown work
 # without the user having to open the CET bindings UI.
 Write-Host ""
 Write-Info "Merging HeadTracking hotkey defaults into CET bindings.json..."

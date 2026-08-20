@@ -281,7 +281,7 @@ if (Test-Path $readmePath) {
     $readmeChecks = @(
         @{ Pattern = "(?i)install"; Name = "Installation instructions" },
         @{ Pattern = "(?i)opentrack|udp|4242"; Name = "OpenTrack configuration" },
-        @{ Pattern = "(?i)hotkey|F8|F9|toggle|recenter"; Name = "Hotkey documentation" },
+        @{ Pattern = "(?i)hotkey|F8|F9|toggle"; Name = "Hotkey documentation" },
         @{ Pattern = "(?i)requirement|cet|cyber.engine.tweaks"; Name = "Requirements section" }
     )
 

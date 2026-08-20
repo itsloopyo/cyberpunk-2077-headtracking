@@ -226,7 +226,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 
 **Head tracking stops while aiming down sights.**
 - That is deliberate. Aiming down sights puts the camera on the weapon's sight line and that sight picture is the aim, so head rotation would swing the view off the sights while the rounds kept going where the sights point. Tracking pauses for as long as the sights are up and resumes when you lower the weapon.
-- It does not recentre on the way out: your neutral pose is the same before and after, so repeatedly aiming will not walk the centre around.
+- Your view is the same before and after, so repeatedly aiming will not walk it around.
 
 **Wrong rotation axis (camera moves the wrong way).**
 - Invert the offending axis in OpenTrack under **Output > Mapping** rather than in the mod. The mod has no inversion setting on purpose.
@@ -240,7 +240,7 @@ Download the new release ZIP and run `install.cmd` again. Your `config.json` is 
 
 Run `uninstall.cmd`. This removes the mod's Lua tree under `bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\`, the `HeadTrackingAim.dll` native plugin, and the TweakXL yaml under `r6\tweaks\`, which restores stock hitscan gunfire.
 
-It also takes the mod's four hotkeys back out of CET's shared `bindings.json`, leaving every other mod's bindings untouched.
+It also takes the mod's three hotkeys back out of CET's shared `bindings.json`, leaving every other mod's bindings untouched.
 
 Cyber Engine Tweaks, RED4ext, and TweakXL are shared modding frameworks that your other mods likely depend on, so they are left in place even when you pass `uninstall.cmd /force`. Remove them by hand if you want the game fully vanilla.
 
