@@ -1,220 +1,88 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026 itsloopyo
 -- Tracking Data Receiver Module
--- Reads head pose from the native RED4ext plugin's TCP server.
+-- Reads head pose from the native RED4ext plugin.
 --
--- Why TCP instead of shared memory: CET's Lua sandbox does not always expose
--- the LuaJIT FFI module (some CET versions ship without it, others gate it
--- behind a setting). RedSocket gives us a TCP socket that always works, and
--- the native plugin runs a tiny TCP server alongside its UDP receiver.
+-- The plugin registers two global RTTI functions (native/src/ScriptChannel.cpp)
+-- and we call them straight out of CET as game functions:
 --
--- Port 4242 is shared between the UDP receiver (OpenTrack input) and the TCP
--- server (Lua read path) - same number, different protocols, no conflict.
--- Hardcoded on both sides so the two can't drift out of sync.
+--   Game.HeadTrackingPollPose()  -> ok, yaw, pitch, roll, x, y, z, flags
+--   Game.HeadTrackingPushState(yaw, pitch, roll, enabled, isAds,
+--                              qi, qj, qk, qr, propagatorInject) -> ok
 --
--- Protocol (over TCP):
---   client -> "G[,processed_yaw,processed_pitch,processed_roll,enabled,is_ads,qi,qj,qk,qr,propagator_inject]"
---   server -> "<seq>,<yaw:.4f>,<pitch:.4f>,<roll:.4f>[,<flags>]\r\n"
+-- This used to be a TCP socket served by the plugin and driven from Lua by
+-- RedSocket, a separate CET mod. That mod was never shipped with ours, so any
+-- user who did not already have it installed got a fatal error here, a dead
+-- mod, and a native log that looked completely healthy. A direct call has no
+-- transport to be missing, and no connect / retry / pending-request state to
+-- wedge.
 
 local TrackingInput = {}
 TrackingInput.__index = TrackingInput
 
 local DATA_FRESHNESS_WINDOW_S = 0.5
 
--- Max seconds we'll wait for a reply before assuming the request got lost
--- (game paused, alt-tab, TCP hiccup) and re-sending. Without this the
--- request_pending flag can wedge permanently and stall all tracking.
-local REQUEST_TIMEOUT_S = 1.0
-
 -- Reusable parsed-data table to avoid GC pressure.
 local reusable_data = { yaw = 0, pitch = 0, roll = 0, x = 0, y = 0, z = 0, seq = 0 }
 
--- native_flags bit layout, mirrored in native/src/TcpServer.cpp. Bits 0-1 are
--- live status (hook activity); bits 2+ are one-shot edges that native sets
--- when a chord/key transitions to down, and Lua clears on consume.
-local FLAG_CAMERA_ACTIVE    = 2   -- bit 1
-local FLAG_TOGGLE_TRACKING  = 8   -- bit 3
-local FLAG_CYCLE_MODE       = 16  -- bit 4
-local FLAG_TOGGLE_YAW       = 32  -- bit 5
-local FLAG_REMOTE_CONNECTION = 64 -- bit 6, live status (not an edge)
+-- native_flags bit layout, mirrored in native/src/ScriptChannel.cpp. Bits 1 and
+-- 6 are live status (hook activity, connection locality); bits 3-5 are one-shot
+-- edges that native sets when a chord/key transitions to down, and Lua clears
+-- on consume.
+local FLAG_CAMERA_ACTIVE     = 2   -- bit 1
+local FLAG_TOGGLE_TRACKING   = 8   -- bit 3
+local FLAG_CYCLE_MODE        = 16  -- bit 4
+local FLAG_TOGGLE_YAW        = 32  -- bit 5
+local FLAG_REMOTE_CONNECTION = 64  -- bit 6, live status (not an edge)
 
 local function hasFlag(flags, bit)
     return (math.floor(flags / bit) % 2) >= 1
 end
 
--- Module-level state shared with the RedSocket callback (callbacks fire
--- outside any TrackingInput method, so they can't easily reach instance
--- fields).
-local data_updated = false
 local total_packets = 0
-local highest_seq = 0
-local request_pending = false
-local request_sent_time = nil  -- os.clock() when pending request went out
-local last_successful_parse_time = nil
+local poll_count = 0
 local native_flags = 0
+local last_successful_parse_time = nil
 local native_toggle_tracking_requested = false
 local native_cycle_mode_requested = false
 local native_toggle_yaw_requested = false
 
-local function parseTrackingData(data)
-    if not data or data == "" then return false end
-
-    -- Format (native/src/TcpServer.cpp):
-    --   <seq>,<yaw>,<pitch>,<roll>,<flags>[,<x>,<y>,<z>]\r\n
-    -- The position triple is appended at the end; older native plugins
-    -- that pre-date 6DOF omit it, so the match is optional-tail.
-    local seq_str, yaw_str, pitch_str, roll_str, flags_str, x_str, y_str, z_str =
-        data:match("(%d+),([%-%.%d]+),([%-%.%d]+),([%-%.%d]+),(%d+),?([%-%.%d]*),?([%-%.%d]*),?([%-%.%d]*)")
-    if not seq_str then return false end
-
-    local seq   = tonumber(seq_str)
-    local yaw   = tonumber(yaw_str)
-    local pitch = tonumber(pitch_str)
-    local roll  = tonumber(roll_str)
-    if not (seq and yaw and pitch and roll) then return false end
-    if yaw ~= yaw or pitch ~= pitch or roll ~= roll then return false end  -- NaN
-
-    local x = tonumber(x_str) or 0
-    local y = tonumber(y_str) or 0
-    local z = tonumber(z_str) or 0
-    if x ~= x or y ~= y or z ~= z then x, y, z = 0, 0, 0 end
-
-    total_packets = total_packets + 1
-    request_pending = false
-    request_sent_time = nil
-
-    if seq <= highest_seq then return false end
-    highest_seq = seq
-
-    reusable_data.yaw = yaw
-    reusable_data.pitch = pitch
-    reusable_data.roll = roll
-    reusable_data.x = x
-    reusable_data.y = y
-    reusable_data.z = z
-    reusable_data.seq = seq
-    native_flags = tonumber(flags_str) or 0
-    if hasFlag(native_flags, FLAG_TOGGLE_TRACKING) then native_toggle_tracking_requested = true end
-    if hasFlag(native_flags, FLAG_CYCLE_MODE)      then native_cycle_mode_requested      = true end
-    if hasFlag(native_flags, FLAG_TOGGLE_YAW)      then native_toggle_yaw_requested      = true end
-    data_updated = true
-    last_successful_parse_time = os.clock()
-    return true
+-- Hoisted call trampolines. `pcall(function() ... end)` allocates a fresh
+-- closure per invocation and both of these run every frame, so the arguments
+-- ride in upvalues instead. Neither is reentrant, which is what makes the
+-- upvalue reuse safe (same reasoning as guardedVar in init.lua).
+local push_args = { 0, 0, 0, false, false, 0, 0, 0, 1, false }
+local function _callPush()
+    return Game.HeadTrackingPushState(
+        push_args[1], push_args[2], push_args[3], push_args[4], push_args[5],
+        push_args[6], push_args[7], push_args[8], push_args[9], push_args[10])
 end
-
--- Boundary guard for RedSocket callbacks. These fire from RedSocket's dispatch
--- (outside any pcall of ours); an uncaught throw escapes to CET's panic path,
--- which in this stripped sandbox abort()s the process. Log the error to the
--- shared flushed crash-trace.log (same file init.lua's guard uses) and swallow,
--- so a stray error in packet handling can't crash the game.
--- Hoist the closure + reuse the args table. OnCommand fires per tracker
--- packet (60-120 Hz), so allocating a fresh table + closure each call was
--- visible GC pressure. RedSocket callbacks aren't reentrant on a single
--- wrapper, so the upvalue-reuse pattern is safe (same reasoning as
--- guardedVar in init.lua).
-local _unpackFn = table.unpack or unpack
-local function _socketGuard(name, fn)
-    local args = {}
-    local n = 0
-    local function invoke() return fn(_unpackFn(args, 1, n)) end
-    return function(...)
-        local count = select("#", ...)
-        n = count
-        for i = 1, count do args[i] = select(i, ...) end
-        local ok, err = pcall(invoke)
-        if not ok then
-            local f = io.open("crash-trace.log", "a")
-            if f then
-                f:write(string.format("[%s] CAUGHT in %s: %s\n", os.date("%H:%M:%S"), name, tostring(err)))
-                f:close()
-            end
-            print("[HeadTracking] CAUGHT error in " .. name .. ": " .. tostring(err))
-        end
-    end
-end
-
--- Hardcoded to match native/src/main.cpp kTcpPort. Both sides must agree and
--- there is no user-facing reason to customize this.
-local TCP_PORT = 4242
-
--- Hoisted pcall trampolines. Calling `pcall(function() ... end)` allocates a
--- fresh closure per invocation. udp:poll() runs every frame, so the closure
--- on the SendCommand path was burning an allocation per frame. Defining the
--- helpers at module scope and calling pcall(_fn, args) avoids it.
-local function _socketSendCommand(socket, cmd)
-    socket:SendCommand(cmd)
-end
-local function _socketConnect(socket, host, port)
-    socket:Connect(host, port)
-end
-local function _socketDisconnect(socket)
-    socket:Disconnect()
+local function _callPoll()
+    return Game.HeadTrackingPollPose()
 end
 
 function TrackingInput.new()
     local self = setmetatable({}, TrackingInput)
-    self.port = TCP_PORT
-    self.socket = nil
     self.initialized = false
-    self.connected = false
-    self.last_connect_attempt = 0
-    self.connect_retry_interval = 3.0
     self.native_state = nil
     return self
 end
 
 function TrackingInput:init()
-    -- RedSocket is a separate CET mod; if it isn't installed, we can't talk
-    -- to the native plugin's TCP server at all.
-    local ok, RedSocket = pcall(GetMod, "RedSocket")
-    if not ok or not RedSocket then
-        error("[HeadTracking] FATAL: RedSocket plugin not found. " ..
-              "Install from https://github.com/rayshader/cp2077-red-socket")
+    -- The plugin registers these when the game builds its RTTI registry, which
+    -- happens long before onInit, so a missing function here means the plugin
+    -- is not loaded at all - a stale RED4ext install, a failed load, or the DLL
+    -- never deployed. Nothing downstream works without it, so say which half is
+    -- missing rather than failing later with a nil call.
+    if type(Game.HeadTrackingPollPose) ~= "function" or
+       type(Game.HeadTrackingPushState) ~= "function" then
+        error("[HeadTracking] FATAL: the native plugin's script functions are missing. " ..
+              "Check that red4ext/plugins/HeadTrackingAim.dll is installed and see " ..
+              "red4ext/logs/ for why it did not load.")
     end
-
-    self.socket = RedSocket.createSocket()
-    if not self.socket then
-        error("[HeadTracking] FATAL: RedSocket.createSocket() returned nil")
-    end
-
-    local this = self
-    self.socket:RegisterListener(
-        -- OnCommand: data received from server
-        _socketGuard("RedSocket.OnCommand", function(command)
-            parseTrackingData(command)
-        end),
-        -- OnConnection: status (0 = success)
-        _socketGuard("RedSocket.OnConnection", function(status)
-            if status == 0 then
-                this.connected = true
-                -- Clean slate on (re)connect so a wedged request doesn't
-                -- survive across the disconnect.
-                request_pending = false
-                request_sent_time = nil
-                print("[HeadTracking] Connected to native plugin TCP server")
-            else
-                this.connected = false
-                print("[HeadTracking] TCP connect failed, status=" .. tostring(status))
-            end
-        end),
-        -- OnDisconnection
-        _socketGuard("RedSocket.OnDisconnection", function()
-            this.connected = false
-            request_pending = false
-            request_sent_time = nil
-            print("[HeadTracking] Disconnected from native plugin")
-        end),
-        -- OnError
-        _socketGuard("RedSocket.OnError", function()
-            request_pending = false
-            request_sent_time = nil
-            print("[HeadTracking] TCP socket error")
-        end)
-    )
 
     self.initialized = true
-    self.last_connect_attempt = 0  -- forces immediate first attempt in poll()
-    print("[HeadTracking] TCP tracking input ready (will connect on first poll, port " .. self.port .. ")")
+    print("[HeadTracking] Native tracking input ready")
     return true
 end
 
@@ -229,9 +97,8 @@ end
 
 function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat, propagator_inject)
     -- Reuse the state table to avoid a 10-field heap allocation every frame
-    -- (this is called once per onUpdate via Aim:update). The table is left
-    -- nil until the first call so poll()'s bootstrap "G" handshake on the
-    -- pre-state frames is unchanged.
+    -- (this is called once per onUpdate via Aim:update). The table is left nil
+    -- until the first call so poll() knows there is nothing to push yet.
     local st = self.native_state
     if not st then
         st = {}
@@ -240,13 +107,13 @@ function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat, p
     st.yaw = yaw or 0
     st.pitch = pitch or 0
     st.roll = roll or 0
-    st.enabled = enabled and 1 or 0
-    st.is_ads = is_ads and 1 or 0
+    st.enabled = enabled and true or false
+    st.is_ads = is_ads and true or false
     st.qi = quat and quat.i or 0
     st.qj = quat and quat.j or 0
     st.qk = quat and quat.k or 0
     st.qr = quat and quat.r or 1
-    st.propagator_inject = propagator_inject and 1 or 0
+    st.propagator_inject = propagator_inject and true or false
 end
 
 function TrackingInput:isNativeCameraHookActive()
@@ -295,62 +162,51 @@ function TrackingInput:secondsSinceLastPacket()
     return os.clock() - last_successful_parse_time
 end
 
-function TrackingInput:tryReconnect()
-    if not self.socket then return end
-    local now = os.clock()
-    if (now - self.last_connect_attempt) < self.connect_retry_interval then
-        return
-    end
-    self.last_connect_attempt = now
-    print("[HeadTracking:TCP] Connecting to 127.0.0.1:" .. self.port)
-    pcall(_socketConnect, self.socket, "127.0.0.1", self.port)
-end
-
---- Poll for the latest tracking sample.
---- @return table|nil {yaw, pitch, roll}
+--- Push last frame's processed state, then read the latest tracker sample.
+--- @return table|nil {yaw, pitch, roll, x, y, z}
 function TrackingInput:poll()
     if not self.initialized then return nil end
 
-    if not self.connected then
-        self:tryReconnect()
-        return nil
+    local st = self.native_state
+    if st then
+        push_args[1] = st.yaw
+        push_args[2] = st.pitch
+        push_args[3] = st.roll
+        push_args[4] = st.enabled
+        push_args[5] = st.is_ads
+        push_args[6] = st.qi
+        push_args[7] = st.qj
+        push_args[8] = st.qk
+        push_args[9] = st.qr
+        push_args[10] = st.propagator_inject
+        pcall(_callPush)
     end
 
-    -- If a pending request has been outstanding longer than REQUEST_TIMEOUT_S,
-    -- assume the reply is lost (game pause, socket hiccup, etc.) and let
-    -- ourselves send a fresh one. Without this the pending flag can wedge
-    -- permanently and kill tracking until a reload.
-    if request_pending and request_sent_time
-       and (os.clock() - request_sent_time) > REQUEST_TIMEOUT_S then
-        request_pending = false
-        request_sent_time = nil
-    end
+    poll_count = poll_count + 1
 
-    -- Send a request only if we're not already waiting for one. Native plugin
-    -- replies once per request, so this maintains a 1:1 ping-pong cadence.
-    if not request_pending then
-        local cmd = "G"
-        local st = self.native_state
-        if st then
-            cmd = string.format(
-                "G,%.6f,%.6f,%.6f,%d,%d,%.6f,%.6f,%.6f,%.6f,%d",
-                st.yaw, st.pitch, st.roll, st.enabled, st.is_ads,
-                st.qi, st.qj, st.qk, st.qr, st.propagator_inject)
-        end
-        local ok = pcall(_socketSendCommand, self.socket, cmd)
-        if ok then
-            request_pending = true
-            request_sent_time = os.clock()
-        end
-    end
+    local ok, has_data, yaw, pitch, roll, x, y, z, flags = pcall(_callPoll)
+    if not ok or not has_data then return nil end
 
-    if data_updated then
-        data_updated = false
-        return reusable_data
-    end
-    return nil
+    native_flags = flags or 0
+    if hasFlag(native_flags, FLAG_TOGGLE_TRACKING) then native_toggle_tracking_requested = true end
+    if hasFlag(native_flags, FLAG_CYCLE_MODE)      then native_cycle_mode_requested      = true end
+    if hasFlag(native_flags, FLAG_TOGGLE_YAW)      then native_toggle_yaw_requested      = true end
+
+    -- NaN check. Everything else the native side already validated.
+    if yaw ~= yaw or pitch ~= pitch or roll ~= roll then return nil end
+    if x ~= x or y ~= y or z ~= z then x, y, z = 0, 0, 0 end
+
+    total_packets = total_packets + 1
+    reusable_data.yaw = yaw
+    reusable_data.pitch = pitch
+    reusable_data.roll = roll
+    reusable_data.x = x or 0
+    reusable_data.y = y or 0
+    reusable_data.z = z or 0
+    reusable_data.seq = poll_count
+    last_successful_parse_time = os.clock()
+    return reusable_data
 end
-
 
 function TrackingInput:getStats()
     local now = os.clock()
@@ -359,7 +215,7 @@ function TrackingInput:getStats()
         packet_count = total_packets,
         last_packet_time = last_successful_parse_time,
         is_receiving = is_receiving,
-        connected = self.connected,
+        connected = self.initialized,
     }
 end
 
@@ -369,12 +225,8 @@ function TrackingInput:resetStats()
 end
 
 function TrackingInput:close()
-    if self.socket and self.connected then
-        pcall(_socketDisconnect, self.socket)
-    end
     self.initialized = false
-    self.connected = false
-    print("[HeadTracking] TCP tracking input closed")
+    print("[HeadTracking] Native tracking input closed")
 end
 
 return TrackingInput

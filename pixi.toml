@@ -41,8 +41,8 @@ build-release = { depends-on = ["build-native"] }
 
 # Deploy to CET mods folder (Windows only). Depends on `build` so the native
 # RED4ext DLL is rebuilt before copying - otherwise `pixi run install` would
-# silently ship a stale DLL with the Lua changes, which is exactly how the
-# TCP-port-mismatch bug slipped through.
+# silently ship a stale DLL with the Lua changes, and the two halves drifting
+# apart on the script channel is exactly how past protocol bugs slipped through.
 deploy = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1", depends-on = ["build"] }
 install = { depends-on = ["deploy"] }
 

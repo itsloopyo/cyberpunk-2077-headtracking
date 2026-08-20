@@ -17,7 +17,7 @@ This mod is licensed under the MIT License, Copyright (c) 2026 itsloopyo - see [
 - **Version:** v1.30.0
 - **License:** MIT
 - **Upstream:** https://github.com/WopsS/RED4ext
-- **Usage:** Loader for the native C++ plugin and host of the UDP receiver / TCP server.
+- **Usage:** Loader for the native C++ plugin, which hosts the UDP receiver and registers the mod's script functions.
 - **Bundled:** yes - `vendor/red4ext/red4ext.zip`, bundled in the release ZIP and used as the install-time source.
 
 ---
@@ -38,16 +38,6 @@ This mod is licensed under the MIT License, Copyright (c) 2026 itsloopyo - see [
 - **License:** MIT
 - **Upstream:** https://github.com/WopsS/RED4ext.SDK
 - **Usage:** C++ SDK headers used to build the native RED4ext plugin. Headers only; no SDK binaries ship in release ZIPs.
-- **Bundled:** no.
-
----
-
-## RedSocket
-
-- **Version:** runtime, user-installed (tested with 0.5.0)
-- **License:** MIT
-- **Upstream:** https://github.com/rayshader/cp2077-red-socket
-- **Usage:** Provides the Lua TCP socket the mod uses to read pose data from the native plugin's TCP server on port 4242.
 - **Bundled:** no.
 
 ---

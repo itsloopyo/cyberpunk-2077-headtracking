@@ -656,8 +656,6 @@ if (-not $cetDir) {
 }
 Write-Info "Found CET at: $cetDir"
 
-# RedSocket is no longer required - the native plugin receives UDP directly.
-
 # Deploy CET mod
 $modDir = Join-Path $cetDir "mods\HeadTracking"
 Write-Info "Deploying CET mod to: $modDir"

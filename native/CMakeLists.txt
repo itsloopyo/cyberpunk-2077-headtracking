@@ -35,7 +35,7 @@ add_library(HeadTrackingAim SHARED
     src/AimProviderHook.cpp
     src/AimGetterHook.cpp
     src/UdpReceiver.cpp
-    src/TcpServer.cpp
+    src/ScriptChannel.cpp
     src/builds/build_registry.cpp
     src/builds/gog_offsets.cpp
 )

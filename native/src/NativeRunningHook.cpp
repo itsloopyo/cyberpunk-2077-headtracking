@@ -5,6 +5,7 @@
 #include "AimCompensation.hpp"  // LogInfo / LogWarning
 #include "AimProviderHook.hpp"
 #include "AimGetterHook.hpp"
+#include "ScriptChannel.hpp"
 
 #include <RED4ext/RED4ext.hpp>
 #include <RED4ext/GameStates.hpp>
@@ -40,9 +41,12 @@ RED4ext::v1::GameState s_state{};
 uint64_t s_lastLogMs = 0;
 uint32_t s_prevLogCount = 0;
 bool     s_enterFired = false;
+uint64_t s_firstRunningMs = 0;
+uint64_t s_lastNoScriptWarnMs = 0;
 
 bool OnEnter(RED4ext::CGameApplication*) {
     s_enterFired = true;
+    if (s_firstRunningMs == 0) s_firstRunningMs = GetTickCount64();
     LogInfo("[HeadTrackingAim] NativeRunningHook: OnEnter Running");
     return true;
 }
@@ -373,6 +377,28 @@ bool OnUpdate(RED4ext::CGameApplication*) {
                     ::g_camOrientationOffset);
             s_lastLogMs = now;
             s_prevLogCount = w->native_running_frame;
+
+            // Everything above can look perfectly healthy while the mod does
+            // nothing at all: the plugin loads, UDP arrives, the hooks fire,
+            // and the pose stays at identity because the CET half never came
+            // up. That failure shipped once already and cost a user a session
+            // and a bug report to diagnose, so name it in the log people
+            // actually send us.
+            if (!ScriptChannel_HasEverPushed()) {
+                if (now - s_firstRunningMs > 15000 && now - s_lastNoScriptWarnMs > 30000) {
+                    s_lastNoScriptWarnMs = now;
+                    LogWarning("[HeadTrackingAim] no state from the CET mod after %llus in gameplay - "
+                               "head tracking will do nothing. Check that the HeadTracking CET mod is "
+                               "installed under bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking "
+                               "and read scripting.log for its init errors.",
+                               (unsigned long long)((now - s_firstRunningMs) / 1000));
+                }
+            } else if (ScriptChannel_MsSinceLastPush() > 5000 && now - s_lastNoScriptWarnMs > 30000) {
+                s_lastNoScriptWarnMs = now;
+                LogWarning("[HeadTrackingAim] CET mod stopped pushing state %llums ago - "
+                           "tracking is frozen at its last pose.",
+                           (unsigned long long)ScriptChannel_MsSinceLastPush());
+            }
         }
     }
     // RED4ext treats `true` from OnUpdate as "state done, stop calling".

@@ -353,7 +353,7 @@ local aim_state = {
     native_camera_hook_active = false,
     clean_cam_snap_skip_logged = false,
     settings = nil,
-    -- UDP/TCP tracking input. Set via Aim:setUdp() from init.lua so the
+    -- Tracking input. Set via Aim:setUdp() from init.lua so the
     udp = nil,
     -- OFF since the projectile restoration landed. Rounds now launch as
     -- projectiles and AimProviderHook peels the head rotation out of EVERY one,
@@ -769,7 +769,7 @@ function Aim:nativeRunningFrame()
 end
 
 
---- Plug in the UDP/TCP tracking input used for the native control channel.
+--- Plug in the tracking input used for the native control channel.
 function Aim:setUdp(udp)
     aim_state.udp = udp
 end

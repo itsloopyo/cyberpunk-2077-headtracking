@@ -5,7 +5,7 @@
 #include "SharedState.hpp"
 #include "AimCompensation.hpp"
 #include "UdpReceiver.hpp"
-#include "TcpServer.hpp"
+#include "ScriptChannel.hpp"
 #include "NativeRunningHook.hpp"
 #include "CamPropagatorHook.hpp"
 #include "AimProviderHook.hpp"
@@ -16,11 +16,6 @@
 // Output configuration (IP: 127.0.0.1, Port: 4242).
 constexpr uint16_t kUdpPort = 4242;
 
-// TCP port the CET Lua mod connects to via RedSocket. Shares the number with
-// kUdpPort - TCP and UDP live in separate port namespaces, so 4242/tcp and
-// 4242/udp can both be bound on the same host without conflict. Hardcoded
-// here and in modules/udp.lua; keep them in sync.
-constexpr uint16_t kTcpPort = 4242;
 
 RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
                                          RED4ext::v1::EMainReason aReason,
@@ -33,6 +28,11 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         }
         LogInfo("[HeadTrackingAim] Shared memory initialized");
 
+        // Queue the script channel before anything else can need it. This only
+        // asks the RTTI system to call us back when it builds its registry, so
+        // it cannot fail here and has nothing to undo on an early return.
+        ScriptChannel_Register();
+
         // Start the UDP receiver BEFORE attaching hooks so that even if a
         // hook target is stale and the plugin refuses to load, we've already
         // told the user WHY via logs (UDP binding issues surface here, hook
@@ -43,15 +43,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         // conflicting holder releases the port.
         if (!UdpReceiver_Start(kUdpPort)) {
             LogError("[HeadTrackingAim] UDP receiver failed to initialise on port %u - refusing to load", kUdpPort);
-            g_sharedState.Shutdown();
-            return false;
-        }
-
-        // CET Lua mod reads tracking data via RedSocket (TCP) - some CET
-        // versions don't expose ffi, so shared memory is unreachable from Lua.
-        if (!TcpServer_Start(kTcpPort)) {
-            LogError("[HeadTrackingAim] TCP server failed to start on port %u - refusing to load", kTcpPort);
-            UdpReceiver_Stop();
             g_sharedState.Shutdown();
             return false;
         }
@@ -98,7 +89,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         AimGetterHook_Stop(aSdk, aHandle);
         AimProviderHook_Stop();
-        TcpServer_Stop();
         UdpReceiver_Stop();
 
         CamPropagatorHook_Stop(aSdk, aHandle);

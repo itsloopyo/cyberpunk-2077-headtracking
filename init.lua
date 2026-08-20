@@ -267,7 +267,7 @@ end
 
 -- Hotkey wiring.
 -- Both binding sets (nav-cluster keys and the Ctrl+Shift chords) are polled
--- in native/src/TcpServer.cpp and delivered as one-shot flags on the tracking
+-- in native/src/ScriptChannel.cpp and delivered as one-shot flags on the pose
 -- socket. Neither set can go through CET: registerHotkey dispatch crashes
 -- before entering Lua on this game build, and LuaJIT FFI is sandboxed
 -- (require "ffi" fails) so Lua-side GetAsyncKeyState polling is impossible.
@@ -366,8 +366,8 @@ registerForEvent("onInit", function()
     runInitStep("aim", function()
         aim = Aim.new(settings, camera)
         aim:init()
-        -- Wire the UDP/TCP input for the native control channel.
-        -- publish restore quats to native over the TCP control channel.
+        -- Wire the tracking input for the native control channel.
+        -- publish restore quats to native over the script control channel.
         -- Must happen after both aim:init() (observer registered) and
         -- the udp init step completed; safe to call even if aim:setUdp
         -- is pre-init because the observer fires later.
@@ -697,7 +697,7 @@ function handleToggleTracking()
         dlog("[HeadTracking] Disabled")
     end
 end
--- End / Ctrl+Shift+Y are polled natively in TcpServer.cpp. CET registerHotkey
+-- End / Ctrl+Shift+Y are polled natively in ScriptChannel.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build, so do not bind End
 -- here.
 
@@ -740,7 +740,7 @@ function handleCycleMode()
     ui:showSuccess(label, 2.0)
     print("[HeadTracking] tracking mode -> rot=" .. tostring(next_rot) .. " pos=" .. tostring(next_pos))
 end
--- PageUp / Ctrl+Shift+G are polled natively in TcpServer.cpp. CET registerHotkey
+-- PageUp / Ctrl+Shift+G are polled natively in ScriptChannel.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build, so do not bind
 -- PageUp here.
 
@@ -764,7 +764,7 @@ function handleToggleYawMode()
     ui:showSuccess(label, 2.0)
     print("[HeadTracking] yaw_mode -> " .. next_mode)
 end
--- PageDown / Ctrl+Shift+H are polled natively in TcpServer.cpp. CET registerHotkey
+-- PageDown / Ctrl+Shift+H are polled natively in ScriptChannel.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build, so do not bind
 -- PageDown here.
 

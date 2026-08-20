@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 itsloopyo
+#pragma once
+#include <cstdint>
+
+// The CET Lua mod's only channel to this plugin.
+//
+// Two global RTTI functions, registered into the game's script system, which
+// CET Lua calls directly as Game.HeadTrackingPollPose / Game.HeadTrackingPushState:
+//
+//   Bool HeadTrackingPollPose(out Float yaw, out Float pitch, out Float roll,
+//                             out Float x, out Float y, out Float z,
+//                             out Uint32 flags)
+//   Bool HeadTrackingPushState(Float yaw, Float pitch, Float roll,
+//                              Bool enabled, Bool isAds,
+//                              Float qi, Float qj, Float qk, Float qr,
+//                              Bool propagatorInject)
+//
+// Registration is queued at plugin load and runs when the game builds its RTTI
+// registry. It does not depend on the build fingerprint, so on an unrecognised
+// game build - where every RVA-pinned hook stays dormant - Lua still gets its
+// pose and still drives the camera through its own fallback path.
+void ScriptChannel_Register();
+
+// Wall-clock milliseconds since the script side last called PushState, or 0 if
+// it never has. Drives the "nothing is listening" diagnostic.
+uint64_t ScriptChannel_MsSinceLastPush();
+bool ScriptChannel_HasEverPushed();
