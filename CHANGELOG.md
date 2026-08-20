@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0] - 2026-08-20
+
+### Added
+
+- drop the mod-side auto-recenter and ride hit markers with the reticle
+- remove mod-side recentring and rotate the native log per launch
+
 ## [0.3.0] - 2026-08-19
 
 ### Added
