@@ -8,6 +8,43 @@
 local NativeSettingsIntegration = {}
 NativeSettingsIntegration.__index = NativeSettingsIntegration
 
+-- String-valued settings shown as dropdowns. NativeSettings selectors speak
+-- 1-based INDICES in both directions - the callback receives one and refresh()
+-- expects one - while the setting itself stores the string, so every crossing
+-- goes through these two tables. `values` is the stored order and must stay in
+-- step with the hotkey cycle in init.lua, so the dropdown and the key walk the
+-- modes the same way.
+local ENUM_SETTINGS = {
+    ads_mode = {
+        values = { "paused", "marker", "tracked" },
+        labels = {
+            "Tracking paused",
+            "Tracking on, aim marker shown",
+            "Tracking on, no aim marker",
+        },
+    },
+    yaw_mode = {
+        values = { "world", "local" },
+        labels = { "World (horizon-locked)", "Camera-relative" },
+    },
+}
+
+--- Index of a stored enum string, for a selector widget.
+--- Falls back to the first entry: a value that is not in the list cannot be
+--- shown, and the settings layer has already rejected anything invalid, so this
+--- only fires if the two lists drift apart.
+--- @param key string
+--- @param value any
+--- @return number
+local function enumIndex(key, value)
+    local spec = ENUM_SETTINGS[key]
+    if not spec then return 1 end
+    for i, v in ipairs(spec.values) do
+        if v == value then return i end
+    end
+    return 1
+end
+
 --- Create a new Native Settings integration instance
 --- @param settings_ref table Reference to the Settings module instance
 --- @return table NativeSettingsIntegration instance
@@ -93,29 +130,32 @@ function NativeSettingsIntegration:onSettingChanged(key, new_value)
     end
 
     -- The Enabled switch is the master on/off, so it covers rotation and
-    -- position together. Either key moving has to re-read the pair, and
-    -- position_enabled has no widget of its own to look up.
+    -- position together: either key moving has to re-read the pair. Position
+    -- also has a switch of its own now, so this refreshes the master and then
+    -- falls through to refresh that one with its own value.
     if key == "enabled" or key == "position_enabled" then
-        key = "enabled"
-        new_value = self.settings:isTrackingEnabled()
+        self:refreshWidget(self.widgetRefs["enabled"], self.settings:isTrackingEnabled())
+        if key == "enabled" then return end
     end
 
-    -- Map settings key to NativeSettings widget path
-    local widget_path = self.widgetRefs[key]
-    if not widget_path then
-        return
+    if ENUM_SETTINGS[key] then
+        new_value = enumIndex(key, new_value)
     end
 
-    -- NativeSettings provides refresh methods to update widget display
+    self:refreshWidget(self.widgetRefs[key], new_value)
+end
+
+--- Push a value into one NativeSettings widget.
+--- @param widget_path string|nil Nothing to do when the setting has no widget.
+--- @param value any
+function NativeSettingsIntegration:refreshWidget(widget_path, value)
+    if not widget_path then return end
     local ns = self.nativeSettings
-    if ns.refresh then
-        local refresh_ok, refresh_err = pcall(function()
-            ns.refresh(widget_path, new_value)
-        end)
-        if not refresh_ok then
-            -- NativeSettings might not support refresh on all widgets - this is OK
-        end
-    end
+    if not ns or not ns.refresh then return end
+    -- Not every widget type implements refresh. A failure here only means the
+    -- panel shows a stale value until it is reopened, so it must not propagate
+    -- into the hotkey handler that triggered the change.
+    pcall(ns.refresh, widget_path, value)
 end
 
 --- Register all settings with NativeSettings mod
@@ -152,6 +192,46 @@ function NativeSettingsIntegration:registerSettings()
         end
     )
     self.widgetRefs["enabled"] = "/HeadTracking/Enabled"
+
+    -- Aim-down-sights behaviour. Same three modes the Home hotkey cycles.
+    do
+        local spec = ENUM_SETTINGS.ads_mode
+        ns.addSelectorString(
+            "/HeadTracking/AdsMode",
+            "Aiming Down Sights",
+            "What happens to head tracking while the sights are up. Raising them always swings the view onto the point the reticle was marking; this picks what follows. Hotkey: Home / Ctrl+Shift+T.",
+            spec.labels,
+            enumIndex("ads_mode", self.settings:get("ads_mode")),
+            enumIndex("ads_mode", self.settings:getDefaults().ads_mode),
+            function(index)
+                self.settings:set("ads_mode", spec.values[index])
+            end
+        )
+        self.widgetRefs["ads_mode"] = "/HeadTracking/AdsMode"
+    end
+
+    -- Yaw mode. The camera has to drop its yaw-mode intermediates on the way
+    -- through or the old mode's composition is baked into the new one's base,
+    -- which is drift that accumulates per switch - the same call the PageDown
+    -- handler makes.
+    do
+        local spec = ENUM_SETTINGS.yaw_mode
+        ns.addSelectorString(
+            "/HeadTracking/YawMode",
+            "Yaw Mode",
+            "World keeps head yaw swinging around world vertical however far the view is pitched. Camera-relative pivots around the camera's own up-axis, which tilts with mouse pitch. Hotkey: Page Down / Ctrl+Shift+H.",
+            spec.labels,
+            enumIndex("yaw_mode", self.settings:get("yaw_mode")),
+            enumIndex("yaw_mode", self.settings:getDefaults().yaw_mode),
+            function(index)
+                self.settings:set("yaw_mode", spec.values[index])
+                if self.camera and self.camera.prepareYawModeSwitch then
+                    self.camera:prepareYawModeSwitch()
+                end
+            end
+        )
+        self.widgetRefs["yaw_mode"] = "/HeadTracking/YawMode"
+    end
 
     -- =====================================================================
     -- SENSITIVITY SECTION
@@ -332,6 +412,68 @@ function NativeSettingsIntegration:registerSettings()
     -- =====================================================================
     -- CROSSHAIR SECTION
     -- =====================================================================
+    -- =====================================================================
+    -- POSITION (6DOF) SECTION
+    -- =====================================================================
+    ns.addSubcategory("/HeadTracking/Position", "Position (6DOF)")
+
+    ns.addSwitch(
+        "/HeadTracking/Position/Enabled",
+        "Positional Tracking",
+        "Lean and peek with your head position, on top of rotation. Hotkey: Page Up / Ctrl+Shift+G cycles rotation-only, position-only and both.",
+        self.settings:get("position_enabled"),
+        self.settings:getDefaults().position_enabled,
+        function(state)
+            self.settings:set("position_enabled", state)
+        end
+    )
+    self.widgetRefs["position_enabled"] = "/HeadTracking/Position/Enabled"
+
+    -- Sensitivity and limits are laid out axis by axis. Z is asymmetric on
+    -- purpose: leaning in has far more travel than pulling back, which is what
+    -- stops the camera clipping through the player model.
+    local POSITION_WIDGETS = {
+        { key = "position_sens_x", path = "SensX", label = "Sensitivity X (lateral)",
+          desc = "Multiplier for side-to-side head movement.",
+          min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
+        { key = "position_sens_y", path = "SensY", label = "Sensitivity Y (vertical)",
+          desc = "Multiplier for up-and-down head movement.",
+          min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
+        { key = "position_sens_z", path = "SensZ", label = "Sensitivity Z (forward)",
+          desc = "Multiplier for leaning in and pulling back.",
+          min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
+        { key = "position_limit_x", path = "LimitX", label = "Limit X (metres)",
+          desc = "Furthest the camera moves sideways, in metres each way.",
+          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+        { key = "position_limit_y_up", path = "LimitYUp", label = "Limit Y up (metres)",
+          desc = "Furthest the camera rises.",
+          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+        { key = "position_limit_y_down", path = "LimitYDown", label = "Limit Y down (metres)",
+          desc = "Furthest the camera drops. Separate from the up limit so crouching down can be tighter than standing up.",
+          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+        { key = "position_limit_z_fwd", path = "LimitZFwd", label = "Limit Z forward (metres)",
+          desc = "Furthest the camera leans in.",
+          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+        { key = "position_limit_z_back", path = "LimitZBack", label = "Limit Z back (metres)",
+          desc = "Furthest the camera pulls back. Deliberately tighter than the forward limit, so pulling back does not clip through V.",
+          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+    }
+
+    for _, w in ipairs(POSITION_WIDGETS) do
+        local path = "/HeadTracking/Position/" .. w.path
+        local key = w.key
+        ns.addRangeFloat(
+            path, w.label, w.desc,
+            w.min, w.max, w.step, w.fmt,
+            self.settings:get(key),
+            self.settings:getDefaults()[key],
+            function(value)
+                self.settings:set(key, value)
+            end
+        )
+        self.widgetRefs[key] = path
+    end
+
     ns.addSubcategory("/HeadTracking/Crosshair", "Crosshair Overlay")
 
     -- Crosshair enabled

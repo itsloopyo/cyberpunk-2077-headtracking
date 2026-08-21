@@ -8,7 +8,7 @@ Use a webcam, phone, or VR headset to drive Night City's first-person camera wit
 
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim
 - **6DOF positional tracking** - lean into corners and peek around cover with your head position
-- **Three ways to aim down sights** - raise the sights and the view snaps onto the point the reticle was marking, then either holds still for the duration or keeps tracking your head, with or without an on-screen aim marker. Cycled in game with `Home`
+- **Three ways to aim down sights** - raising the sights always swings the view onto the point the reticle was marking. After that, pick one: head tracking off for the rest of the aim (the default), on with a marker showing where your rounds will land, or on with no marker. Cycled in game with `Home`
 
 ## Gameplay Changes
 
@@ -151,7 +151,11 @@ The mod writes its config to:
 <Cyberpunk 2077>\bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\config.json
 ```
 
-Edit it directly, or use the in-game Native Settings UI if you have it installed. The defaults below are what the mod ships with:
+Edit it directly, or configure the mod in game if you have a settings framework installed. The defaults below are what the mod ships with:
+
+- [Native Settings UI](https://www.nexusmods.com/cyberpunk2077/mods/3518) puts every option below (except the reverse-engineering diagnostic) into the game's own Settings menu, controller included. Optional: without it the mod runs exactly the same and you edit `config.json` by hand.
+- [Mod Configuration Menu](https://www.nexusmods.com/cyberpunk2077/mods/31640) works too, and needs nothing extra from this mod. MCM is a unified front-end over the existing frameworks rather than a registry of its own, so it picks the mod up through the Native Settings registration above.
+
 
 ```json
 {

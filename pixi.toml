@@ -28,7 +28,8 @@ test-delegate = { cmd = "lua tests/delegate_equivalence_test.lua" }
 test-aim      = { cmd = "lua tests/aim_compensation_test.lua" }
 test-pose     = { cmd = "lua tests/poseinterpolator_test.lua" }
 test-state    = { cmd = "lua tests/state_gate_test.lua" }
-test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-state"] }
+test-settings-ui = { cmd = "lua tests/nativesettings_test.lua" }
+test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-state", "test-settings-ui"] }
 
 [target.win-64.tasks]
 # Build native RED4ext C++ plugin
