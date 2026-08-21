@@ -12,6 +12,16 @@ Settings.__index = Settings
 -- branches on it (camera.lua / nativesettings.lua).
 local YAW_MODE_VALUES = { world = true, ["local"] = true }
 
+-- Allowed ads_mode strings, same reasoning as YAW_MODE_VALUES. Cycled with
+-- Home / Ctrl+Shift+T; state.lua and init.lua branch on all three.
+--   "reticle" - stand tracking down and hand the view back to the game, so
+--               the sights swing onto the point the reticle was marking.
+--   "center"  - freeze the view where the head left it and stop peeling head
+--               rotation off the aim, so the sights line up on whatever sits
+--               at the centre of the screen.
+--   "tracked" - leave head tracking running through the whole aim.
+local ADS_MODE_VALUES = { reticle = true, center = true, tracked = true }
+
 -- Validation rules for each setting
 local VALIDATION_RULES = {
     enabled = { type = "boolean" },
@@ -60,6 +70,8 @@ local VALIDATION_RULES = {
     -- Yaw mode: "world" (default, horizon-locked world-space yaw) or "local"
     -- (legacy camera-local yaw that tilts with mouse pitch). See camera.lua.
     yaw_mode = { type = "string" },
+    -- What aiming down sights does to the view. See ADS_MODE_VALUES.
+    ads_mode = { type = "string" },
     -- Diagnostic: write CLEAN (mouse-only) orientation to cam.localOrientation
     -- instead of head-rotated. Used to probe which engine systems read
     -- cam+0xD0 for their "where is the camera pointing" answer. See
@@ -163,11 +175,18 @@ local function validateValue(key, value)
         end
     end
 
-    -- String enum validation. yaw_mode is the only string-typed setting and
-    -- camera.lua branches on it as a binary "world" / "local"; an arbitrary
-    -- third value would silently fall through the "local" branch.
+    -- String enum validation. Both string-typed settings are branched on by
+    -- name elsewhere (camera.lua reads yaw_mode as a binary "world" / "local",
+    -- state.lua and init.lua read ads_mode as one of three), so an unknown
+    -- value would silently fall through to whichever branch is last.
     if rule.type == "string" and key == "yaw_mode" then
         if not YAW_MODE_VALUES[value] then
+            return false, nil
+        end
+    end
+
+    if rule.type == "string" and key == "ads_mode" then
+        if not ADS_MODE_VALUES[value] then
             return false, nil
         end
     end
@@ -222,6 +241,10 @@ function Settings.new()
         -- current local-up axis, which tilts with mouse pitch).
         -- Toggle between them with PageDown / Ctrl+Shift+H.
         yaw_mode = "world",
+        -- Aiming down sights hands the view back to the game by default, so
+        -- the sights land on the point the reticle was marking. Home /
+        -- Ctrl+Shift+T cycles to "center" then "tracked".
+        ads_mode = "reticle",
         -- Clean-camera diagnostic path. Lua keeps cam.localOrientation
         -- mouse-only while native experiments try to inject head rotation.
         decouple_diag_clean_cam = false,
@@ -446,6 +469,36 @@ function Settings:set(key, value)
     self:save()
 
     return true
+end
+
+--- Is head tracking on at all (rotation or position)?
+--- @return boolean
+function Settings:isTrackingEnabled()
+    return (self:get("enabled") or self:get("position_enabled")) and true or false
+end
+
+--- Master on/off for head tracking, covering rotation AND position.
+---
+--- Rotation and position live in two settings because the mode hotkey cycles
+--- between them, so switching tracking off remembers which mode was in force
+--- and switching it back on restores that mode rather than forcing 6DOF.
+--- @param on boolean
+function Settings:setTrackingEnabled(on)
+    if on then
+        local mode = self._saved_tracking_mode or { rot = true, pos = true }
+        self:set("enabled", mode.rot)
+        self:set("position_enabled", mode.pos)
+        self._saved_tracking_mode = nil
+    else
+        if self:isTrackingEnabled() then
+            self._saved_tracking_mode = {
+                rot = self:get("enabled") and true or false,
+                pos = self:get("position_enabled") and true or false,
+            }
+        end
+        self:set("enabled", false)
+        self:set("position_enabled", false)
+    end
 end
 
 --- Get all current setting values as a table copy

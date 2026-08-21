@@ -257,6 +257,16 @@ local hotkey_last_fire = {}
 -- every cause uniformly, while last_head_quat is still validly baked.
 local was_tracking_allowed = true
 
+-- Latest live pose, updated on every tracked frame. ads_mode = "center"
+-- snapshots it on the frame the sights come up and holds that for as long as
+-- they are up. Position survives frames with no fresh packet, which is why it
+-- lives here rather than being read back off the camera.
+local last_pose = { yaw = 0, pitch = 0, roll = 0, x = 0, y = 0, z = 0 }
+
+-- Non-nil for exactly as long as a frozen-centre ADS is in force; the snapshot
+-- it holds is what gets rewritten to the camera every frame.
+local ads_frozen_pose = nil
+
 local function hotkeyDebounced(id)
     local now = os.clock()
     local last = hotkey_last_fire[id] or 0
@@ -483,6 +493,7 @@ local function onUpdateImpl(deltaTime)
     if udp:consumeNativeToggleTrackingRequested() then handleToggleTracking() end
     if udp:consumeNativeCycleModeRequested()      then handleCycleMode()      end
     if udp:consumeNativeToggleYawRequested()      then handleToggleYawMode()  end
+    if udp:consumeNativeCycleAdsModeRequested()   then handleCycleAdsMode()   end
 
     local tracking_allowed = state:isTrackingAllowed()
     if was_tracking_allowed and not tracking_allowed then
@@ -502,6 +513,28 @@ local function onUpdateImpl(deltaTime)
         end
     end
     was_tracking_allowed = tracking_allowed
+
+    -- Aiming down sights with ads_mode = "center": the gate stays open, but the
+    -- head pose is held at whatever it was when the sights came up and stops
+    -- being published to the native aim hooks. Re-asserting the frozen rotation
+    -- every frame is what keeps it in the view - ADS entry is a camera-state
+    -- event, and those overwrite cam.localOrientation with the engine's clean
+    -- value, so a pose merely left alone drops out. With the published quat at
+    -- identity the hooks peel nothing, so the aim follows the frozen view and
+    -- the sights land on whatever sits at the centre of the screen.
+    local ads_freeze = tracking_allowed
+        and state:isAdsActive()
+        and settings:get("ads_mode") == "center"
+    if ads_freeze then
+        -- Staged before udp:poll() below, which is what pushes it, so the aim
+        -- hooks stop peeling on the same frame the view freezes rather than one
+        -- shot later. The pose itself is snapshotted further down, once this
+        -- frame's live values are in hand.
+        aim:setEnabled(false)
+        aim:publishSuppressedState()
+    else
+        ads_frozen_pose = nil
+    end
 
     if not tracking_allowed then
         if should_diag then
@@ -559,6 +592,31 @@ local function onUpdateImpl(deltaTime)
         pose_interp:update(raw_yaw, raw_pitch, raw_roll, raw_seq, deltaTime)
 
     if interp_yaw ~= nil then
+        last_pose.yaw, last_pose.pitch, last_pose.roll = interp_yaw, interp_pitch, interp_roll
+    end
+    if data then
+        last_pose.x, last_pose.y, last_pose.z = data.x or 0, data.y or 0, data.z or 0
+    end
+
+    if ads_freeze and not ads_frozen_pose then
+        ads_frozen_pose = {
+            yaw = last_pose.yaw, pitch = last_pose.pitch, roll = last_pose.roll,
+            x = last_pose.x, y = last_pose.y, z = last_pose.z,
+        }
+    end
+
+    -- The frozen pose stands in for the live one so the same rotation and
+    -- offset get rewritten every frame, including frames with no fresh packet.
+    local pose = ads_frozen_pose
+    local pose_yaw, pose_pitch, pose_roll = interp_yaw, interp_pitch, interp_roll
+    local pose_x, pose_y, pose_z
+    if data then pose_x, pose_y, pose_z = data.x or 0, data.y or 0, data.z or 0 end
+    if pose then
+        pose_yaw, pose_pitch, pose_roll = pose.yaw, pose.pitch, pose.roll
+        pose_x, pose_y, pose_z = pose.x, pose.y, pose.z
+    end
+
+    if pose_yaw ~= nil then
         local clean_cam_decouple = settings:get("decouple_diag_clean_cam") == true
         if aim.setPropagatorInjectActive then
             aim:setPropagatorInjectActive(clean_cam_decouple)
@@ -567,10 +625,10 @@ local function onUpdateImpl(deltaTime)
         local skip_cam_write = clean_cam_decouple
         local rot_on = settings:get("enabled") and true or false
         if rot_on then
-            camera:apply(interp_yaw, interp_pitch, interp_roll, deltaTime, nil, skip_cam_write)
+            camera:apply(pose_yaw, pose_pitch, pose_roll, deltaTime, nil, skip_cam_write)
         end
-        if data then
-            camera:applyPosition(data.x or 0, data.y or 0, data.z or 0, deltaTime)
+        if pose_x ~= nil then
+            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime)
         end
         perf:recordCameraUpdate()
     end
@@ -579,16 +637,20 @@ local function onUpdateImpl(deltaTime)
         perf:recordPacket()
     end
 
-    -- Order matters: aim:update stages the native push using aim_state.enabled,
-    -- so flipping the flag first keeps the resume frame from publishing a live
-    -- head rotation still labelled "tracking off".
-    aim:setEnabled(true)
     local rotation = camera:getSmoothedRotation()
-    aim:update(rotation.yaw, rotation.pitch, rotation.roll,
-               camera:getHeadQuat())
-    if aim.summarizeDiscovery then aim:summarizeDiscovery() end
+    if not ads_freeze then
+        -- Order matters: aim:update stages the native push using
+        -- aim_state.enabled, so flipping the flag first keeps the resume frame
+        -- from publishing a live head rotation still labelled "tracking off".
+        aim:setEnabled(true)
+        aim:update(rotation.yaw, rotation.pitch, rotation.roll,
+                   camera:getHeadQuat())
+        if aim.summarizeDiscovery then aim:summarizeDiscovery() end
+    end
 
-    if crosshair then crosshair:tick(true) end
+    -- Frozen-centre ADS puts the aim back down the middle of the screen, so the
+    -- reticle belongs at centre too: tick(false) returns every widget we shove.
+    if crosshair then crosshair:tick(not ads_freeze) end
 
     if should_diag then
         local stats = udp:getStats()
@@ -678,13 +740,16 @@ end
 -- shipped defaults.
 
 -- End  /  Ctrl+Shift+Y - Toggle head tracking
+--
+-- Master switch: rotation AND position go off together. Position tracking
+-- staying live after End reads as the mod ignoring the hotkey.
 function handleToggleTracking()
     dlog("[HeadTracking:HOTKEY] ToggleHeadTracking fired")
     if hotkeyDebounced("ToggleHeadTracking") then return end
     if not settings or not ui then return end
 
-    local enabled = not settings:get("enabled")
-    settings:set("enabled", enabled)
+    local enabled = not settings:isTrackingEnabled()
+    settings:setTrackingEnabled(enabled)
 
     if state then state:refresh() end
 
@@ -767,6 +832,41 @@ end
 -- PageDown / Ctrl+Shift+H are polled natively in ScriptChannel.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build, so do not bind
 -- PageDown here.
+
+-- Home  /  Ctrl+Shift+T - Cycle what aiming down sights does to the view.
+-- Both keys were the recenter binding until the mod stopped keeping a centre
+-- of its own, so they are free and already in the user's fingers.
+local ADS_MODE_CYCLE = { "reticle", "center", "tracked" }
+local ADS_MODE_LABELS = {
+    reticle = "ADS: sights on the reticle (tracking paused)",
+    center  = "ADS: sights on screen centre (tracking paused)",
+    tracked = "ADS: head tracking stays live",
+}
+
+function handleCycleAdsMode()
+    dlog("[HeadTracking:HOTKEY] CycleAdsMode fired")
+    if hotkeyDebounced("CycleAdsMode") then return end
+    if not settings or not ui then return end
+
+    local current = settings:get("ads_mode") or "reticle"
+    local next_mode = ADS_MODE_CYCLE[1]
+    for i, mode in ipairs(ADS_MODE_CYCLE) do
+        if mode == current then
+            next_mode = ADS_MODE_CYCLE[(i % #ADS_MODE_CYCLE) + 1]
+            break
+        end
+    end
+
+    settings:set("ads_mode", next_mode)
+    -- The gate branches on this setting, so a change mid-aim has to re-run the
+    -- walk rather than ride the cached verdict until its TTL expires.
+    if state then state:refresh() end
+
+    ui:showSuccess(ADS_MODE_LABELS[next_mode], 2.5)
+    print("[HeadTracking] ads_mode -> " .. next_mode)
+end
+-- Home / Ctrl+Shift+T are polled natively in ScriptChannel.cpp, same as the
+-- other three.
 
 -- Public API for the CET console. Reachable as
 --   GetMod("HeadTracking").DiagCleanCam(true)

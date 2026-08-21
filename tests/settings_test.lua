@@ -288,6 +288,45 @@ assert_eq(s3:get(bool_key), true, bool_key .. " survives reload")
 assert_true(s:set(bool_key, false), bool_key .. "=false accepted")
 assert_false(s:set(bool_key, "yes"), bool_key .. " string rejected")
 
+-- (7) the master tracking toggle covers rotation AND position. End leaving
+-- position tracking live was a shipped bug: the two settings are separate so
+-- the mode hotkey can cycle them, and the master switch only moved "enabled".
+local m = Settings.new()
+m:set("enabled", true)
+m:set("position_enabled", true)
+assert_true(m:isTrackingEnabled(), "6DOF counts as tracking on")
+m:setTrackingEnabled(false)
+assert_eq(m:get("enabled"), false, "master off clears rotation")
+assert_eq(m:get("position_enabled"), false, "master off clears position")
+assert_false(m:isTrackingEnabled(), "master off reads as tracking off")
+m:setTrackingEnabled(true)
+assert_eq(m:get("enabled"), true, "master on restores rotation")
+assert_eq(m:get("position_enabled"), true, "master on restores position")
+
+-- position-only mode round-trips through the master switch instead of
+-- snapping back to full 6DOF.
+m:set("enabled", false)
+m:set("position_enabled", true)
+assert_true(m:isTrackingEnabled(), "position-only counts as tracking on")
+m:setTrackingEnabled(false)
+assert_false(m:isTrackingEnabled(), "position-only turns fully off")
+m:setTrackingEnabled(true)
+assert_eq(m:get("enabled"), false, "position-only mode restored, rotation stays off")
+assert_eq(m:get("position_enabled"), true, "position-only mode restored, position back on")
+
+-- (8) ads_mode is a three-value enum. An unknown string must fall back to the
+-- shipped default rather than reach state.lua / init.lua, where an unmatched
+-- value would read as "not reticle" and quietly keep the gate open on ADS.
+local a = Settings.new()
+assert_eq(a:get("ads_mode"), "reticle", "ads_mode defaults to reticle")
+for _, mode in ipairs({ "reticle", "center", "tracked" }) do
+    assert_true(a:set("ads_mode", mode), "ads_mode=" .. mode .. " accepted")
+    assert_eq(a:get("ads_mode"), mode, "ads_mode=" .. mode .. " round-trips")
+end
+assert_false(a:set("ads_mode", "centre"), "ads_mode misspelling rejected")
+assert_eq(a:get("ads_mode"), "tracked", "rejected ads_mode leaves the previous value")
+assert_false(a:set("ads_mode", 2), "ads_mode number rejected")
+
 print("== All settings tests passed ==")
 
 -- best-effort cleanup

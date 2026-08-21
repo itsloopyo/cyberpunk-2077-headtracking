@@ -8,7 +8,7 @@ Use a webcam, phone, or VR headset to drive Night City's first-person camera wit
 
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim
 - **6DOF positional tracking** - lean into corners and peek around cover with your head position
-- **Stands down while aiming down sights** - raising the sights hands the camera back to the game so the sight picture stays true, and tracking resumes the moment you lower the weapon
+- **Three ways to aim down sights** - hand the camera back to the game, hold the view still and put the sights on the centre of the screen, or keep tracking live through the whole aim. Cycled in game with `Home`
 
 ## Gameplay Changes
 
@@ -113,7 +113,7 @@ Phone trackers generally all speak OpenTrack UDP, but they differ in how much fi
 - **Direct send**: point the app at your PC's LAN IP on port `4242`. This only works if the app filters its own signal on-device. A raw or lightly filtered feed sent straight to the mod will jitter, because the mod's smoothing is sized to take the edge off a clean signal rather than to rescue a noisy one. [Headcam](https://headcam.app) (my free tracking app) filters on-device, so can send directly.
 
   Not sure about yours? Try direct first. Hold your head still and watch the view: if it drifts or shakes, switch to the OpenTrack route below.
-- **Via OpenTrack**: have the phone send to OpenTrack on a different port (for example 4243), then OpenTrack's Output forwards to `127.0.0.1:4242`. Apps that send a raw or lightly filtered signal need this route so OpenTrack's filters and curve mapping can clean the feed up first.
+- **Via OpenTrack**: have the phone send to OpenTrack on a different port (for example 5252), then OpenTrack's Output forwards to `127.0.0.1:4242`. Apps that send a raw or lightly filtered signal need this route so OpenTrack's filters and curve mapping can clean the feed up first.
 
 The mod's own smoothing and deadzone apply either way, but they are sized to take the edge off an already clean signal, not to rescue a noisy one.
 
@@ -126,6 +126,7 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 | Toggle tracking     | `End`       | `Ctrl+Shift+Y`  |
 | Cycle tracking mode | `Page Up`   | `Ctrl+Shift+G`  |
 | Toggle yaw mode     | `Page Down` | `Ctrl+Shift+H`  |
+| Cycle ADS mode      | `Home`      | `Ctrl+Shift+T`  |
 
 `Page Up` / `Ctrl+Shift+G` cycles tracking mode:
 
@@ -133,6 +134,14 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 2. Positional tracking disabled, rotational tracking enabled
 3. Rotational tracking disabled, positional tracking enabled
 4. Back to normal
+
+`Home` / `Ctrl+Shift+T` cycles what happens when you aim down sights:
+
+1. **Sights on the reticle** (default) - tracking pauses and the game takes the camera back, so the view swings onto the point the reticle was marking. Your shot lands where you had it lined up.
+2. **Sights on screen centre** - tracking pauses with the view held exactly where your head left it, and the sights line up on whatever is at the centre of the screen. Aim moves, the view does not.
+3. **Head tracking stays live** - nothing pauses. You keep looking around while the sights are up, and the reticle keeps marking where the rounds go.
+
+The choice is saved, so it survives a restart.
 
 ## Configuration
 
@@ -176,7 +185,8 @@ Edit it directly, or use the in-game Native Settings UI if you have it installed
   "position_limit_z_fwd": 0.40,
   "position_limit_z_back": 0.10,
 
-  "yaw_mode": "world"
+  "yaw_mode": "world",
+  "ads_mode": "reticle"
 }
 ```
 
@@ -190,6 +200,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - `crosshair_*`: parallax-correct reticle overlay. Set `crosshair_fov_degrees` to your in-game FOV so the marker tracks the true aim point at extreme head angles.
 - `position_*`: 6DOF translation. Sensitivities are per-axis multipliers, limits are in meters.
 - `deadzone_yaw` / `deadzone_pitch` / `deadzone_roll`: degrees of head movement ignored around centre, to stop tracker noise drifting the view while you hold still. Roll defaults higher than the other two because head-roll noise is the usual cause of the view slowly rolling on its own; raise it if you still see that.
+- `ads_mode`: what aiming down sights does to the view. `"reticle"` (default) stands tracking down, so the sights swing onto the point the reticle was marking. `"center"` holds the view where your head left it and puts the sights on whatever is at the centre of the screen. `"tracked"` leaves head tracking running through the aim. Cycled live with `Home` / `Ctrl+Shift+T`, and persisted.
 - `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`, but note this one is **not persisted**: every launch starts back in `"world"`, so the toggle lasts for the session only.
 
 ## Troubleshooting
@@ -225,7 +236,8 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - High-FPS displays show micro-jitter more readily. There is no internal minimum any more, so if a local tracker looks jittery at the default `local_smoothing` of 0.0, raise it.
 
 **Head tracking stops while aiming down sights.**
-- That is deliberate. Aiming down sights puts the camera on the weapon's sight line and that sight picture is the aim, so head rotation would swing the view off the sights while the rounds kept going where the sights point. Tracking pauses for as long as the sights are up and resumes when you lower the weapon.
+- That is the default, and it is deliberate. Aiming down sights puts the camera on the weapon's sight line and that sight picture is the aim, so head rotation would swing the view off the sights while the rounds kept going where the sights point. Tracking pauses for as long as the sights are up and resumes when you lower the weapon.
+- Press `Home` / `Ctrl+Shift+T` to cycle to the other two behaviours. The third one keeps tracking live through the aim.
 - Your view is the same before and after, so repeatedly aiming will not walk it around.
 
 **Wrong rotation axis (camera moves the wrong way).**

@@ -18,13 +18,14 @@
 namespace {
 
 // Bit layout for the `flags` out-param, mirrored in modules/udp.lua. Bit 1 and
-// bit 6 are live status; bits 3-5 are one-shot edges that Lua clears on
-// consume. Keep both sides in sync when adding new flags.
+// bit 6 are live status; bits 3-5 and bit 7 are one-shot edges that Lua clears
+// on consume. Keep both sides in sync when adding new flags.
 constexpr uint32_t kFlagCameraActive     = 1u << 1;
 constexpr uint32_t kFlagToggleTracking   = 1u << 3;
 constexpr uint32_t kFlagCycleMode        = 1u << 4;
 constexpr uint32_t kFlagToggleYaw        = 1u << 5;
 constexpr uint32_t kFlagRemoteConnection = 1u << 6;
+constexpr uint32_t kFlagCycleAdsMode     = 1u << 7;
 
 std::atomic<uint64_t> s_lastPushMs{0};
 std::atomic<bool> s_loggedFirstPush{false};
@@ -32,8 +33,9 @@ std::atomic<bool> s_loggedFirstPush{false};
 bool s_toggleTrackingChordWasDown = false;
 bool s_cycleModeChordWasDown = false;
 bool s_yawModeChordWasDown = false;
+bool s_adsModeChordWasDown = false;
 
-// Polls the standard CameraUnlock chords (Ctrl+Shift+{Y,G,H}). Each chord is
+// Polls the standard CameraUnlock chords (Ctrl+Shift+{Y,G,H,T}). Each chord is
 // paired with the canonical nav-cluster key as a parallel edge source; either
 // firing produces one edge. Neither set can go through CET: registerHotkey
 // dispatch crashes before entering Lua on this game build, and the sandbox
@@ -42,6 +44,7 @@ struct ChordEdges {
     bool toggleTracking;
     bool cycleMode;
     bool yawMode;
+    bool adsMode;
 };
 
 ChordEdges ConsumeChordEdges() {
@@ -62,14 +65,22 @@ ChordEdges ConsumeChordEdges() {
     const bool yawDown =
         ((GetAsyncKeyState(VK_NEXT) & 0x8000) != 0) ||
         (modsDown && ((GetAsyncKeyState('H') & 0x8000) != 0));
+    // Home / Ctrl+Shift+T cycle the aim-down-sights behaviour. Both were the
+    // recenter binding until the mod stopped keeping a centre of its own, so
+    // they are free and already in the user's fingers.
+    const bool adsDown =
+        ((GetAsyncKeyState(VK_HOME) & 0x8000) != 0) ||
+        (modsDown && ((GetAsyncKeyState('T') & 0x8000) != 0));
 
     ChordEdges e{};
     e.toggleTracking = toggleDown && !s_toggleTrackingChordWasDown;
     e.cycleMode      = cycleDown  && !s_cycleModeChordWasDown;
     e.yawMode        = yawDown    && !s_yawModeChordWasDown;
+    e.adsMode        = adsDown    && !s_adsModeChordWasDown;
     s_toggleTrackingChordWasDown = toggleDown;
     s_cycleModeChordWasDown      = cycleDown;
     s_yawModeChordWasDown        = yawDown;
+    s_adsModeChordWasDown        = adsDown;
     return e;
 }
 
@@ -101,6 +112,7 @@ void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, i
     if (edges.toggleTracking) flags |= kFlagToggleTracking;
     if (edges.cycleMode)      flags |= kFlagCycleMode;
     if (edges.yawMode)        flags |= kFlagToggleYaw;
+    if (edges.adsMode)        flags |= kFlagCycleAdsMode;
     // Live status, not an edge: Lua re-reads it every poll so a user switching
     // between a local OpenTrack instance and a phone on WiFi gets the other
     // smoothing parameter without a game restart.

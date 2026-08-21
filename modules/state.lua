@@ -113,6 +113,10 @@ function State.new()
     -- is polled live from the player state machine instead, see isAdsLive().
     self.has_weapon = false
 
+    -- Whether the last verdict walk found the player aiming down sights.
+    -- Cached rather than latched: the walk recomputes it from isAdsLive().
+    self.ads_active = false
+
     -- Warmup deadline (os.clock()); tracking suppressed until this passes.
     -- nil means "no warmup active". Armed on loading-finish and session-start.
     self.warmup_deadline = nil
@@ -247,6 +251,24 @@ function State:isAdsLive()
     return self:probeUpperBodyState() == PSM_UPPERBODY_AIM
 end
 
+--- The configured aim-down-sights behaviour, defaulting to the shipped
+--- "reticle" when settings are not wired up yet (state is constructed before
+--- settings in some init orders, and a nil read must not become a third mode).
+--- @return string One of "reticle", "center", "tracked"
+function State:adsMode()
+    if not self.settings then return "reticle" end
+    return self.settings:get("ads_mode") or "reticle"
+end
+
+--- Is the player aiming down sights? Computed by the verdict walk rather than
+--- probed separately, so this rides the same cache and costs nothing extra on
+--- the frames the caller has already asked for a verdict.
+--- @return boolean
+function State:isAdsActive()
+    self:isTrackingAllowed()
+    return self.ads_active and true or false
+end
+
 --- Probe live UI state from the blackboards. This is the CURRENT state, not a
 --- transition event, so unlike the GameUI latches it cannot stick after a
 --- missed close event. Returns nil when the game is not up far enough to
@@ -335,6 +357,11 @@ function State:isTrackingAllowed()
     end
 
     self.stats.cache_misses = self.stats.cache_misses + 1
+    -- Recomputed by the ADS check at the end of the walk. An early return
+    -- above it (menu, cinematic, warmup) leaves this false, which is what the
+    -- callers want: those block tracking outright, so there is no frozen ADS
+    -- pose to hold.
+    self.ads_active = false
 
     -- Check if tracking is manually disabled via settings. Gate is open if
     -- EITHER rotation or position tracking is on - the position-only mode
@@ -410,13 +437,21 @@ function State:isTrackingAllowed()
     end
 
     -- Aiming down sights: the game pulls the camera onto the weapon's sight
-    -- line, and that sight picture IS the aim. Head rotation would swing the
-    -- view off the sights while the rounds kept going where the sights point,
-    -- so tracking stands down for the duration and resumes on the way out.
+    -- line, and that sight picture IS the aim. What that should do to head
+    -- tracking is the user's call, cycled with Home / Ctrl+Shift+T:
+    --   "reticle" - stand tracking down, so the view swings onto the point the
+    --               reticle was marking and the sight picture is the game's.
+    --   "center"  - keep the gate open. init.lua freezes the head pose and
+    --               stops publishing it to the aim hooks, so the view holds
+    --               still and the sights line up on the centre of the screen.
+    --   "tracked" - keep the gate open and keep tracking live through the aim.
     -- Last in the walk so a menu or cinematic still reports its own reason
     -- when both are true at once.
     if self:isAdsLive() then
-        return self:setVerdict(false, State.REASON.ADS)
+        self.ads_active = true
+        if self:adsMode() == "reticle" then
+            return self:setVerdict(false, State.REASON.ADS)
+        end
     end
 
     return self:setVerdict(true, State.REASON.ALLOWED)

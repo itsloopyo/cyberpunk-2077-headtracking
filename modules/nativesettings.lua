@@ -92,6 +92,14 @@ function NativeSettingsIntegration:onSettingChanged(key, new_value)
         return
     end
 
+    -- The Enabled switch is the master on/off, so it covers rotation and
+    -- position together. Either key moving has to re-read the pair, and
+    -- position_enabled has no widget of its own to look up.
+    if key == "enabled" or key == "position_enabled" then
+        key = "enabled"
+        new_value = self.settings:isTrackingEnabled()
+    end
+
     -- Map settings key to NativeSettings widget path
     local widget_path = self.widgetRefs[key]
     if not widget_path then
@@ -124,11 +132,11 @@ function NativeSettingsIntegration:registerSettings()
     ns.addSwitch(
         "/HeadTracking/Enabled",
         "Enable Head Tracking",
-        "Toggle head tracking on/off. Can also use hotkey (default: F8)",
-        self.settings:get("enabled"),
+        "Toggle head tracking on/off. Can also use hotkey (default: End)",
+        self.settings:isTrackingEnabled(),
         self.settings:getDefaults().enabled,
         function(state)
-            self.settings:set("enabled", state)
+            self.settings:setTrackingEnabled(state)
             -- Reset camera when disabling
             if not state and self.camera then
                 self.camera:reset()
