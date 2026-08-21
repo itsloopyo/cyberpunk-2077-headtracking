@@ -635,8 +635,11 @@ local function onUpdateImpl(deltaTime)
     -- head rotation still labelled "tracking off".
     aim:setEnabled(true)
     local rotation = camera:getSmoothedRotation()
+    local position_x, position_y, position_z = camera:getAppliedPosition()
+    local aim_distance = crosshair and crosshair:getAimDistance() or nil
     aim:update(rotation.yaw, rotation.pitch, rotation.roll,
-               camera:getHeadQuat())
+               camera:getHeadQuat(),
+               position_x, position_y, position_z, aim_distance)
     if aim.summarizeDiscovery then aim:summarizeDiscovery() end
 
     if crosshair then crosshair:tick(true) end

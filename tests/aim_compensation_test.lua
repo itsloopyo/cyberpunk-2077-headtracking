@@ -2,10 +2,9 @@
 -- Copyright (c) 2026 itsloopyo
 -- Equivalence test for aim.lua's compensateForward() extraction.
 --
--- modules/aim.lua registers five CET Overrides (GetCrosshairData,
--- GetBestComponentOnTargetObject, GetDefaultCrosshairData, and GetForward on
--- both FPPCameraComponent and entCameraComponent). Each one used to spell out
--- the same decision inline:
+-- modules/aim.lua registers CET Overrides for GetCrosshairData,
+-- GetBestComponentOnTargetObject, and GetDefaultCrosshairData. Each one used
+-- to spell out the same decision inline:
 --
 --     if not aim_state.enabled or not fwd then return <original> end
 --     local yaw, pitch = aim_state.smooth_yaw, aim_state.smooth_pitch
@@ -155,3 +154,19 @@ for _, enabled in ipairs({ true, false }) do
 end
 
 print(string.format("== Aim compensation equivalence OK: %d cases ==", checks))
+
+local aim_source = assert(io.open("modules/aim.lua", "rb")):read("*a")
+for _, method in ipairs({ "GetCrosshairData", "GetDefaultCrosshairData" }) do
+    local callback = aim_source:match(
+        'Override%(%"TargetingSystem%", %"' .. method .. '%",%s*(function%b())')
+    if not callback then
+        error("FAIL could not find " .. method .. " override callback")
+    end
+    if not callback:find(
+            "this, instigator, crosshairPosition, crosshairForward, wrappedMethod",
+            1, true) then
+        error("FAIL " .. method .. " must accept both CET OUT parameters before wrappedMethod")
+    end
+end
+
+print("== Aim override OUT parameter signatures OK ==")

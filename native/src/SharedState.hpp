@@ -127,13 +127,21 @@ struct HeadTrackingState {
     uint32_t aim_getter_calls_b;
     uint32_t aim_getter_calls_c;
     uint32_t aim_getter_overrides;
+
+    // Processed camera translation and the live clean-aim hit distance. The
+    // projectile orientation hook uses these to converge rounds on the same
+    // world point as the position-compensated reticle.
+    float position_x;
+    float position_y;
+    float position_z;
+    float aim_distance;
 };
 
 // Shared memory name - must match CET Lua code
 constexpr const char* SHARED_MEM_NAME = "HeadTrackingAimState";
 constexpr size_t SHARED_MEM_SIZE = sizeof(HeadTrackingState);
 
-static_assert(sizeof(HeadTrackingState) == 136,
+static_assert(sizeof(HeadTrackingState) == 152,
     "HeadTrackingState layout changed - update modules/aim.lua cdef to match");
 
 class SharedState {

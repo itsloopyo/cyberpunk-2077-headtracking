@@ -14,7 +14,9 @@
 //   Bool HeadTrackingPushState(Float yaw, Float pitch, Float roll,
 //                              Bool enabled, Bool isAds,
 //                              Float qi, Float qj, Float qk, Float qr,
-//                              Bool propagatorInject)
+//                              Bool propagatorInject,
+//                              Float positionX, Float positionY, Float positionZ,
+//                              Float aimDistance)
 //
 // Registration is queued at plugin load and runs when the game builds its RTTI
 // registry. It does not depend on the build fingerprint, so on an unrecognised

@@ -8,7 +8,8 @@
 --
 --   Game.HeadTrackingPollPose()  -> ok, yaw, pitch, roll, x, y, z, flags
 --   Game.HeadTrackingPushState(yaw, pitch, roll, enabled, isAds,
---                              qi, qj, qk, qr, propagatorInject) -> ok
+--                              qi, qj, qk, qr, propagatorInject,
+--                              positionX, positionY, positionZ, aimDistance) -> ok
 --
 -- This used to be a TCP socket served by the plugin and driven from Lua by
 -- RedSocket, a separate CET mod. That mod was never shipped with ours, so any
@@ -53,11 +54,12 @@ local native_cycle_ads_mode_requested = false
 -- closure per invocation and both of these run every frame, so the arguments
 -- ride in upvalues instead. Neither is reentrant, which is what makes the
 -- upvalue reuse safe (same reasoning as guardedVar in init.lua).
-local push_args = { 0, 0, 0, false, false, 0, 0, 0, 1, false }
+local push_args = { 0, 0, 0, false, false, 0, 0, 0, 1, false, 0, 0, 0, 0 }
 local function _callPush()
     return Game.HeadTrackingPushState(
         push_args[1], push_args[2], push_args[3], push_args[4], push_args[5],
-        push_args[6], push_args[7], push_args[8], push_args[9], push_args[10])
+        push_args[6], push_args[7], push_args[8], push_args[9], push_args[10],
+        push_args[11], push_args[12], push_args[13], push_args[14])
 end
 local function _callPoll()
     return Game.HeadTrackingPollPose()
@@ -97,7 +99,9 @@ function TrackingInput:isDataFresh()
     return (os.clock() - last_successful_parse_time) <= DATA_FRESHNESS_WINDOW_S
 end
 
-function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat, propagator_inject)
+function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat,
+                                      propagator_inject, position_x, position_y,
+                                      position_z, aim_distance)
     -- Reuse the state table to avoid a 10-field heap allocation every frame
     -- (this is called once per onUpdate via Aim:update). The table is left nil
     -- until the first call so poll() knows there is nothing to push yet.
@@ -116,6 +120,10 @@ function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat, p
     st.qk = quat and quat.k or 0
     st.qr = quat and quat.r or 1
     st.propagator_inject = propagator_inject and true or false
+    st.position_x = position_x or 0
+    st.position_y = position_y or 0
+    st.position_z = position_z or 0
+    st.aim_distance = aim_distance or 0
 end
 
 function TrackingInput:isNativeCameraHookActive()
@@ -189,6 +197,10 @@ function TrackingInput:poll()
         push_args[8] = st.qk
         push_args[9] = st.qr
         push_args[10] = st.propagator_inject
+        push_args[11] = st.position_x
+        push_args[12] = st.position_y
+        push_args[13] = st.position_z
+        push_args[14] = st.aim_distance
         pcall(_callPush)
     end
 

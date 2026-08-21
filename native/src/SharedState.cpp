@@ -27,10 +27,15 @@ static bool IsSane(const HeadTrackingState& s) {
     if (!finite(s.raw_yaw) || !finite(s.raw_pitch) || !finite(s.raw_roll)) return false;
     // Quaternion fields used by the camera hook for the view-matrix injection
     if (!finite(s.quat_i) || !finite(s.quat_j) || !finite(s.quat_k) || !finite(s.quat_r)) return false;
+    if (!finite(s.position_x) || !finite(s.position_y) ||
+        !finite(s.position_z) || !finite(s.aim_distance)) return false;
     // Yaw/pitch/roll are degrees, not radians - a reading outside ±720 is
     // almost certainly a torn-read artefact, not a real head pose.
     if (std::abs(s.yaw) > 720.0f || std::abs(s.pitch) > 720.0f || std::abs(s.roll) > 720.0f) return false;
     if (std::abs(s.raw_yaw) > 720.0f || std::abs(s.raw_pitch) > 720.0f || std::abs(s.raw_roll) > 720.0f) return false;
+    if (std::abs(s.position_x) > 2.0f || std::abs(s.position_y) > 2.0f ||
+        std::abs(s.position_z) > 2.0f || s.aim_distance < 0.0f ||
+        s.aim_distance > 10000.0f) return false;
     return true;
 }
 

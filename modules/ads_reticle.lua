@@ -64,6 +64,8 @@ function AdsReticle:draw(active)
         return
     end
 
+    -- getAimOffset() is the screen offset from centre to the aim point, in the
+    -- same sign the crosshair driver adds to the game's own reticle.
     local margin = SIZE + GAP + 2
     local x = math_max(margin, math_min(screen_w - margin, screen_w * 0.5 + dx))
     local y = math_max(margin, math_min(screen_h - margin, screen_h * 0.5 + dy))

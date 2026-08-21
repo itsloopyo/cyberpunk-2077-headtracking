@@ -126,6 +126,11 @@ local function ensureFfi()
                 uint32_t aim_getter_calls_b;
                 uint32_t aim_getter_calls_c;
                 uint32_t aim_getter_overrides;
+
+                float position_x;
+                float position_y;
+                float position_z;
+                float aim_distance;
             } HeadTrackingState;
 
             void* CreateFileMappingA(void* hFile, void* lpAttr,
@@ -152,7 +157,7 @@ local function ensureFfi()
     -- half of that contract. MapViewOfFile below maps the WHOLE section, so a
     -- drifted cdef does not fail loudly - it silently reads and writes the
     -- wrong offsets, and a larger struct runs off the end of the mapping.
-    local EXPECTED_STATE_SIZE = 184
+    local EXPECTED_STATE_SIZE = 152
     local actual_size = ffi.sizeof("HeadTrackingState")
     if actual_size ~= EXPECTED_STATE_SIZE then
         -- Clear the module handle so the `if ffi then return true end`
@@ -236,6 +241,10 @@ local function initSharedMemory()
     shared_mem.state.quat_k = 0
     shared_mem.state.quat_r = 1
     shared_mem.state.applied_frame = 0
+    shared_mem.state.position_x = 0
+    shared_mem.state.position_y = 0
+    shared_mem.state.position_z = 0
+    shared_mem.state.aim_distance = 0
 
 
     shared_mem.state.propagator_inject_active = 0
@@ -293,6 +302,10 @@ local function updateSharedMemory(yaw, pitch, enabled, is_ads, ads_scale, roll, 
     -- for future "enabled but don't inject this frame" states (e.g. ADS
     -- mode overrides).
     shared_mem.state.camera_hook_inject = enabled
+    shared_mem.state.position_x = aim_state.position_x
+    shared_mem.state.position_y = aim_state.position_y
+    shared_mem.state.position_z = aim_state.position_z
+    shared_mem.state.aim_distance = aim_state.aim_distance
 
     if quat then
         shared_mem.state.quat_i = quat.i or 0
@@ -345,6 +358,10 @@ local aim_state = {
     smooth_yaw = 0,
     smooth_pitch = 0,
     smooth_roll = 0,
+    position_x = 0,
+    position_y = 0,
+    position_z = 0,
+    aim_distance = 0,
     head_quat = { i = 0, j = 0, k = 0, r = 1 },
     override_registered = false,
     shared_mem_initialized = false,
@@ -594,11 +611,10 @@ function Aim:init()
 
     print("[HeadTracking:AIM] Registering Override for TargetingSystem:GetCrosshairData")
 
-    -- Override GetCrosshairData to modify aim direction
-    -- CET Override pattern: OUT params are returned as multiple values from wrappedMethod
+    -- CET includes OUT params in the callback arguments, but they must be
+    -- omitted when calling wrappedMethod. Their values are returned instead.
     Override("TargetingSystem", "GetCrosshairData",
-        function(this, instigator, wrappedMethod)
-            -- Call original - OUT params come back as return values
+        function(this, instigator, crosshairPosition, crosshairForward, wrappedMethod)
             local pos, fwd = wrappedMethod(instigator)
             discoTap("TargetingSystem:GetCrosshairData", fwd)
             return pos, compensateForward(fwd)
@@ -623,7 +639,7 @@ function Aim:init()
     -- Also try overriding GetDefaultCrosshairData in case that's used for shooting
     print("[HeadTracking:AIM] Registering Override for TargetingSystem:GetDefaultCrosshairData")
     Override("TargetingSystem", "GetDefaultCrosshairData",
-        function(this, instigator, wrappedMethod)
+        function(this, instigator, crosshairPosition, crosshairForward, wrappedMethod)
             local pos, fwd = wrappedMethod(instigator)
             discoTap("TargetingSystem:GetDefaultCrosshairData", fwd)
             return pos, compensateForward(fwd)
@@ -649,10 +665,18 @@ end
 --- @param pitch number Current smoothed pitch in degrees
 --- @param roll number|nil Current smoothed roll in degrees
 --- @param quat table|nil Head rotation quaternion {i,j,k,r} for the C++ hook
-function Aim:update(yaw, pitch, roll, quat)
+--- @param position_x number|nil Applied camera-local lateral offset in metres
+--- @param position_y number|nil Applied camera-local longitudinal offset in metres
+--- @param position_z number|nil Applied camera-local vertical offset in metres
+--- @param aim_distance number|nil Distance to the clean aim hit in metres
+function Aim:update(yaw, pitch, roll, quat, position_x, position_y, position_z, aim_distance)
     aim_state.smooth_yaw = yaw
     aim_state.smooth_pitch = pitch
     aim_state.smooth_roll = roll or 0
+    aim_state.position_x = position_x or 0
+    aim_state.position_y = position_y or 0
+    aim_state.position_z = position_z or 0
+    aim_state.aim_distance = aim_distance or 0
     _disco_yaw = yaw
     _disco_pitch = pitch
     if quat then
@@ -672,7 +696,9 @@ function Aim:update(yaw, pitch, roll, quat)
         aim_state.udp:setNativeState(yaw, pitch, aim_state.smooth_roll,
                                      aim_state.enabled, aim_state.is_ads,
                                      aim_state.head_quat,
-                                     propagator_inject)
+                                     propagator_inject,
+                                     aim_state.position_x, aim_state.position_y,
+                                     aim_state.position_z, aim_state.aim_distance)
     end
 
     aim_state.native_camera_hook_active = native_camera_ready

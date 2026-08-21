@@ -149,6 +149,7 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     float yaw = 0.0f, pitch = 0.0f, roll = 0.0f;
     bool enabled = false, isAds = false, propagatorInject = false;
     float qi = 0.0f, qj = 0.0f, qk = 0.0f, qr = 1.0f;
+    float positionX = 0.0f, positionY = 0.0f, positionZ = 0.0f, aimDistance = 0.0f;
     RED4ext::GetParameter(aFrame, &yaw);
     RED4ext::GetParameter(aFrame, &pitch);
     RED4ext::GetParameter(aFrame, &roll);
@@ -159,6 +160,10 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     RED4ext::GetParameter(aFrame, &qk);
     RED4ext::GetParameter(aFrame, &qr);
     RED4ext::GetParameter(aFrame, &propagatorInject);
+    RED4ext::GetParameter(aFrame, &positionX);
+    RED4ext::GetParameter(aFrame, &positionY);
+    RED4ext::GetParameter(aFrame, &positionZ);
+    RED4ext::GetParameter(aFrame, &aimDistance);
     ++aFrame->code; // ParamEnd
 
     s_lastPushMs.store(GetTickCount64(), std::memory_order_relaxed);
@@ -166,7 +171,9 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     // Script values cross a trust boundary: a malformed quat written into
     // shared state reaches the hooks that multiply it into the camera.
     if (!std::isfinite(yaw) || !std::isfinite(pitch) || !std::isfinite(roll) ||
-        !std::isfinite(qi) || !std::isfinite(qj) || !std::isfinite(qk) || !std::isfinite(qr)) {
+        !std::isfinite(qi) || !std::isfinite(qj) || !std::isfinite(qk) || !std::isfinite(qr) ||
+        !std::isfinite(positionX) || !std::isfinite(positionY) ||
+        !std::isfinite(positionZ) || !std::isfinite(aimDistance)) {
         if (aOut) *aOut = false;
         return;
     }
@@ -193,6 +200,10 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     w->quat_j = qj;
     w->quat_k = qk;
     w->quat_r = qr;
+    w->position_x = positionX;
+    w->position_y = positionY;
+    w->position_z = positionZ;
+    w->aim_distance = aimDistance;
     w->applied_frame = w->applied_frame + 1;
     w->frame = w->frame + 1;
 
@@ -232,6 +243,10 @@ void RegisterFunctions() {
     push->AddParam("Float", "qk");
     push->AddParam("Float", "qr");
     push->AddParam("Bool", "propagatorInject");
+    push->AddParam("Float", "positionX");
+    push->AddParam("Float", "positionY");
+    push->AddParam("Float", "positionZ");
+    push->AddParam("Float", "aimDistance");
     push->SetReturnType("Bool");
     rtti->RegisterFunction(push);
 

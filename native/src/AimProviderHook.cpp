@@ -157,7 +157,12 @@ bool ApplyPeel(uintptr_t outp, uint32_t mode, PeelTrace& t) {
     const float hLenSq = hx*hx + hy*hy + hz*hz + hw*hw;
     const float headDelta = std::fabs(hx) + std::fabs(hy) + std::fabs(hz) +
                             std::fabs(1.0f - std::fabs(hw));
-    if (!std::isfinite(hLenSq) || hLenSq < 0.5f || hLenSq > 1.5f || headDelta < 0.005f) {
+    const HeadTrackingState state = g_sharedState.Read();
+    const bool positionActive = state.aim_distance > 0.001f &&
+        (std::fabs(state.position_x) + std::fabs(state.position_y) +
+         std::fabs(state.position_z)) > 0.00001f;
+    if (!std::isfinite(hLenSq) || hLenSq < 0.5f || hLenSq > 1.5f ||
+        (headDelta < 0.005f && !positionActive)) {
         s_rejectedIdentity.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -188,6 +193,34 @@ bool ApplyPeel(uintptr_t outp, uint32_t mode, PeelTrace& t) {
         }
         const float invLen = 1.0f / std::sqrt(nLenSq);
         nx *= invLen; ny *= invLen; nz *= invLen; nw *= invLen;
+
+        if (positionActive) {
+            const float tx = -state.position_x;
+            const float ty = state.aim_distance + state.position_y;
+            const float tz = -state.position_z;
+            const float targetLenSq = tx*tx + ty*ty + tz*tz;
+            if (std::isfinite(targetLenSq) && targetLenSq > 0.0001f) {
+                const float targetInvLen = 1.0f / std::sqrt(targetLenSq);
+                const float dx = tx * targetInvLen;
+                const float dy = ty * targetInvLen;
+                const float dz = tz * targetInvLen;
+
+                // Shortest-arc quaternion from local +Y to the translated
+                // target direction: cross(+Y, d), 1 + dot(+Y, d).
+                float px = dz;
+                float py = 0.0f;
+                float pz = -dx;
+                float pw = 1.0f + dy;
+                const float pLenSq = px*px + py*py + pz*pz + pw*pw;
+                if (std::isfinite(pLenSq) && pLenSq > 0.0001f) {
+                    const float pInvLen = 1.0f / std::sqrt(pLenSq);
+                    px *= pInvLen; py *= pInvLen; pz *= pInvLen; pw *= pInvLen;
+                    float ox, oy, oz, ow;
+                    QuatMul(nx, ny, nz, nw, px, py, pz, pw, ox, oy, oz, ow);
+                    nx = ox; ny = oy; nz = oz; nw = ow;
+                }
+            }
+        }
 
         // Is this the player's own aim? Compare against the FPP camera world
         // orientation both before and after the peel: whether the engine has

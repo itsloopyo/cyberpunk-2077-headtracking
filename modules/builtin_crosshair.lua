@@ -1141,8 +1141,12 @@ end
 local function projectAimOffset(yaw, pitch, roll,
                                 pos_x, pos_y, pos_z, aim_distance,
                                 h_fov_deg, v_fov_deg, screen_w, screen_h)
+    -- getRenderedYPR() returns Cyberpunk camera-space angles. Its yaw sign is
+    -- already opposite the physical head turn, while positive pitch projects
+    -- downward in screen coordinates. Negating either one makes the reticle
+    -- travel with the head instead of remaining on the aim point.
     local yaw_rad = math_rad(yaw)
-    local pitch_rad = math_rad(pitch)
+    local pitch_rad = math_rad(pitch or 0)
     local roll_rad = math_rad(-(roll or 0))
 
     local sy, cy = math_sin(yaw_rad), math_cos(yaw_rad)
@@ -1150,9 +1154,11 @@ local function projectAimOffset(yaw, pitch, roll,
 
     local x0, y0, z0
     if aim_distance then
+        -- The aim point is fixed in the clean camera frame. Move it opposite
+        -- the translated camera before projecting it into the tracked view.
         x0 = -pos_x
-        y0 = -pos_z
-        z0 = aim_distance - pos_y
+        y0 = pos_z
+        z0 = aim_distance + pos_y
     else
         x0 = 0
         y0 = 0
@@ -1237,8 +1243,18 @@ function BuiltinCrosshair:_getAimDistance(player, position_active)
         return nil
     end
 
-    if not hit or not result or type(result.distance) ~= "number"
-       or result.distance <= 0 or result.distance ~= result.distance then
+    local hit_position = hit and result and result.position
+    if not hit_position then
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        return nil
+    end
+
+    local hit_x = hit_position.x - from.x
+    local hit_y = hit_position.y - from.y
+    local hit_z = hit_position.z - from.z
+    local hit_distance = math.sqrt(hit_x * hit_x + hit_y * hit_y + hit_z * hit_z)
+    if hit_distance <= 0 or hit_distance ~= hit_distance then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
         return nil
@@ -1247,15 +1263,27 @@ function BuiltinCrosshair:_getAimDistance(player, position_active)
     local previous = self._aim_distance
     local previous_t = self._aim_distance_sample_t
     if not previous or not previous_t then
-        self._aim_distance = result.distance
+        self._aim_distance = hit_distance
     else
         local dt = now - previous_t
         local alpha = 1.0 - math_exp(-AIM_DISTANCE_SMOOTH_SPEED * dt)
-        self._aim_distance = previous + (result.distance - previous) * alpha
+        self._aim_distance = previous + (hit_distance - previous) * alpha
     end
     self._aim_distance_sample_t = now
     self._aim_distance_error_logged = false
     return self._aim_distance
+end
+
+--- Return the live distance used for positional parallax. Nil means the clean
+--- aim ray did not hit anything, so translation converges at infinity.
+--- @return number|nil
+function BuiltinCrosshair:getAimDistance()
+    local pos_x, pos_y, pos_z = self.camera:getAppliedPosition()
+    local position_active = math_abs(pos_x) > 1e-6
+        or math_abs(pos_y) > 1e-6
+        or math_abs(pos_z) > 1e-6
+    local player = Game and Game.GetPlayer and Game.GetPlayer()
+    return self:_getAimDistance(player, position_active)
 end
 
 
