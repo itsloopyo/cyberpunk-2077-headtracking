@@ -9,7 +9,7 @@ local NativeSettingsIntegration = {}
 NativeSettingsIntegration.__index = NativeSettingsIntegration
 
 -- String-valued settings shown as dropdowns. NativeSettings selectors speak
--- 1-based INDICES in both directions - the callback receives one and refresh()
+-- 1-based INDICES in both directions - the callback receives one and setOption()
 -- expects one - while the setting itself stores the string, so every crossing
 -- goes through these two tables. `values` is the stored order and must stay in
 -- step with the hotkey cycle in init.lua, so the dropdown and the key walk the
@@ -59,7 +59,7 @@ function NativeSettingsIntegration.new(settings_ref)
     -- The master on/off switch is not backed by a single setting - it drives
     -- `enabled` and `position_enabled` together - so it is tracked apart from
     -- widgetRefs, which maps one setting to the one widget that stores it.
-    self.masterWidgetPath = nil
+    self.masterWidgetRef = nil
     self.settingsObserverUnsubscribe = nil
     return self
 end
@@ -68,7 +68,7 @@ end
 --- @return boolean available Whether NativeSettings mod is installed
 function NativeSettingsIntegration.isAvailable()
     local ok, ns = pcall(function()
-        return GetMod("NativeSettings")
+        return GetMod("nativeSettings") or GetMod("NativeSettings")
     end)
     return ok and ns ~= nil
 end
@@ -91,7 +91,7 @@ end
 function NativeSettingsIntegration:init()
     -- Check if NativeSettings mod is installed
     local ok, ns = pcall(function()
-        return GetMod("NativeSettings")
+        return GetMod("nativeSettings") or GetMod("NativeSettings")
     end)
 
     if not ok or not ns then
@@ -121,7 +121,7 @@ function NativeSettingsIntegration:shutdown()
 
     -- Clear widget references
     self.widgetRefs = {}
-    self.masterWidgetPath = nil
+    self.masterWidgetRef = nil
     self.initialized = false
 end
 
@@ -138,7 +138,7 @@ function NativeSettingsIntegration:onSettingChanged(key, new_value)
     -- moving has to re-read the pair. It is refreshed alongside - not instead
     -- of - the key's own switch, which falls through below.
     if key == "enabled" or key == "position_enabled" then
-        self:refreshWidget(self.masterWidgetPath, self.settings:isTrackingEnabled())
+        self:refreshWidget(self.masterWidgetRef, self.settings:isTrackingEnabled())
     end
 
     if ENUM_SETTINGS[key] then
@@ -149,16 +149,16 @@ function NativeSettingsIntegration:onSettingChanged(key, new_value)
 end
 
 --- Push a value into one NativeSettings widget.
---- @param widget_path string|nil Nothing to do when the setting has no widget.
+--- @param widget_ref table|nil Nothing to do when the setting has no widget.
 --- @param value any
-function NativeSettingsIntegration:refreshWidget(widget_path, value)
-    if not widget_path then return end
+function NativeSettingsIntegration:refreshWidget(widget_ref, value)
+    if not widget_ref then return end
     local ns = self.nativeSettings
-    if not ns or not ns.refresh then return end
-    -- Not every widget type implements refresh. A failure here only means the
-    -- panel shows a stale value until it is reopened, so it must not propagate
-    -- into the hotkey handler that triggered the change.
-    pcall(ns.refresh, widget_path, value)
+    if not ns or not ns.setOption then return end
+    local ok, err = pcall(ns.setOption, widget_ref, value)
+    if not ok then
+        print("[HeadTracking] Native Settings UI refresh failed: " .. tostring(err))
+    end
 end
 
 --- Register all settings with NativeSettings mod
@@ -176,8 +176,8 @@ function NativeSettingsIntegration:registerSettings()
     -- together. It is deliberately NOT widgetRefs["enabled"] - it writes both
     -- keys, so the rotation switch below owns that mapping and this one is
     -- refreshed by hand from isTrackingEnabled().
-    ns.addSwitch(
-        "/HeadTracking/Enabled",
+    self.masterWidgetRef = ns.addSwitch(
+        "/HeadTracking",
         "Enable Head Tracking",
         "Master switch for rotation and position together. Hotkey: End / Ctrl+Shift+Y.",
         self.settings:isTrackingEnabled(),
@@ -198,12 +198,10 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
-    self.masterWidgetPath = "/HeadTracking/Enabled"
-
     -- Rotation on its own, so rotation-only and position-only are both
     -- reachable from the panel rather than only from the Page Up cycle.
-    ns.addSwitch(
-        "/HeadTracking/RotationEnabled",
+    self.widgetRefs["enabled"] = ns.addSwitch(
+        "/HeadTracking",
         "Rotational Tracking",
         "Look around with your head. Turn this off and leave Positional Tracking on for lean-only. Hotkey: Page Up / Ctrl+Shift+G cycles rotation-only, position-only and both.",
         self.settings:get("enabled"),
@@ -221,13 +219,11 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
-    self.widgetRefs["enabled"] = "/HeadTracking/RotationEnabled"
-
     -- Aim-down-sights behaviour. Same three modes the Home hotkey cycles.
     do
         local spec = ENUM_SETTINGS.ads_mode
-        ns.addSelectorString(
-            "/HeadTracking/AdsMode",
+        self.widgetRefs["ads_mode"] = ns.addSelectorString(
+            "/HeadTracking",
             "Aiming Down Sights",
             "What happens to head tracking while the sights are up. Raising them always swings the view onto the point the reticle was marking; this picks what follows. Hotkey: Home / Ctrl+Shift+U.",
             spec.labels,
@@ -237,7 +233,6 @@ function NativeSettingsIntegration:registerSettings()
                 self.settings:set("ads_mode", spec.values[index])
             end
         )
-        self.widgetRefs["ads_mode"] = "/HeadTracking/AdsMode"
     end
 
     -- Yaw mode. The camera has to drop its yaw-mode intermediates on the way
@@ -246,8 +241,8 @@ function NativeSettingsIntegration:registerSettings()
     -- handler makes.
     do
         local spec = ENUM_SETTINGS.yaw_mode
-        ns.addSelectorString(
-            "/HeadTracking/YawMode",
+        self.widgetRefs["yaw_mode"] = ns.addSelectorString(
+            "/HeadTracking",
             "Yaw Mode",
             "World keeps head yaw swinging around world vertical however far the view is pitched. Camera-relative pivots around the camera's own up-axis, which tilts with mouse pitch. Hotkey: Page Down / Ctrl+Shift+H.",
             spec.labels,
@@ -260,7 +255,6 @@ function NativeSettingsIntegration:registerSettings()
                 end
             end
         )
-        self.widgetRefs["yaw_mode"] = "/HeadTracking/YawMode"
     end
 
     -- =====================================================================
@@ -269,8 +263,8 @@ function NativeSettingsIntegration:registerSettings()
     ns.addSubcategory("/HeadTracking/Sensitivity", "Sensitivity")
 
     -- Yaw sensitivity
-    ns.addRangeFloat(
-        "/HeadTracking/Sensitivity/Yaw",
+    self.widgetRefs["sensitivity_yaw"] = ns.addRangeFloat(
+        "/HeadTracking/Sensitivity",
         "Yaw Sensitivity",
         "Horizontal rotation sensitivity (left/right). Higher = more responsive.",
         0.1, 3.0, 0.1,
@@ -281,11 +275,9 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("sensitivity_yaw", value)
         end
     )
-    self.widgetRefs["sensitivity_yaw"] = "/HeadTracking/Sensitivity/Yaw"
-
     -- Pitch sensitivity
-    ns.addRangeFloat(
-        "/HeadTracking/Sensitivity/Pitch",
+    self.widgetRefs["sensitivity_pitch"] = ns.addRangeFloat(
+        "/HeadTracking/Sensitivity",
         "Pitch Sensitivity",
         "Vertical rotation sensitivity (up/down). Higher = more responsive.",
         0.1, 3.0, 0.1,
@@ -296,11 +288,9 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("sensitivity_pitch", value)
         end
     )
-    self.widgetRefs["sensitivity_pitch"] = "/HeadTracking/Sensitivity/Pitch"
-
     -- Roll sensitivity
-    ns.addRangeFloat(
-        "/HeadTracking/Sensitivity/Roll",
+    self.widgetRefs["sensitivity_roll"] = ns.addRangeFloat(
+        "/HeadTracking/Sensitivity",
         "Roll Sensitivity",
         "Tilt rotation sensitivity (head tilt). Set to 0 to disable roll.",
         0.0, 2.0, 0.1,
@@ -311,16 +301,14 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("sensitivity_roll", value)
         end
     )
-    self.widgetRefs["sensitivity_roll"] = "/HeadTracking/Sensitivity/Roll"
-
     -- =====================================================================
     -- SMOOTHING SECTION
     -- =====================================================================
     ns.addSubcategory("/HeadTracking/Smoothing", "Smoothing")
 
     -- Local smoothing (tracker on this machine)
-    ns.addRangeFloat(
-        "/HeadTracking/Smoothing/Local",
+    self.widgetRefs["local_smoothing"] = ns.addRangeFloat(
+        "/HeadTracking/Smoothing",
         "Local Smoothing",
         "Smoothing applied when the tracker runs on this machine (loopback). 0 = no smoothing, 1 = heavy.",
         0.0, 1.0, 0.05,
@@ -331,11 +319,9 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("local_smoothing", value)
         end
     )
-    self.widgetRefs["local_smoothing"] = "/HeadTracking/Smoothing/Local"
-
     -- Remote smoothing (tracker is a device elsewhere on the network)
-    ns.addRangeFloat(
-        "/HeadTracking/Smoothing/Remote",
+    self.widgetRefs["remote_smoothing"] = ns.addRangeFloat(
+        "/HeadTracking/Smoothing",
         "Remote Smoothing",
         "Smoothing applied when the tracker is a remote device on the network. 0 = no smoothing, 1 = heavy.",
         0.0, 1.0, 0.05,
@@ -346,16 +332,14 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("remote_smoothing", value)
         end
     )
-    self.widgetRefs["remote_smoothing"] = "/HeadTracking/Smoothing/Remote"
-
     -- =====================================================================
     -- ROTATION LIMITS SECTION
     -- =====================================================================
     ns.addSubcategory("/HeadTracking/Limits", "Rotation Limits")
 
     -- Yaw clamp
-    ns.addRangeFloat(
-        "/HeadTracking/Limits/Yaw",
+    self.widgetRefs["clamp_yaw"] = ns.addRangeFloat(
+        "/HeadTracking/Limits",
         "Max Yaw",
         "Maximum horizontal rotation in degrees (left/right from center).",
         10.0, 180.0, 5.0,
@@ -366,11 +350,9 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("clamp_yaw", value)
         end
     )
-    self.widgetRefs["clamp_yaw"] = "/HeadTracking/Limits/Yaw"
-
     -- Pitch clamp
-    ns.addRangeFloat(
-        "/HeadTracking/Limits/Pitch",
+    self.widgetRefs["clamp_pitch"] = ns.addRangeFloat(
+        "/HeadTracking/Limits",
         "Max Pitch",
         "Maximum vertical rotation in degrees (up/down from center).",
         10.0, 90.0, 5.0,
@@ -381,11 +363,9 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("clamp_pitch", value)
         end
     )
-    self.widgetRefs["clamp_pitch"] = "/HeadTracking/Limits/Pitch"
-
     -- Roll clamp
-    ns.addRangeFloat(
-        "/HeadTracking/Limits/Roll",
+    self.widgetRefs["clamp_roll"] = ns.addRangeFloat(
+        "/HeadTracking/Limits",
         "Max Roll",
         "Maximum tilt rotation in degrees (head tilt left/right).",
         0.0, 90.0, 5.0,
@@ -396,15 +376,13 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("clamp_roll", value)
         end
     )
-    self.widgetRefs["clamp_roll"] = "/HeadTracking/Limits/Roll"
-
     -- =====================================================================
     -- DEADZONES SECTION
     -- =====================================================================
     ns.addSubcategory("/HeadTracking/Deadzones", "Deadzones")
 
-    ns.addRangeFloat(
-        "/HeadTracking/Deadzones/Yaw",
+    self.widgetRefs["deadzone_yaw"] = ns.addRangeFloat(
+        "/HeadTracking/Deadzones",
         "Yaw Deadzone",
         "Degrees of horizontal tracker noise ignored. Raise if the view drifts left/right when your head is still.",
         0.0, 5.0, 0.1,
@@ -413,10 +391,8 @@ function NativeSettingsIntegration:registerSettings()
         self.settings:getDefaults().deadzone_yaw,
         function(value) self.settings:set("deadzone_yaw", value) end
     )
-    self.widgetRefs["deadzone_yaw"] = "/HeadTracking/Deadzones/Yaw"
-
-    ns.addRangeFloat(
-        "/HeadTracking/Deadzones/Pitch",
+    self.widgetRefs["deadzone_pitch"] = ns.addRangeFloat(
+        "/HeadTracking/Deadzones",
         "Pitch Deadzone",
         "Degrees of vertical tracker noise ignored. Raise if the view drifts up/down when your head is still.",
         0.0, 5.0, 0.1,
@@ -425,10 +401,8 @@ function NativeSettingsIntegration:registerSettings()
         self.settings:getDefaults().deadzone_pitch,
         function(value) self.settings:set("deadzone_pitch", value) end
     )
-    self.widgetRefs["deadzone_pitch"] = "/HeadTracking/Deadzones/Pitch"
-
-    ns.addRangeFloat(
-        "/HeadTracking/Deadzones/Roll",
+    self.widgetRefs["deadzone_roll"] = ns.addRangeFloat(
+        "/HeadTracking/Deadzones",
         "Roll Deadzone",
         "Degrees of head-tilt tracker noise ignored. Raise if the view gradually rolls when your head is still.",
         0.0, 5.0, 0.1,
@@ -437,15 +411,13 @@ function NativeSettingsIntegration:registerSettings()
         self.settings:getDefaults().deadzone_roll,
         function(value) self.settings:set("deadzone_roll", value) end
     )
-    self.widgetRefs["deadzone_roll"] = "/HeadTracking/Deadzones/Roll"
-
     -- =====================================================================
     -- POSITION (6DOF) SECTION
     -- =====================================================================
     ns.addSubcategory("/HeadTracking/Position", "Position (6DOF)")
 
-    ns.addSwitch(
-        "/HeadTracking/Position/Enabled",
+    self.widgetRefs["position_enabled"] = ns.addSwitch(
+        "/HeadTracking/Position",
         "Positional Tracking",
         "Lean and peek with your head position, on top of rotation. Hotkey: Page Up / Ctrl+Shift+G cycles rotation-only, position-only and both.",
         self.settings:get("position_enabled"),
@@ -458,43 +430,40 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
-    self.widgetRefs["position_enabled"] = "/HeadTracking/Position/Enabled"
-
     -- Sensitivity and limits are laid out axis by axis. Z is asymmetric on
     -- purpose: leaning in has far more travel than pulling back, which is what
     -- stops the camera clipping through the player model.
     local POSITION_WIDGETS = {
-        { key = "position_sens_x", path = "SensX", label = "Sensitivity X (lateral)",
+        { key = "position_sens_x", label = "Sensitivity X (lateral)",
           desc = "Multiplier for side-to-side head movement.",
           min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
-        { key = "position_sens_y", path = "SensY", label = "Sensitivity Y (vertical)",
+        { key = "position_sens_y", label = "Sensitivity Y (vertical)",
           desc = "Multiplier for up-and-down head movement.",
           min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
-        { key = "position_sens_z", path = "SensZ", label = "Sensitivity Z (forward)",
+        { key = "position_sens_z", label = "Sensitivity Z (forward)",
           desc = "Multiplier for leaning in and pulling back.",
           min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
-        { key = "position_limit_x", path = "LimitX", label = "Limit X (metres)",
+        { key = "position_limit_x", label = "Limit X (metres)",
           desc = "Furthest the camera moves sideways, in metres each way.",
           min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
-        { key = "position_limit_y_up", path = "LimitYUp", label = "Limit Y up (metres)",
+        { key = "position_limit_y_up", label = "Limit Y up (metres)",
           desc = "Furthest the camera rises.",
           min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
-        { key = "position_limit_y_down", path = "LimitYDown", label = "Limit Y down (metres)",
+        { key = "position_limit_y_down", label = "Limit Y down (metres)",
           desc = "Furthest the camera drops. Separate from the up limit so crouching down can be tighter than standing up.",
           min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
-        { key = "position_limit_z_fwd", path = "LimitZFwd", label = "Limit Z forward (metres)",
+        { key = "position_limit_z_fwd", label = "Limit Z forward (metres)",
           desc = "Furthest the camera leans in.",
           min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
-        { key = "position_limit_z_back", path = "LimitZBack", label = "Limit Z back (metres)",
+        { key = "position_limit_z_back", label = "Limit Z back (metres)",
           desc = "Furthest the camera pulls back. Deliberately tighter than the forward limit, so pulling back does not clip through V.",
           min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
     }
 
     for _, w in ipairs(POSITION_WIDGETS) do
-        local path = "/HeadTracking/Position/" .. w.path
         local key = w.key
-        ns.addRangeFloat(
-            path, w.label, w.desc,
+        self.widgetRefs[key] = ns.addRangeFloat(
+            "/HeadTracking/Position", w.label, w.desc,
             w.min, w.max, w.step, w.fmt,
             self.settings:get(key),
             self.settings:getDefaults()[key],
@@ -502,7 +471,6 @@ function NativeSettingsIntegration:registerSettings()
                 self.settings:set(key, value)
             end
         )
-        self.widgetRefs[key] = path
     end
 
     -- =====================================================================
@@ -511,8 +479,8 @@ function NativeSettingsIntegration:registerSettings()
     ns.addSubcategory("/HeadTracking/Crosshair", "Crosshair Overlay")
 
     -- Crosshair enabled
-    ns.addSwitch(
-        "/HeadTracking/Crosshair/Enabled",
+    self.widgetRefs["crosshair_enabled"] = ns.addSwitch(
+        "/HeadTracking/Crosshair",
         "Enable Crosshair",
         "Move the game's built-in reticle to mark the true aim point when head tracking offsets the view.",
         self.settings:get("crosshair_enabled"),
@@ -521,11 +489,9 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("crosshair_enabled", state)
         end
     )
-    self.widgetRefs["crosshair_enabled"] = "/HeadTracking/Crosshair/Enabled"
-
     -- Crosshair fallback FOV (used only when live FOV from FPPCameraComponent is unavailable)
-    ns.addRangeFloat(
-        "/HeadTracking/Crosshair/FovDegrees",
+    self.widgetRefs["crosshair_fov_degrees"] = ns.addRangeFloat(
+        "/HeadTracking/Crosshair",
         "Fallback FOV (degrees)",
         "Horizontal FOV used for reticle projection when the live game FOV cannot be read. Match your in-game FOV setting.",
         30.0, 140.0, 1.0,
@@ -536,11 +502,9 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("crosshair_fov_degrees", value)
         end
     )
-    self.widgetRefs["crosshair_fov_degrees"] = "/HeadTracking/Crosshair/FovDegrees"
-
     -- Reticle forward-extrapolation - compensates dynamic drift during motion
-    ns.addRangeFloat(
-        "/HeadTracking/Crosshair/LeadFactor",
+    self.widgetRefs["crosshair_lead_factor"] = ns.addRangeFloat(
+        "/HeadTracking/Crosshair",
         "Reticle Lead (frames)",
         "Forward-extrapolates the reticle by N frames of per-frame head delta. 0 = use latest head rotation (correct at rest). Bump up if reticle drifts in head-motion direction during motion and settles correct at rest. At rest the lead collapses to zero, so the rest position never shifts.",
         0.0, 2.0, 0.05,
@@ -551,8 +515,6 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("crosshair_lead_factor", value)
         end
     )
-    self.widgetRefs["crosshair_lead_factor"] = "/HeadTracking/Crosshair/LeadFactor"
-
     -- Network section removed: UDP 4242 is owned by the native RED4ext plugin,
     -- nothing here is user-configurable. Point OpenTrack at 127.0.0.1:4242.
 
@@ -563,7 +525,7 @@ function NativeSettingsIntegration:registerSettings()
 
     -- Reset all settings button
     ns.addButton(
-        "/HeadTracking/Actions/ResetAll",
+        "/HeadTracking/Actions",
         "Reset All Settings",
         "Reset all head tracking settings to their default values.",
         "Reset to Defaults",

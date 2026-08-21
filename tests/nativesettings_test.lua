@@ -33,29 +33,52 @@ _G.json = {
 
 -- Recording NativeSettings stub. Mirrors the argument order of the real
 -- framework (justarandomguyintheinternet/CP77_nativeSettings).
-local widgets = {}      -- path -> { kind, callback, current, default }
-local refreshes = {}    -- path -> last value pushed
+local widgets = {}      -- option reference -> widget data
+local refreshes = {}    -- option reference -> last value pushed
+local containers = {}
+local next_widget_id = 0
 
 local function record(kind, path, callback, current, default)
-    widgets[path] = { kind = kind, callback = callback, current = current, default = default }
+    assert(containers[path], "NativeSettings option path is not a registered tab or subcategory: " .. path)
+    next_widget_id = next_widget_id + 1
+    local ref = { id = next_widget_id }
+    widgets[ref] = {
+        kind = kind,
+        path = path,
+        callback = callback,
+        current = current,
+        default = default,
+    }
+    return ref
 end
 
 local ns_stub = {
-    addTab = function() end,
-    addSubcategory = function() end,
-    addSwitch = function(path, _, _, current, default, cb) record("switch", path, cb, current, default) end,
-    addRangeFloat = function(path, _, _, _, _, _, _, current, default, cb) record("rangeFloat", path, cb, current, default) end,
-    addRangeInt = function(path, _, _, _, _, _, current, default, cb) record("rangeInt", path, cb, current, default) end,
-    addSelectorString = function(path, _, _, values, current, default, cb)
-        record("selector", path, cb, current, default)
-        widgets[path].values = values
+    addTab = function(path) containers[path] = true end,
+    addSubcategory = function(path)
+        local tab_path = path:match("^/[^/]+")
+        assert(containers[tab_path], "NativeSettings subcategory has no parent tab: " .. path)
+        containers[path] = true
     end,
-    addButton = function(path, _, _, _, _, cb) record("button", path, cb) end,
-    refresh = function(path, value) refreshes[path] = value end,
+    addSwitch = function(path, _, _, current, default, cb)
+        return record("switch", path, cb, current, default)
+    end,
+    addRangeFloat = function(path, _, _, _, _, _, _, current, default, cb)
+        return record("rangeFloat", path, cb, current, default)
+    end,
+    addRangeInt = function(path, _, _, _, _, _, current, default, cb)
+        return record("rangeInt", path, cb, current, default)
+    end,
+    addSelectorString = function(path, _, _, values, current, default, cb)
+        local ref = record("selector", path, cb, current, default)
+        widgets[ref].values = values
+        return ref
+    end,
+    addButton = function(path, _, _, _, _, cb) return record("button", path, cb) end,
+    setOption = function(ref, value) refreshes[ref] = value end,
 }
 
 function GetMod(name)
-    if name == "NativeSettings" then return ns_stub end
+    if name == "nativeSettings" then return ns_stub end
     return nil
 end
 
@@ -93,62 +116,62 @@ table.sort(missing)
 assert_eq(#missing, 0, "every non-diagnostic setting has a widget (missing: " ..
     table.concat(missing, ", ") .. ")")
 
--- Every registered path must actually correspond to a widget that was created,
--- so a typo in a path string cannot leave a ref pointing at nothing.
-for key, path in pairs(integration.widgetRefs) do
-    assert_true(widgets[path] ~= nil, "widgetRefs[" .. key .. "] points at a real widget")
+-- Every registered reference must actually correspond to a widget returned by
+-- NativeSettings.
+for key, ref in pairs(integration.widgetRefs) do
+    assert_true(widgets[ref] ~= nil, "widgetRefs[" .. key .. "] points at a real widget")
 end
 
 -- (2) Selector callbacks store the STRING the setting expects, not the index
 --     NativeSettings handed them.
-local ads_path = integration.widgetRefs["ads_mode"]
-assert_eq(widgets[ads_path].kind, "selector", "ads_mode is a selector")
-assert_eq(widgets[ads_path].current, 1, "ads_mode selector opens on the stored value (paused)")
+local ads_ref = integration.widgetRefs["ads_mode"]
+assert_eq(widgets[ads_ref].kind, "selector", "ads_mode is a selector")
+assert_eq(widgets[ads_ref].current, 1, "ads_mode selector opens on the stored value (paused)")
 
-widgets[ads_path].callback(3)
+widgets[ads_ref].callback(3)
 assert_eq(settings:get("ads_mode"), "tracked", "selecting index 3 stores 'tracked'")
-widgets[ads_path].callback(2)
+widgets[ads_ref].callback(2)
 assert_eq(settings:get("ads_mode"), "marker", "selecting index 2 stores 'marker'")
 
-local yaw_path = integration.widgetRefs["yaw_mode"]
-widgets[yaw_path].callback(2)
+local yaw_ref = integration.widgetRefs["yaw_mode"]
+widgets[yaw_ref].callback(2)
 assert_eq(settings:get("yaw_mode"), "local", "selecting index 2 stores 'local'")
 
 -- (3) The selector order matches the hotkey cycle order, so the dropdown and
 --     Home walk the modes the same way.
-assert_eq(widgets[ads_path].values[1], "Tracking paused", "slot 1 is the tracking-paused mode")
-assert_eq(#widgets[ads_path].values, 3, "three ADS modes offered")
+assert_eq(widgets[ads_ref].values[1], "Tracking paused", "slot 1 is the tracking-paused mode")
+assert_eq(#widgets[ads_ref].values, 3, "three ADS modes offered")
 
 -- (4) A change from outside the panel (the hotkey) refreshes the widget with an
 --     INDEX. Pushing the raw string here would silently leave the dropdown on
 --     whatever it was showing.
 refreshes = {}
 integration:onSettingChanged("ads_mode", "tracked")
-assert_eq(refreshes[ads_path], 3, "ads_mode refresh pushes the index, not the string")
+assert_eq(refreshes[ads_ref], 3, "ads_mode refresh pushes the index, not the string")
 
 -- (5) The master Enabled switch is the OR of rotation and position, and is a
 --     SEPARATE widget from the rotation switch that stores `enabled`. Folding
 --     the two together left no way to reach rotation-only from the panel, and
 --     made a position_enabled change refresh the master instead of the
 --     position switch.
-local master_path = integration.masterWidgetPath
-local rot_path = integration.widgetRefs["enabled"]
-local pos_path = integration.widgetRefs["position_enabled"]
-assert_true(master_path ~= nil, "master switch is registered")
-assert_true(master_path ~= rot_path, "master switch is not the rotation switch")
-assert_true(widgets[master_path] ~= nil, "master switch points at a real widget")
+local master_ref = integration.masterWidgetRef
+local rot_ref = integration.widgetRefs["enabled"]
+local pos_ref = integration.widgetRefs["position_enabled"]
+assert_true(master_ref ~= nil, "master switch is registered")
+assert_true(master_ref ~= rot_ref, "master switch is not the rotation switch")
+assert_true(widgets[master_ref] ~= nil, "master switch points at a real widget")
 
 -- The rotation switch writes `enabled` alone, so rotation-only is reachable.
 settings:set("enabled", true)
 settings:set("position_enabled", true)
-widgets[rot_path].callback(false)
+widgets[rot_ref].callback(false)
 assert_eq(settings:get("enabled"), false, "rotation switch turns rotation off on its own")
 assert_eq(settings:get("position_enabled"), true, "rotation switch leaves position alone")
 
 -- The master switch writes both, and restores the mode it took down.
-widgets[master_path].callback(false)
+widgets[master_ref].callback(false)
 assert_eq(settings:get("position_enabled"), false, "master switch clears position too")
-widgets[master_path].callback(true)
+widgets[master_ref].callback(true)
 assert_eq(settings:get("enabled"), false, "master restores position-only, rotation stays off")
 assert_eq(settings:get("position_enabled"), true, "master restores position-only, position back on")
 
@@ -156,17 +179,17 @@ assert_eq(settings:get("position_enabled"), true, "master restores position-only
 -- that axis as the mode the master restores.
 settings:set("enabled", true)
 settings:set("position_enabled", false)
-widgets[rot_path].callback(false)
+widgets[rot_ref].callback(false)
 assert_eq(settings:get("saved_tracking_mode"), "rot", "last rotation axis records rotation-only")
-widgets[master_path].callback(true)
+widgets[master_ref].callback(true)
 assert_eq(settings:get("enabled"), true, "master restores rotation-only rotation")
 assert_eq(settings:get("position_enabled"), false, "master keeps position off in rotation-only")
 
 settings:set("enabled", false)
 settings:set("position_enabled", true)
-widgets[pos_path].callback(false)
+widgets[pos_ref].callback(false)
 assert_eq(settings:get("saved_tracking_mode"), "pos", "last position axis records position-only")
-widgets[master_path].callback(true)
+widgets[master_ref].callback(true)
 assert_eq(settings:get("enabled"), false, "master keeps rotation off in position-only")
 assert_eq(settings:get("position_enabled"), true, "master restores position-only position")
 
@@ -174,20 +197,20 @@ settings:set("enabled", true)
 settings:set("position_enabled", false)
 refreshes = {}
 integration:onSettingChanged("position_enabled", false)
-assert_eq(refreshes[master_path], true, "master follows the pair, not one key")
-assert_eq(refreshes[pos_path], false, "position switch refreshes with its own value")
+assert_eq(refreshes[master_ref], true, "master follows the pair, not one key")
+assert_eq(refreshes[pos_ref], false, "position switch refreshes with its own value")
 
 settings:set("enabled", false)
 refreshes = {}
 integration:onSettingChanged("enabled", false)
-assert_eq(refreshes[master_path], false, "master goes off once both keys are off")
-assert_eq(refreshes[rot_path], false, "rotation switch refreshes with its own value")
+assert_eq(refreshes[master_ref], false, "master goes off once both keys are off")
+assert_eq(refreshes[rot_ref], false, "rotation switch refreshes with its own value")
 
 settings:set("position_enabled", true)
 refreshes = {}
 integration:onSettingChanged("position_enabled", true)
-assert_eq(refreshes[master_path], true, "position-only counts as tracking on for the master switch")
-assert_eq(refreshes[pos_path], true, "position switch follows back on")
+assert_eq(refreshes[master_ref], true, "position-only counts as tracking on for the master switch")
+assert_eq(refreshes[pos_ref], true, "position switch follows back on")
 
 -- (6) A setting with no widget must not throw on the way through - the observer
 --     fires for every key, including the diagnostic one.
