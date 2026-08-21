@@ -316,16 +316,36 @@ assert_eq(m:get("position_enabled"), true, "position-only mode restored, positio
 
 -- (8) ads_mode is a three-value enum. An unknown string must fall back to the
 -- shipped default rather than reach state.lua / init.lua, where an unmatched
--- value would read as "not reticle" and quietly keep the gate open on ADS.
+-- value would read as "not paused" and quietly keep the gate open on ADS.
+-- "center" is specifically covered: it shipped in a dev build and is still
+-- sitting in those configs.
 local a = Settings.new()
-assert_eq(a:get("ads_mode"), "reticle", "ads_mode defaults to reticle")
-for _, mode in ipairs({ "reticle", "center", "tracked" }) do
+assert_eq(a:get("ads_mode"), "paused", "ads_mode defaults to paused")
+for _, mode in ipairs({ "paused", "marker", "tracked" }) do
     assert_true(a:set("ads_mode", mode), "ads_mode=" .. mode .. " accepted")
     assert_eq(a:get("ads_mode"), mode, "ads_mode=" .. mode .. " round-trips")
 end
-assert_false(a:set("ads_mode", "centre"), "ads_mode misspelling rejected")
+assert_false(a:set("ads_mode", "center"), "retired ads_mode=center rejected")
 assert_eq(a:get("ads_mode"), "tracked", "rejected ads_mode leaves the previous value")
 assert_false(a:set("ads_mode", 2), "ads_mode number rejected")
+
+-- "reticle" was renamed to "paused". :set() rejects the old spelling like any
+-- other unknown value, but a config.json still holding it must MIGRATE rather
+-- than log an error, because the value was never wrong - only its name was.
+assert_false(a:set("ads_mode", "reticle"), "old ads_mode spelling rejected by set()")
+
+local mig_path = "ads_mode_migration_config.json"
+local mf = io.open(mig_path, "w")
+mf:write('{"ads_mode":"reticle","sensitivity_yaw":1.7}')
+mf:close()
+local mg = Settings.new()
+mg.path = mig_path
+mg:load()
+-- Assert a second key first: "paused" is also what an unreadable file yields,
+-- so without this the migration assertion below would pass vacuously.
+assert_eq(mg:get("sensitivity_yaw"), 1.7, "migration fixture was actually read")
+assert_eq(mg:get("ads_mode"), "paused", "config holding the old name migrates to paused")
+os.remove(mig_path)
 
 print("== All settings tests passed ==")
 

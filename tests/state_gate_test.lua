@@ -194,12 +194,12 @@ live.upper_body = 0
 spinPastCacheTtl()
 assert_true(st:isTrackingAllowed(), "back to gameplay")
 
--- 12. ads_mode decides whether ADS closes the gate at all. Only "reticle"
---     stands tracking down; "center" and "tracked" keep the gate open and hand
---     the decision to init.lua, which either freezes the pose or leaves it
---     live. isAdsActive() is what tells the two apart, so it has to be true
---     whenever the sights are up and the gate is still open.
-local ads_mode = "reticle"
+-- 12. ads_mode decides whether ADS closes the gate at all. "paused" stands
+--     tracking down; "marker" and "tracked" keep the gate open and hand the
+--     decision to init.lua, which feeds poses relative to the one the sights
+--     came up on. isAdsActive() is what tells init.lua the sights are up while
+--     the gate is still open, so it has to be true for the whole aim.
+local ads_mode = "paused"
 st.settings = {
     get = function(_, key)
         if key == "ads_mode" then return ads_mode end
@@ -209,19 +209,20 @@ st.settings = {
 
 live.upper_body = PSM_UPPERBODY_AIM
 spinPastCacheTtl()
-assert_false(st:isTrackingAllowed(), "reticle mode blocks on ADS")
-assert_eq(st:getReason(), State.REASON.ADS, "reticle mode reason is ads")
-assert_true(st:isAdsActive(), "reticle mode still reports ADS active")
+assert_false(st:isTrackingAllowed(), "paused mode blocks on ADS")
+assert_eq(st:getReason(), State.REASON.ADS, "paused mode reason is ads")
+assert_true(st:isAdsActive(), "paused mode still reports ADS active")
 
-ads_mode = "center"
+ads_mode = "marker"
 spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "center mode keeps the gate open on ADS")
-assert_eq(st:getReason(), State.REASON.ALLOWED, "center mode reason is allowed")
-assert_true(st:isAdsActive(), "center mode reports ADS active")
+assert_true(st:isTrackingAllowed(), "marker mode keeps the gate open on ADS")
+assert_eq(st:getReason(), State.REASON.ALLOWED, "marker mode reason is allowed")
+assert_true(st:isAdsActive(), "marker mode reports ADS active")
 
 ads_mode = "tracked"
 spinPastCacheTtl()
 assert_true(st:isTrackingAllowed(), "tracked mode keeps the gate open on ADS")
+assert_eq(st:getReason(), State.REASON.ALLOWED, "tracked mode reason is allowed")
 assert_true(st:isAdsActive(), "tracked mode reports ADS active")
 
 live.upper_body = 0
@@ -232,13 +233,13 @@ assert_false(st:isAdsActive(), "lowering the weapon clears the ADS flag")
 -- A menu returning early must not leave a stale ADS flag behind: init.lua
 -- would otherwise hold a frozen pose through a suppression that already
 -- peeled it.
-ads_mode = "center"
+ads_mode = "tracked"
 live.upper_body = PSM_UPPERBODY_AIM
 spinPastCacheTtl()
 assert_true(st:isAdsActive(), "ADS flag set before the menu opens")
 live.in_menu = true
 spinPastCacheTtl()
-assert_false(st:isTrackingAllowed(), "menu blocks while ADS in center mode")
+assert_false(st:isTrackingAllowed(), "menu blocks while ADS in tracked mode")
 assert_false(st:isAdsActive(), "menu clears the ADS flag")
 live.in_menu = false
 live.upper_body = 0

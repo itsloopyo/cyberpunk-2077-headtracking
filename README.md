@@ -8,7 +8,7 @@ Use a webcam, phone, or VR headset to drive Night City's first-person camera wit
 
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim
 - **6DOF positional tracking** - lean into corners and peek around cover with your head position
-- **Three ways to aim down sights** - hand the camera back to the game, hold the view still and put the sights on the centre of the screen, or keep tracking live through the whole aim. Cycled in game with `Home`
+- **Three ways to aim down sights** - raise the sights and the view snaps onto the point the reticle was marking, then either holds still for the duration or keeps tracking your head, with or without an on-screen aim marker. Cycled in game with `Home`
 
 ## Gameplay Changes
 
@@ -135,13 +135,13 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 3. Rotational tracking disabled, positional tracking enabled
 4. Back to normal
 
-`Home` / `Ctrl+Shift+T` cycles what happens when you aim down sights:
+`Home` / `Ctrl+Shift+T` cycles what happens when you aim down sights. All three start the same way - raising the sights swings the view onto the point the reticle was marking, so your shot lands where you had it lined up - and they differ in what happens for the rest of the aim:
 
-1. **Sights on the reticle** (default) - tracking pauses and the game takes the camera back, so the view swings onto the point the reticle was marking. Your shot lands where you had it lined up.
-2. **Sights on screen centre** - tracking pauses with the view held exactly where your head left it, and the sights line up on whatever is at the centre of the screen. Aim moves, the view does not.
-3. **Head tracking stays live** - nothing pauses. You keep looking around while the sights are up, and the reticle keeps marking where the rounds go.
+1. **Tracking paused** (default) - the game keeps the camera for as long as the sights are up. The sight picture is exactly the game's, and head movement does nothing until you lower the weapon.
+2. **Tracking on, with an aim marker** - head tracking carries on from the snapped position, and a small crosshair is drawn wherever your rounds will actually land. Use this one if you want to look around with the sights up: the game hides its own crosshair during ADS and the iron sights are not eye-levelled, so without the marker there is nothing on screen telling you where the gun is pointing once your head has moved off the sight line.
+3. **Tracking on, no aim marker** - the same as 2 without the marker, for a cleaner screen when you are happy reading the sights themselves.
 
-The choice is saved, so it survives a restart.
+The choice is saved, so it survives a restart. Pressing the key shows a toast naming the mode you switched to.
 
 ## Configuration
 
@@ -186,7 +186,7 @@ Edit it directly, or use the in-game Native Settings UI if you have it installed
   "position_limit_z_back": 0.10,
 
   "yaw_mode": "world",
-  "ads_mode": "reticle"
+  "ads_mode": "paused"
 }
 ```
 
@@ -200,7 +200,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - `crosshair_*`: parallax-correct reticle overlay. Set `crosshair_fov_degrees` to your in-game FOV so the marker tracks the true aim point at extreme head angles.
 - `position_*`: 6DOF translation. Sensitivities are per-axis multipliers, limits are in meters.
 - `deadzone_yaw` / `deadzone_pitch` / `deadzone_roll`: degrees of head movement ignored around centre, to stop tracker noise drifting the view while you hold still. Roll defaults higher than the other two because head-roll noise is the usual cause of the view slowly rolling on its own; raise it if you still see that.
-- `ads_mode`: what aiming down sights does to the view. `"reticle"` (default) stands tracking down, so the sights swing onto the point the reticle was marking. `"center"` holds the view where your head left it and puts the sights on whatever is at the centre of the screen. `"tracked"` leaves head tracking running through the aim. Cycled live with `Home` / `Ctrl+Shift+T`, and persisted.
+- `ads_mode`: what aiming down sights does. `"paused"` (default) stands tracking down for as long as the sights are up. `"marker"` keeps head tracking live through the aim and draws a crosshair at the true aim point. `"tracked"` keeps tracking live with no marker. Cycled live with `Home` / `Ctrl+Shift+T`, and persisted. The marker's size and colour are fixed; there is no setting for them.
 - `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`, but note this one is **not persisted**: every launch starts back in `"world"`, so the toggle lasts for the session only.
 
 ## Troubleshooting
@@ -237,8 +237,15 @@ JSON has no comment syntax, so the settings worth touching are described here in
 
 **Head tracking stops while aiming down sights.**
 - That is the default, and it is deliberate. Aiming down sights puts the camera on the weapon's sight line and that sight picture is the aim, so head rotation would swing the view off the sights while the rounds kept going where the sights point. Tracking pauses for as long as the sights are up and resumes when you lower the weapon.
-- Press `Home` / `Ctrl+Shift+T` to cycle to the other two behaviours. The third one keeps tracking live through the aim.
+- Press `Home` / `Ctrl+Shift+T` if you would rather keep tracking through the aim. The snap onto the aim point still happens; tracking just carries on from there. The first press also turns on an aim marker so you can see where the gun is pointing.
 - Your view is the same before and after, so repeatedly aiming will not walk it around.
+
+**The view jumps when I lower the sights, with ADS tracking left on.**
+- Expected, and it is the same swing in reverse. Raising the sights takes your head angle out of the view; lowering them puts it back. Hold your head still through the aim and there is nothing to put back.
+
+**No aim marker appears in the mode that should have one.**
+- The marker projects through the same machinery that moves the crosshair during normal play, so if that failed to start there is no marker either. Check the CET console at startup for `ADS aim marker initialized`; if instead you see the built-in crosshair driver reporting a failure, that is the cause. The mode still tracks your head through the aim, it just cannot draw.
+- The marker hides itself when the aim point falls behind the view, which happens if you turn your head far enough past the weapon.
 
 **Wrong rotation axis (camera moves the wrong way).**
 - Invert the offending axis in OpenTrack under **Output > Mapping** rather than in the mod. The mod has no inversion setting on purpose.

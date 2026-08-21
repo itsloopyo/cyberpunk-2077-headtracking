@@ -13,14 +13,19 @@ Settings.__index = Settings
 local YAW_MODE_VALUES = { world = true, ["local"] = true }
 
 -- Allowed ads_mode strings, same reasoning as YAW_MODE_VALUES. Cycled with
--- Home / Ctrl+Shift+T; state.lua and init.lua branch on all three.
---   "reticle" - stand tracking down and hand the view back to the game, so
---               the sights swing onto the point the reticle was marking.
---   "center"  - freeze the view where the head left it and stop peeling head
---               rotation off the aim, so the sights line up on whatever sits
---               at the centre of the screen.
---   "tracked" - leave head tracking running through the whole aim.
-local ADS_MODE_VALUES = { reticle = true, center = true, tracked = true }
+-- Home / Ctrl+Shift+T; state.lua and init.lua branch on all three. Every mode
+-- makes the same swing onto the aim point when the sights come up; they differ
+-- in what happens for the rest of the aim.
+--   "paused"  - stand tracking down and hand the view back to the game.
+--   "marker"  - keep tracking, and draw an aim marker at the projected hit
+--               point, since the game hides its crosshair with the sights up.
+--   "tracked" - keep tracking, no marker.
+local ADS_MODE_VALUES = { paused = true, marker = true, tracked = true }
+
+-- ads_mode = "reticle" was the pre-rename name for "paused". A config written
+-- by that build is migrated rather than rejected: the value is not invalid,
+-- it is the old spelling of the default.
+local RETIRED_ADS_MODES = { reticle = "paused" }
 
 -- Validation rules for each setting
 local VALIDATION_RULES = {
@@ -243,8 +248,8 @@ function Settings.new()
         yaw_mode = "world",
         -- Aiming down sights hands the view back to the game by default, so
         -- the sights land on the point the reticle was marking. Home /
-        -- Ctrl+Shift+T cycles to "center" then "tracked".
-        ads_mode = "reticle",
+        -- Ctrl+Shift+T cycles to "marker" then "tracked".
+        ads_mode = "paused",
         -- Clean-camera diagnostic path. Lua keeps cam.localOrientation
         -- mouse-only while native experiments try to inject head rotation.
         decouple_diag_clean_cam = false,
@@ -311,6 +316,13 @@ function Settings:load()
                 -- these are not nil'd out: the merge below only walks
                 -- self.defaults, so they are already ignored. What was missing
                 -- was any word to the user that their tuned value is gone.
+                local renamed = loaded.ads_mode and RETIRED_ADS_MODES[loaded.ads_mode]
+                if renamed then
+                    print("[HeadTracking] Migrating ads_mode '" .. tostring(loaded.ads_mode) ..
+                          "' to '" .. renamed .. "' (renamed, same behaviour)")
+                    loaded.ads_mode = renamed
+                end
+
                 warnRetiredSmoothingKeys(loaded, self.defaults)
 
                 -- Merge and validate loaded values with defaults

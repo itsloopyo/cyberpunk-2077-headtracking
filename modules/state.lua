@@ -252,12 +252,12 @@ function State:isAdsLive()
 end
 
 --- The configured aim-down-sights behaviour, defaulting to the shipped
---- "reticle" when settings are not wired up yet (state is constructed before
---- settings in some init orders, and a nil read must not become a third mode).
---- @return string One of "reticle", "center", "tracked"
+--- "paused" when settings are not wired up yet (state is constructed before
+--- settings in some init orders, and a nil read must not leave the gate open).
+--- @return string One of "paused", "marker", "tracked"
 function State:adsMode()
-    if not self.settings then return "reticle" end
-    return self.settings:get("ads_mode") or "reticle"
+    if not self.settings then return "paused" end
+    return self.settings:get("ads_mode") or "paused"
 end
 
 --- Is the player aiming down sights? Computed by the verdict walk rather than
@@ -438,18 +438,18 @@ function State:isTrackingAllowed()
 
     -- Aiming down sights: the game pulls the camera onto the weapon's sight
     -- line, and that sight picture IS the aim. What that should do to head
-    -- tracking is the user's call, cycled with Home / Ctrl+Shift+T:
-    --   "reticle" - stand tracking down, so the view swings onto the point the
+    -- tracking is the user's call, toggled with Home / Ctrl+Shift+T:
+    --   "paused"  - stand tracking down, so the view swings onto the point the
     --               reticle was marking and the sight picture is the game's.
-    --   "center"  - keep the gate open. init.lua freezes the head pose and
-    --               stops publishing it to the aim hooks, so the view holds
-    --               still and the sights line up on the centre of the screen.
-    --   "tracked" - keep the gate open and keep tracking live through the aim.
+    --   "marker" / "tracked" - keep the gate open. init.lua feeds poses relative
+    --               to the one the sights came up on, so the view makes that
+    --               same swing and then keeps tracking from there. "marker"
+    --               additionally draws an aim marker at the projected hit point.
     -- Last in the walk so a menu or cinematic still reports its own reason
     -- when both are true at once.
     if self:isAdsLive() then
         self.ads_active = true
-        if self:adsMode() == "reticle" then
+        if self:adsMode() == "paused" then
             return self:setVerdict(false, State.REASON.ADS)
         end
     end
