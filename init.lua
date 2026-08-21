@@ -726,7 +726,7 @@ local function diagCleanCam(force)
 end
 
 -- Standard CameraUnlock hotkey contract.
--- Defaults per rule: End / PageUp / PageDown / Home (nav cluster) with
+-- Defaults per rule: End / PageUp / PageDown / Insert (nav cluster) with
 -- Ctrl+Shift+{Y,G,H,U} chord alternatives drawn from the T/Y/U/G/H/J cluster.
 -- Both sets are polled natively in ScriptChannel.cpp and are NOT rebindable:
 -- CET's registerHotkey dispatch crashes before entering Lua on this game
@@ -760,11 +760,6 @@ end
 -- here.
 
 -- PageUp  /  Ctrl+Shift+G - Cycle tracking mode (3-state cycle).
--- 6DOF isn't wired to the Cyberpunk camera yet; the setting flips so the
--- contract is visible, and the user sees a toast that the feature is pending.
--- Canonical CameraUnlock binding is "Cycle tracking mode" (3-state cycle:
--- normal -> rotation-only -> position-only -> normal). Wired here as a
--- binary toggle until 6DOF positional tracking lands.
 -- PageUp cycles through the three tracking modes. Order is fixed so the
 -- sequence reads naturally from "everything on" toward "off-axes":
 --   6DOF  -> 3DOF rotation only -> 3DOF position only -> 6DOF -> ...
@@ -826,7 +821,7 @@ end
 -- dispatch crashes before entering Lua on this game build, so do not bind
 -- PageDown here.
 
--- Home  /  Ctrl+Shift+U - Cycle what aiming down sights does to the view.
+-- Insert  /  Ctrl+Shift+U - Cycle what aiming down sights does to the view.
 -- U is the next free letter in the T/Y/U/G/H/J cluster after Y, G and H.
 -- Ctrl+Shift+T is deliberately skipped: it was the recenter chord before mods
 -- stopped keeping a centre, so it would still fire on muscle memory.
@@ -859,7 +854,7 @@ function handleCycleAdsMode()
     ui:showSuccess(ADS_MODE_LABELS[next_mode], 2.5)
     print("[HeadTracking] ads_mode -> " .. next_mode)
 end
--- Home / Ctrl+Shift+U are polled natively in ScriptChannel.cpp, same as the
+-- Insert / Ctrl+Shift+U are polled natively in ScriptChannel.cpp, same as the
 -- other three.
 
 -- Public API for the CET console. Reachable as

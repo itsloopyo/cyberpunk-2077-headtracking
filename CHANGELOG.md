@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- move the ADS mode shortcut from Home to Insert to avoid MCM's shortcut
+- remove in-mod rotation and position sensitivity plus deadzone processing; configure pose shaping in the tracker
+
+### Fixed
+
+- keep Page Up's position-only mode from restoring rotation through Native Settings UI sync
+
 ## [1.1.0] - 2026-08-21
 
 ### Added

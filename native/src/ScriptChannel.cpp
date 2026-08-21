@@ -37,8 +37,7 @@ bool s_adsModeChordWasDown = false;
 
 // True when the foreground window belongs to this process. The chords below
 // are read from GetAsyncKeyState, which is global to the session: without this
-// they fire while the player is alt-tabbed into a browser or a chat window,
-// and Home is a scroll key in every one of those.
+// they fire while the player is alt-tabbed into another application.
 bool GameWindowHasFocus() {
     const HWND fg = GetForegroundWindow();
     if (!fg) return false;
@@ -77,12 +76,12 @@ ChordEdges ConsumeChordEdges() {
     const bool yawDown =
         ((GetAsyncKeyState(VK_NEXT) & 0x8000) != 0) ||
         (modsDown && ((GetAsyncKeyState('H') & 0x8000) != 0));
-    // Home / Ctrl+Shift+U cycle the aim-down-sights behaviour. U is the next
+    // Insert / Ctrl+Shift+U cycle the aim-down-sights behaviour. U is the next
     // free letter in the T/Y/U/G/H/J cluster after Y, G and H. Ctrl+Shift+T is
     // deliberately NOT used: it was the recenter chord before mods stopped
     // keeping a centre, so it would still fire on muscle memory.
     const bool adsDown =
-        ((GetAsyncKeyState(VK_HOME) & 0x8000) != 0) ||
+        ((GetAsyncKeyState(VK_INSERT) & 0x8000) != 0) ||
         (modsDown && ((GetAsyncKeyState('U') & 0x8000) != 0));
 
     // Latch the physical state even while unfocused, so a key held across the

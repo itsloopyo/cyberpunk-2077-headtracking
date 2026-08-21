@@ -41,14 +41,15 @@ local next_widget_id = 0
 local function record(kind, path, callback, current, default)
     assert(containers[path], "NativeSettings option path is not a registered tab or subcategory: " .. path)
     next_widget_id = next_widget_id + 1
-    local ref = { id = next_widget_id }
-    widgets[ref] = {
+    local ref = {
+        id = next_widget_id,
         kind = kind,
         path = path,
         callback = callback,
         current = current,
         default = default,
     }
+    widgets[ref] = ref
     return ref
 end
 
@@ -74,7 +75,12 @@ local ns_stub = {
         return ref
     end,
     addButton = function(path, _, _, _, _, cb) return record("button", path, cb) end,
-    setOption = function(ref, value) refreshes[ref] = value end,
+    setOption = function(ref, value)
+        refreshes[ref] = value
+        if ref.current == value then return end
+        ref.current = value
+        ref.callback(value)
+    end,
 }
 
 function GetMod(name)
@@ -138,7 +144,7 @@ widgets[yaw_ref].callback(2)
 assert_eq(settings:get("yaw_mode"), "local", "selecting index 2 stores 'local'")
 
 -- (3) The selector order matches the hotkey cycle order, so the dropdown and
---     Home walk the modes the same way.
+--     Insert walks the modes the same way.
 assert_eq(widgets[ads_ref].values[1], "Tracking paused", "slot 1 is the tracking-paused mode")
 assert_eq(#widgets[ads_ref].values, 3, "three ADS modes offered")
 
@@ -160,6 +166,16 @@ local pos_ref = integration.widgetRefs["position_enabled"]
 assert_true(master_ref ~= nil, "master switch is registered")
 assert_true(master_ref ~= rot_ref, "master switch is not the rotation switch")
 assert_true(widgets[master_ref] ~= nil, "master switch points at a real widget")
+
+-- NativeSettings.setOption invokes the option callback. Synchronising the
+-- master switch while Page Up moves from rotation-only to position-only must
+-- not let that callback restore both axes in the middle of the transition.
+settings:set("enabled", true)
+settings:set("position_enabled", false)
+settings:set("enabled", false)
+settings:set("position_enabled", true)
+assert_eq(settings:get("enabled"), false, "position-only sync leaves rotation off")
+assert_eq(settings:get("position_enabled"), true, "position-only sync leaves position on")
 
 -- The rotation switch writes `enabled` alone, so rotation-only is reachable.
 settings:set("enabled", true)

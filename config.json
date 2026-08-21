@@ -1,8 +1,5 @@
 {
   "enabled": true,
-  "sensitivity_yaw": 1.0,
-  "sensitivity_pitch": 1.0,
-  "sensitivity_roll": 1.0,
   "local_smoothing": 0.0,
   "remote_smoothing": 0.15,
   "clamp_yaw": 120.0,

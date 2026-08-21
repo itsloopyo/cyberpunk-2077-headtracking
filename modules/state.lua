@@ -438,7 +438,7 @@ function State:isTrackingAllowed()
 
     -- Aiming down sights: the game pulls the camera onto the weapon's sight
     -- line, and that sight picture IS the aim. What that should do to head
-    -- tracking is the user's call, toggled with Home / Ctrl+Shift+U:
+    -- tracking is the user's call, toggled with Insert / Ctrl+Shift+U:
     --   "paused"  - stand tracking down, so the view swings onto the point the
     --               reticle was marking and the sight picture is the game's.
     --   "marker" / "tracked" - keep the gate open. ads_pose.lua feeds poses

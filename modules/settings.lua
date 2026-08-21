@@ -13,7 +13,7 @@ Settings.__index = Settings
 local YAW_MODE_VALUES = { world = true, ["local"] = true }
 
 -- Allowed ads_mode strings, same reasoning as YAW_MODE_VALUES. Cycled with
--- Home / Ctrl+Shift+U; state.lua and init.lua branch on all three. Every mode
+-- Insert / Ctrl+Shift+U; state.lua and init.lua branch on all three. Every mode
 -- makes the same swing onto the aim point when the sights come up; they differ
 -- in what happens for the rest of the aim.
 --   "paused"  - stand tracking down and hand the view back to the game.
@@ -31,9 +31,6 @@ local SAVED_TRACKING_MODE_VALUES = { both = true, rot = true, pos = true }
 -- Validation rules for each setting
 local VALIDATION_RULES = {
     enabled = { type = "boolean" },
-    sensitivity_yaw = { type = "number", min = 0.1, max = 5.0 },
-    sensitivity_pitch = { type = "number", min = 0.1, max = 5.0 },
-    sensitivity_roll = { type = "number", min = 0.0, max = 5.0 },
     -- Smoothing is two parameters, picked per connection by source address.
     -- Both cover rotation and position; there is no separate position
     -- smoothing setting.
@@ -45,13 +42,6 @@ local VALIDATION_RULES = {
     clamp_yaw = { type = "number", min = 10.0, max = 180.0 },
     clamp_pitch = { type = "number", min = 10.0, max = 90.0 },
     clamp_roll = { type = "number", min = 0.0, max = 90.0 },
-    -- Per-axis deadzones (degrees). Values below the deadzone resolve to 0;
-    -- above, the deadzone amount is subtracted (smooth activation, no jump
-    -- at the threshold). Defaults eat tracker noise so the view doesn't
-    -- gradually drift on a "still" head.
-    deadzone_yaw   = { type = "number", min = 0.0, max = 10.0 },
-    deadzone_pitch = { type = "number", min = 0.0, max = 10.0 },
-    deadzone_roll  = { type = "number", min = 0.0, max = 10.0 },
     -- Crosshair settings
     crosshair_enabled = { type = "boolean" },
     crosshair_fov_degrees = { type = "number", min = 30.0, max = 140.0 },
@@ -61,13 +51,8 @@ local VALIDATION_RULES = {
     -- delta. Tune up if reticle trails the target during head motion (drifts
     -- in motion direction, settles correct at rest); leave at 0 if no drift.
     crosshair_lead_factor = { type = "number", min = 0.0, max = 2.0 },
-    -- Position tracking placeholders (6DOF). Disabled by default until the
-    -- camera translation path is wired. Settings exist so the hotkey contract
-    -- and Native Settings UI stay complete.
+    -- Position tracking and Cyberpunk-specific camera travel limits.
     position_enabled = { type = "boolean" },
-    position_sens_x = { type = "number", min = 0.0, max = 5.0 },
-    position_sens_y = { type = "number", min = 0.0, max = 5.0 },
-    position_sens_z = { type = "number", min = 0.0, max = 5.0 },
     position_limit_x = { type = "number", min = 0.0, max = 0.5 },
     position_limit_y_up = { type = "number", min = 0.0, max = 0.5 },
     position_limit_y_down = { type = "number", min = 0.0, max = 0.5 },
@@ -91,6 +76,12 @@ local VALIDATION_RULES = {
 -- reported. Both are still sitting in every config.json written before the
 -- split, and both are now ignored.
 local RETIRED_SMOOTHING_KEYS = { "smoothing_factor", "position_smoothing" }
+
+local RETIRED_TRACKER_SHAPING_KEYS = {
+    "sensitivity_yaw", "sensitivity_pitch", "sensitivity_roll",
+    "deadzone_yaw", "deadzone_pitch", "deadzone_roll",
+    "position_sens_x", "position_sens_y", "position_sens_z",
+}
 
 -- Warned once per session rather than once per load: settings are re-read when
 -- the mod hot-reloads, and repeating this every time buries it in the log.
@@ -216,9 +207,6 @@ function Settings.new()
     -- Default configuration values (CameraUnlock standard unless noted)
     self.defaults = {
         enabled = true,
-        sensitivity_yaw = 1.0,
-        sensitivity_pitch = 1.0,
-        sensitivity_roll = 1.0,
         -- Smoothing applied when the tracker runs on this machine
         -- (loopback). 0 = no smoothing, 1 = heavy.
         local_smoothing = 0.0,
@@ -229,20 +217,12 @@ function Settings.new()
         clamp_yaw = 120.0,
         clamp_pitch = 80.0,
         clamp_roll = 45.0,
-        -- Deadzones (degrees). Roll defaults higher because head-roll tracker
-        -- noise is the main source of visible "view rolling on its own" drift.
-        deadzone_yaw   = 0.5,
-        deadzone_pitch = 0.5,
-        deadzone_roll  = 1.0,
         -- Crosshair overlay
         crosshair_enabled = true,
         crosshair_fov_degrees = 84.0,
         crosshair_lead_factor = 0.0,
-        -- Position tracking (6DOF) - placeholders, disabled by default
+        -- Position tracking (6DOF)
         position_enabled = true,
-        position_sens_x = 1.0,
-        position_sens_y = 1.0,
-        position_sens_z = 1.0,
         position_limit_x = 0.30,
         position_limit_y_up = 0.20,
         position_limit_y_down = 0.05,
@@ -256,7 +236,7 @@ function Settings.new()
         -- Toggle between them with PageDown / Ctrl+Shift+H.
         yaw_mode = "world",
         -- Aiming down sights hands the view back to the game by default, so
-        -- the sights land on the point the reticle was marking. Home /
+        -- the sights land on the point the reticle was marking. Insert /
         -- Ctrl+Shift+U cycles to "marker" then "tracked".
         ads_mode = "paused",
         -- Mode the master switch restores; rewritten every time tracking is
@@ -330,6 +310,14 @@ function Settings:load()
                 -- was any word to the user that their tuned value is gone.
                 warnRetiredSmoothingKeys(loaded, self.defaults)
 
+                local removed_tracker_keys = {}
+                for _, key in ipairs(RETIRED_TRACKER_SHAPING_KEYS) do
+                    if loaded[key] ~= nil then
+                        loaded[key] = nil
+                        removed_tracker_keys[#removed_tracker_keys + 1] = key
+                    end
+                end
+
                 -- Merge and validate loaded values with defaults
                 for k, default_value in pairs(self.defaults) do
                     local loaded_value = loaded[k]
@@ -350,6 +338,13 @@ function Settings:load()
                     end
                 end
                 loaded_from_file = true
+                if #removed_tracker_keys > 0 then
+                    print("[HeadTracking] Removed tracker-owned settings from config.json: "
+                        .. table.concat(removed_tracker_keys, ", "))
+                    if not self:save() then
+                        error("[HeadTracking] Failed to remove tracker-owned settings from config.json")
+                    end
+                end
             else
                 print("[HeadTracking] Failed to parse config.json: " .. tostring(loaded))
             end

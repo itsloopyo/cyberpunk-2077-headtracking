@@ -124,16 +124,6 @@ local function clamp(value, min_val, max_val)
     return value
 end
 
---- Axial deadzone with smooth activation. Below |value| < d returns 0; above,
---- subtracts the deadzone in the input's direction so there is no jump at the
---- threshold. Matches cameraunlock-core's DeadzoneUtils.Apply.
-local function applyDeadzone(value, deadzone)
-    if not deadzone or deadzone <= 0 then return value end
-    if value > deadzone then return value - deadzone end
-    if value < -deadzone then return value + deadzone end
-    return 0
-end
-
 -- Pre-cache math constants for NaN/Inf checks
 local math_huge = math.huge
 
@@ -251,23 +241,14 @@ function Camera.new(settings)
     -- Cached settings values to avoid repeated table lookups per frame
     -- These are refreshed via refreshSettingsCache() when settings change
     self.cached_settings = {
-        sensitivity_yaw = 1.0,
-        sensitivity_pitch = 1.0,
-        sensitivity_roll = 1.0,
         local_smoothing = DEFAULT_LOCAL_SMOOTHING,
         remote_smoothing = DEFAULT_REMOTE_SMOOTHING,
         clamp_yaw = 120.0,
         clamp_pitch = 80.0,
         clamp_roll = 45.0,
-        deadzone_yaw   = 0.5,
-        deadzone_pitch = 0.5,
-        deadzone_roll  = 1.0,
         yaw_mode = "world",
         decouple_diag_clean_cam = false,
         position_enabled = false,
-        position_sens_x = 1.0,
-        position_sens_y = 1.0,
-        position_sens_z = 1.0,
         position_limit_x = 0.30,
         position_limit_y_up = 0.20,
         position_limit_y_down = 0.05,
@@ -308,17 +289,11 @@ end
 --- Called on init and when settings change
 function Camera:refreshSettingsCache()
     local s = self.settings
-    self.cached_settings.sensitivity_yaw = s:get("sensitivity_yaw") or 1.0
-    self.cached_settings.sensitivity_pitch = s:get("sensitivity_pitch") or 1.0
-    self.cached_settings.sensitivity_roll = s:get("sensitivity_roll") or 1.0
     self.cached_settings.local_smoothing = s:get("local_smoothing") or DEFAULT_LOCAL_SMOOTHING
     self.cached_settings.remote_smoothing = s:get("remote_smoothing") or DEFAULT_REMOTE_SMOOTHING
     self.cached_settings.clamp_yaw = s:get("clamp_yaw") or 120.0
     self.cached_settings.clamp_pitch = s:get("clamp_pitch") or 80.0
     self.cached_settings.clamp_roll = s:get("clamp_roll") or 45.0
-    self.cached_settings.deadzone_yaw   = s:get("deadzone_yaw")   or 0.0
-    self.cached_settings.deadzone_pitch = s:get("deadzone_pitch") or 0.0
-    self.cached_settings.deadzone_roll  = s:get("deadzone_roll")  or 0.0
     self.cached_settings.yaw_mode = s:get("yaw_mode") or "world"
     local diag = s:get("decouple_diag_clean_cam")
     if diag == nil then diag = false end
@@ -326,9 +301,6 @@ function Camera:refreshSettingsCache()
     local pe = s:get("position_enabled")
     if pe == nil then pe = false end
     self.cached_settings.position_enabled = pe
-    self.cached_settings.position_sens_x = s:get("position_sens_x") or 1.0
-    self.cached_settings.position_sens_y = s:get("position_sens_y") or 1.0
-    self.cached_settings.position_sens_z = s:get("position_sens_z") or 1.0
     self.cached_settings.position_limit_x = s:get("position_limit_x") or 0.30
     self.cached_settings.position_limit_y_up = s:get("position_limit_y_up") or 0.20
     self.cached_settings.position_limit_y_down = s:get("position_limit_y_down") or 0.05
@@ -458,7 +430,7 @@ local function getActiveCameraWorldOrientation()
 end
 
 --- Apply head tracking rotation to the camera.
---- Processes raw tracker data through: offset -> sensitivity -> clamp -> smooth -> apply.
+--- Processes raw tracker data through: coordinate conversion -> clamp -> smooth -> apply.
 ---
 --- @param yaw number Raw yaw rotation in degrees from tracker
 --- @param pitch number Raw pitch rotation in degrees from tracker
@@ -508,21 +480,9 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     local adj_pitch = pitch
     local adj_roll = -roll
 
-    -- Step 2: Apply per-axis deadzone (smooth activation). Eats tracker noise
-    -- so a still head doesn't accumulate sub-degree drift through the
-    -- smoothing+composition chain. Applied BEFORE sensitivity to match the
-    -- cameraunlock-core pipeline (center -> deadzone -> sensitivity -> ...).
     local cache = self.cached_settings
-    adj_yaw   = applyDeadzone(adj_yaw,   cache.deadzone_yaw)
-    adj_pitch = applyDeadzone(adj_pitch, cache.deadzone_pitch)
-    adj_roll  = applyDeadzone(adj_roll,  cache.deadzone_roll)
 
-    -- Step 3: Apply sensitivity multipliers from cached settings (avoid table lookups)
-    adj_yaw = adj_yaw * cache.sensitivity_yaw
-    adj_pitch = adj_pitch * cache.sensitivity_pitch
-    adj_roll = adj_roll * cache.sensitivity_roll
-
-    -- Step 3: Clamp to the user-configured per-axis limits.
+    -- Step 2: Clamp to the user-configured per-axis limits.
     --
     -- Historically this step also applied "Soft Look" - tighter clamps and
     -- a 20% scale-down when a weapon was drawn or ADS - to stop head rotation
@@ -534,7 +494,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     adj_pitch = clamp(adj_pitch, -cache.clamp_pitch, cache.clamp_pitch)
     adj_roll  = clamp(adj_roll,  -cache.clamp_roll,  cache.clamp_roll)
 
-    -- Step 4: Apply smoothing (exponential moving average)
+    -- Step 3: Apply smoothing (exponential moving average)
     -- 0.0 = no smoothing (instant), 1.0 = maximum smoothing (slow). Which of
     -- the two parameters applies is decided by the packet source address.
     local smoothing = getEffectiveSmoothing(
@@ -1016,16 +976,10 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
     local cam = getFPPCamera()
     if not cam then return end
 
-    -- 1) sensitivity (per OT axis, before remap so user-facing knobs match
-    --    OT conventions)
-    local dx = rx * c.position_sens_x
-    local dy = ry * c.position_sens_y
-    local dz = rz * c.position_sens_z
+    -- 1) cm -> m
+    local dx, dy, dz = rx * 0.01, ry * 0.01, rz * 0.01
 
-    -- 3) cm -> m
-    dx, dy, dz = dx * 0.01, dy * 0.01, dz * 0.01
-
-    -- 4) exponential smoothing, frame-rate independent. Position uses the
+    -- 2) exponential smoothing, frame-rate independent. Position uses the
     --    same connection-selected value as rotation; there is no separate
     --    position smoothing setting.
     local s = getEffectiveSmoothing(
@@ -1035,7 +989,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
     self.pos_smooth.y = self.pos_smooth.y + (dy - self.pos_smooth.y) * alpha
     self.pos_smooth.z = self.pos_smooth.z + (dz - self.pos_smooth.z) * alpha
 
-    -- 5) axis remap (OT -> Cyberpunk local cam). X and Y (cam-frame
+    -- 3) axis remap (OT -> Cyberpunk local cam). X and Y (cam-frame
     --    lateral/longitudinal) are inverted so the camera tracks head
     --    motion in the expected direction (leaning right moves view
     --    right; leaning forward moves view forward).
@@ -1043,7 +997,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
     local cam_y = -self.pos_smooth.z                      -- forward (inverted)
     local cam_z =  self.pos_smooth.y                      -- vertical
 
-    -- 6) asymmetric clamp
+    -- 4) asymmetric clamp
     local lx = c.position_limit_x
     local ly_up, ly_dn = c.position_limit_y_up, c.position_limit_y_down
     local lz_fwd, lz_back = c.position_limit_z_fwd, c.position_limit_z_back

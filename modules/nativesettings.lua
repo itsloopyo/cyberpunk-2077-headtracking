@@ -155,7 +155,10 @@ function NativeSettingsIntegration:refreshWidget(widget_ref, value)
     if not widget_ref then return end
     local ns = self.nativeSettings
     if not ns or not ns.setOption then return end
+    local callback = widget_ref.callback
+    widget_ref.callback = function() end
     local ok, err = pcall(ns.setOption, widget_ref, value)
+    widget_ref.callback = callback
     if not ok then
         print("[HeadTracking] Native Settings UI refresh failed: " .. tostring(err))
     end
@@ -219,13 +222,13 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
-    -- Aim-down-sights behaviour. Same three modes the Home hotkey cycles.
+    -- Aim-down-sights behaviour. Same three modes the Insert hotkey cycles.
     do
         local spec = ENUM_SETTINGS.ads_mode
         self.widgetRefs["ads_mode"] = ns.addSelectorString(
             "/HeadTracking",
             "Aiming Down Sights",
-            "What happens to head tracking while the sights are up. Raising them always swings the view onto the point the reticle was marking; this picks what follows. Hotkey: Home / Ctrl+Shift+U.",
+            "What happens to head tracking while the sights are up. Raising them always swings the view onto the point the reticle was marking; this picks what follows. Hotkey: Insert / Ctrl+Shift+U.",
             spec.labels,
             enumIndex("ads_mode", self.settings:get("ads_mode")),
             enumIndex("ads_mode", self.settings:getDefaults().ads_mode),
@@ -257,50 +260,6 @@ function NativeSettingsIntegration:registerSettings()
         )
     end
 
-    -- =====================================================================
-    -- SENSITIVITY SECTION
-    -- =====================================================================
-    ns.addSubcategory("/HeadTracking/Sensitivity", "Sensitivity")
-
-    -- Yaw sensitivity
-    self.widgetRefs["sensitivity_yaw"] = ns.addRangeFloat(
-        "/HeadTracking/Sensitivity",
-        "Yaw Sensitivity",
-        "Horizontal rotation sensitivity (left/right). Higher = more responsive.",
-        0.1, 3.0, 0.1,
-        "%.1f",
-        self.settings:get("sensitivity_yaw"),
-        self.settings:getDefaults().sensitivity_yaw,
-        function(value)
-            self.settings:set("sensitivity_yaw", value)
-        end
-    )
-    -- Pitch sensitivity
-    self.widgetRefs["sensitivity_pitch"] = ns.addRangeFloat(
-        "/HeadTracking/Sensitivity",
-        "Pitch Sensitivity",
-        "Vertical rotation sensitivity (up/down). Higher = more responsive.",
-        0.1, 3.0, 0.1,
-        "%.1f",
-        self.settings:get("sensitivity_pitch"),
-        self.settings:getDefaults().sensitivity_pitch,
-        function(value)
-            self.settings:set("sensitivity_pitch", value)
-        end
-    )
-    -- Roll sensitivity
-    self.widgetRefs["sensitivity_roll"] = ns.addRangeFloat(
-        "/HeadTracking/Sensitivity",
-        "Roll Sensitivity",
-        "Tilt rotation sensitivity (head tilt). Set to 0 to disable roll.",
-        0.0, 2.0, 0.1,
-        "%.1f",
-        self.settings:get("sensitivity_roll"),
-        self.settings:getDefaults().sensitivity_roll,
-        function(value)
-            self.settings:set("sensitivity_roll", value)
-        end
-    )
     -- =====================================================================
     -- SMOOTHING SECTION
     -- =====================================================================
@@ -377,41 +336,6 @@ function NativeSettingsIntegration:registerSettings()
         end
     )
     -- =====================================================================
-    -- DEADZONES SECTION
-    -- =====================================================================
-    ns.addSubcategory("/HeadTracking/Deadzones", "Deadzones")
-
-    self.widgetRefs["deadzone_yaw"] = ns.addRangeFloat(
-        "/HeadTracking/Deadzones",
-        "Yaw Deadzone",
-        "Degrees of horizontal tracker noise ignored. Raise if the view drifts left/right when your head is still.",
-        0.0, 5.0, 0.1,
-        "%.1f°",
-        self.settings:get("deadzone_yaw"),
-        self.settings:getDefaults().deadzone_yaw,
-        function(value) self.settings:set("deadzone_yaw", value) end
-    )
-    self.widgetRefs["deadzone_pitch"] = ns.addRangeFloat(
-        "/HeadTracking/Deadzones",
-        "Pitch Deadzone",
-        "Degrees of vertical tracker noise ignored. Raise if the view drifts up/down when your head is still.",
-        0.0, 5.0, 0.1,
-        "%.1f°",
-        self.settings:get("deadzone_pitch"),
-        self.settings:getDefaults().deadzone_pitch,
-        function(value) self.settings:set("deadzone_pitch", value) end
-    )
-    self.widgetRefs["deadzone_roll"] = ns.addRangeFloat(
-        "/HeadTracking/Deadzones",
-        "Roll Deadzone",
-        "Degrees of head-tilt tracker noise ignored. Raise if the view gradually rolls when your head is still.",
-        0.0, 5.0, 0.1,
-        "%.1f°",
-        self.settings:get("deadzone_roll"),
-        self.settings:getDefaults().deadzone_roll,
-        function(value) self.settings:set("deadzone_roll", value) end
-    )
-    -- =====================================================================
     -- POSITION (6DOF) SECTION
     -- =====================================================================
     ns.addSubcategory("/HeadTracking/Position", "Position (6DOF)")
@@ -430,19 +354,9 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
-    -- Sensitivity and limits are laid out axis by axis. Z is asymmetric on
-    -- purpose: leaning in has far more travel than pulling back, which is what
-    -- stops the camera clipping through the player model.
+    -- Z limits are asymmetric because leaning in has far more travel than
+    -- pulling back, which stops the camera clipping through the player model.
     local POSITION_WIDGETS = {
-        { key = "position_sens_x", label = "Sensitivity X (lateral)",
-          desc = "Multiplier for side-to-side head movement.",
-          min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
-        { key = "position_sens_y", label = "Sensitivity Y (vertical)",
-          desc = "Multiplier for up-and-down head movement.",
-          min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
-        { key = "position_sens_z", label = "Sensitivity Z (forward)",
-          desc = "Multiplier for leaning in and pulling back.",
-          min = 0.0, max = 5.0, step = 0.1, fmt = "%.1f" },
         { key = "position_limit_x", label = "Limit X (metres)",
           desc = "Furthest the camera moves sideways, in metres each way.",
           min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },

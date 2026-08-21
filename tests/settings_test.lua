@@ -137,16 +137,16 @@ assert_false(s:set("yaw_mode", ""), "empty yaw_mode rejected")
 assert_eq(s:get("yaw_mode"), "local", "yaw_mode unchanged after empty rejection")
 
 -- (2) numeric validation
-assert_true(s:set("sensitivity_yaw", 1.5), "sensitivity_yaw 1.5 accepted")
-assert_eq(s:get("sensitivity_yaw"), 1.5, "sensitivity_yaw stored")
+assert_true(s:set("clamp_yaw", 100), "clamp_yaw 100 accepted")
+assert_eq(s:get("clamp_yaw"), 100, "clamp_yaw stored")
 -- Out-of-range clamps and reports clamped value.
-assert_true(s:set("sensitivity_yaw", 99), "sensitivity_yaw 99 clamps")
-assert_eq(s:get("sensitivity_yaw"), 5.0, "sensitivity_yaw clamped to max=5.0")
+assert_true(s:set("clamp_yaw", 999), "clamp_yaw 999 clamps")
+assert_eq(s:get("clamp_yaw"), 180.0, "clamp_yaw clamped to max=180.0")
 -- Wrong type rejected outright.
-assert_false(s:set("sensitivity_yaw", "lots"), "sensitivity_yaw string rejected")
+assert_false(s:set("clamp_yaw", "lots"), "clamp_yaw string rejected")
 -- NaN rejected.
 local nan = 0/0
-assert_false(s:set("sensitivity_yaw", nan), "sensitivity_yaw NaN rejected")
+assert_false(s:set("clamp_yaw", nan), "clamp_yaw NaN rejected")
 -- Smoothing factor is bounded.
 assert_true(s:set("local_smoothing", 0.5), "local_smoothing 0.5 accepted")
 assert_true(s:set("local_smoothing", 2.0), "local_smoothing 2.0 clamps")
@@ -172,7 +172,7 @@ do
 
     -- Guard order: a config with no retired key must not consume the one-shot.
     local cf = io.open(retired_path, "w")
-    cf:write('{"sensitivity_yaw":1.0}')
+    cf:write('{"clamp_yaw":120.0}')
     cf:close()
     local s_clean = Settings.new()
     s_clean.path = retired_path
@@ -188,7 +188,7 @@ do
 
     -- Both retired keys present, with values a user would have tuned.
     local rf = io.open(retired_path, "w")
-    rf:write('{"smoothing_factor":0.5,"position_smoothing":0.75,"sensitivity_yaw":1.0}')
+    rf:write('{"smoothing_factor":0.5,"position_smoothing":0.75,"clamp_yaw":120.0}')
     rf:close()
 
     local s_retired = Settings.new()
@@ -232,6 +232,39 @@ do
     end
 
     os.remove(retired_path)
+end
+
+-- Tracker-owned pose-shaping keys are removed from existing configs rather
+-- than left behind looking active.
+do
+    local tracker_path = "tracker_owned_config.json"
+    local tf = io.open(tracker_path, "w")
+    tf:write('{"clamp_yaw":100,"sensitivity_yaw":2,"sensitivity_pitch":2,"sensitivity_roll":2,"deadzone_yaw":1,"deadzone_pitch":1,"deadzone_roll":1,"position_sens_x":2,"position_sens_y":2,"position_sens_z":2}')
+    tf:close()
+
+    local tracker_settings = Settings.new()
+    tracker_settings.path = tracker_path
+    tracker_settings:load()
+
+    local removed_keys = {
+        "sensitivity_yaw", "sensitivity_pitch", "sensitivity_roll",
+        "deadzone_yaw", "deadzone_pitch", "deadzone_roll",
+        "position_sens_x", "position_sens_y", "position_sens_z",
+    }
+    for _, key in ipairs(removed_keys) do
+        assert_eq(tracker_settings:get(key), nil, key .. " is not loaded")
+    end
+    assert_eq(tracker_settings:get("clamp_yaw"), 100, "game-specific setting survives migration")
+
+    local migrated = io.open(tracker_path, "r")
+    local migrated_body = migrated:read("*all")
+    migrated:close()
+    for _, key in ipairs(removed_keys) do
+        assert_false(migrated_body:match('"' .. key .. '"'), key .. " is removed from config")
+    end
+
+    os.remove(tracker_path)
+    os.remove(tracker_path .. ".bak")
 end
 
 -- (3) save crash-recovery rotation: after a successful save against an
@@ -321,6 +354,13 @@ assert_eq(m:get("position_enabled"), true, "position-only mode restored, positio
 -- sitting in those configs.
 local a = Settings.new()
 assert_eq(a:get("ads_mode"), "paused", "ads_mode defaults to paused")
+for _, key in ipairs({
+    "sensitivity_yaw", "sensitivity_pitch", "sensitivity_roll",
+    "deadzone_yaw", "deadzone_pitch", "deadzone_roll",
+    "position_sens_x", "position_sens_y", "position_sens_z",
+}) do
+    assert_false(a:isValidKey(key), key .. " is owned by the tracker")
+end
 for _, mode in ipairs({ "paused", "marker", "tracked" }) do
     assert_true(a:set("ads_mode", mode), "ads_mode=" .. mode .. " accepted")
     assert_eq(a:get("ads_mode"), mode, "ads_mode=" .. mode .. " round-trips")
@@ -334,14 +374,14 @@ assert_false(a:set("ads_mode", 2), "ads_mode number rejected")
 -- string would read as "not paused" and quietly keep the gate open on ADS.
 local bad_path = "ads_mode_invalid_config.json"
 local bf = io.open(bad_path, "w")
-bf:write('{"ads_mode":"center","sensitivity_yaw":1.7}')
+bf:write('{"ads_mode":"center","clamp_yaw":100}')
 bf:close()
 local bg = Settings.new()
 bg.path = bad_path
 bg:load()
 -- Assert a second key first: "paused" is also what an unreadable file yields,
 -- so without this the assertion below would pass vacuously.
-assert_eq(bg:get("sensitivity_yaw"), 1.7, "fixture was actually read")
+assert_eq(bg:get("clamp_yaw"), 100, "fixture was actually read")
 assert_eq(bg:get("ads_mode"), "paused", "out-of-enum ads_mode falls back to the default")
 os.remove(bad_path)
 os.remove(bad_path .. ".bak")
