@@ -38,6 +38,12 @@ local function _readCamZoom(cam) return cam:GetZoom() end
 local function _getRootWidget(ctrl) return ctrl:GetRootWidget() end
 local function _getRootCompoundWidget(ctrl) return ctrl:GetRootCompoundWidget() end
 local function _rootSetMargin(root, m) root:SetMargin(m) end
+local function _getCrosshairData(targeting, player)
+    return targeting:GetCrosshairData(player)
+end
+local function _raycastStatic(spatial, from, to)
+    return spatial:SyncRaycastByCollisionGroup(from, to, 'Static', false, false)
+end
 
 -- Lock-on gating. The in-car / combat reticle is the SAME widget the engine
 -- moves onto an enemy when a target is locked: when locked the game writes the
@@ -74,7 +80,9 @@ local function _rootSetMargin(root, m) root:SetMargin(m) end
 local GATE_RESTING_PX = 8.0
 local GATE_MATCH_EPS  = 1.0
 local GATE_WALK_DEPTH = 6
-local AIM_MARKER_DEPTH_M = 10.0
+local AIM_RAY_LENGTH_M = 1000.0
+local AIM_DISTANCE_SAMPLE_INTERVAL = 1.0 / 30.0
+local AIM_DISTANCE_SMOOTH_SPEED = 18.0
 local LOCK_CHILD_TRANSLATION_PX = 8.0
 -- The child-translation lock heuristic latches ANY visible descendant displaced
 -- past LOCK_CHILD_TRANSLATION_PX as an "engine lock-on" and pins the reticle to
@@ -175,6 +183,10 @@ function BuiltinCrosshair.new(settings, camera)
 
     self._last_dx = 0
     self._last_dy = 0
+    self._aim_distance = nil
+    self._aim_distance_sample_t = nil
+    self._aim_distance_next_t = 0
+    self._aim_distance_error_logged = false
 
     -- Diagnostic: when true, tick() skips all crosshair/bracket writes so the
     -- game's native projection is left untouched. Used to decide whether the
@@ -1126,6 +1138,126 @@ local function smoothFov(self, vfov)
     return out
 end
 
+local function projectAimOffset(yaw, pitch, roll,
+                                pos_x, pos_y, pos_z, aim_distance,
+                                h_fov_deg, v_fov_deg, screen_w, screen_h)
+    local yaw_rad = math_rad(yaw)
+    local pitch_rad = math_rad(pitch)
+    local roll_rad = math_rad(-(roll or 0))
+
+    local sy, cy = math_sin(yaw_rad), math_cos(yaw_rad)
+    local sp, cp = math_sin(pitch_rad), math_cos(pitch_rad)
+
+    local x0, y0, z0
+    if aim_distance then
+        x0 = -pos_x
+        y0 = -pos_z
+        z0 = aim_distance - pos_y
+    else
+        x0 = 0
+        y0 = 0
+        z0 = 1
+    end
+
+    local x1 = x0 * cy + z0 * sy
+    local z1 = -x0 * sy + z0 * cy
+    local ax = x1
+    local ay = y0 * cp + z1 * sp
+    local az = -y0 * sp + z1 * cp
+
+    if math_abs(roll_rad) > 1e-4 then
+        local cr, sr = math_cos(roll_rad), math_sin(roll_rad)
+        local rx = ax * cr - ay * sr
+        local ry = ax * sr + ay * cr
+        ax, ay = rx, ry
+    end
+
+    local tan_half_h = math_tan(math_rad(h_fov_deg) * 0.5)
+    local tan_half_v = math_tan(math_rad(v_fov_deg) * 0.5)
+
+    if math_abs(az) <= 1e-3 or tan_half_h <= 1e-3 or tan_half_v <= 1e-3 then
+        return 0, 0, false
+    end
+
+    local dx = (ax / az) / tan_half_h * (screen_w * 0.5)
+    local dy = (ay / az) / tan_half_v * (screen_h * 0.5)
+
+    if dx ~= dx or dy ~= dy then return 0, 0, false end
+    if math_abs(dx) > 1e6 or math_abs(dy) > 1e6 then return 0, 0, false end
+
+    return dx, dy, true
+end
+
+BuiltinCrosshair.projectAimOffset = projectAimOffset
+
+function BuiltinCrosshair:_getAimDistance(player, position_active)
+    if not position_active then return nil end
+    if not Game then return nil end
+
+    local now = os.clock()
+    if now < self._aim_distance_next_t then
+        return self._aim_distance
+    end
+    self._aim_distance_next_t = now + AIM_DISTANCE_SAMPLE_INTERVAL
+
+    local targeting = Game.GetTargetingSystem and Game.GetTargetingSystem()
+    local spatial = Game.GetSpatialQueriesSystem and Game.GetSpatialQueriesSystem()
+    if not player or not targeting or not spatial then
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        return nil
+    end
+
+    local ok_crosshair, from, forward = pcall(_getCrosshairData, targeting, player)
+    if not ok_crosshair or not from or not forward then
+        if not self._aim_distance_error_logged then
+            self._aim_distance_error_logged = true
+            dlog("[HeadTracking:Reticle] aim-distance crosshair query failed: " ..
+                tostring(from))
+        end
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        return nil
+    end
+
+    local to = Vector4.new(
+        from.x + forward.x * AIM_RAY_LENGTH_M,
+        from.y + forward.y * AIM_RAY_LENGTH_M,
+        from.z + forward.z * AIM_RAY_LENGTH_M,
+        from.w)
+    local ok_raycast, hit, result = pcall(_raycastStatic, spatial, from, to)
+    if not ok_raycast then
+        if not self._aim_distance_error_logged then
+            self._aim_distance_error_logged = true
+            dlog("[HeadTracking:Reticle] aim-distance raycast failed: " ..
+                tostring(hit))
+        end
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        return nil
+    end
+
+    if not hit or not result or type(result.distance) ~= "number"
+       or result.distance <= 0 or result.distance ~= result.distance then
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        return nil
+    end
+
+    local previous = self._aim_distance
+    local previous_t = self._aim_distance_sample_t
+    if not previous or not previous_t then
+        self._aim_distance = result.distance
+    else
+        local dt = now - previous_t
+        local alpha = 1.0 - math_exp(-AIM_DISTANCE_SMOOTH_SPEED * dt)
+        self._aim_distance = previous + (result.distance - previous) * alpha
+    end
+    self._aim_distance_sample_t = now
+    self._aim_distance_error_logged = false
+    return self._aim_distance
+end
+
 
 function BuiltinCrosshair:_computeOffset(screen_w, screen_h)
     local yaw, pitch, roll = self.camera:getRenderedYPR(self.lead_factor)
@@ -1159,47 +1291,19 @@ function BuiltinCrosshair:_computeOffset(screen_w, screen_h)
     local v_fov_deg = math_deg(2.0 * math_atan(
         math_tan(math_rad(h_fov_deg) * 0.5) * (screen_h / screen_w)))
 
-    local yaw_rad = math_rad(yaw)
-    local pitch_rad = math_rad(pitch)
-    local roll_rad = math_rad(-(roll or 0))
-
-    local sy, cy = math_sin(yaw_rad), math_cos(yaw_rad)
-    local sp, cp = math_sin(pitch_rad), math_cos(pitch_rad)
-
     local pos_x, pos_y, pos_z = 0, 0, 0
     if self.camera.getAppliedPosition then
         pos_x, pos_y, pos_z = self.camera:getAppliedPosition()
     end
-
-    local x0 = -pos_x
-    local y0 = -pos_z
-    local z0 = AIM_MARKER_DEPTH_M - pos_y
-
-    local x1 = x0 * cy + z0 * sy
-    local z1 = -x0 * sy + z0 * cy
-    local ax = x1
-    local ay = y0 * cp + z1 * sp
-    local az = -y0 * sp + z1 * cp
-
-    if math_abs(roll_rad) > 1e-4 then
-        local cr, sr = math_cos(roll_rad), math_sin(roll_rad)
-        local rx = ax * cr - ay * sr
-        local ry = ax * sr + ay * cr
-        ax, ay = rx, ry
-    end
-
-    local tan_half_h = math_tan(math_rad(h_fov_deg) * 0.5)
-    local tan_half_v = math_tan(math_rad(v_fov_deg) * 0.5)
-
-    if math_abs(az) <= 1e-3 or tan_half_h <= 1e-3 or tan_half_v <= 1e-3 then
-        return 0, 0, false
-    end
-
-    local dx = (ax / az) / tan_half_h * (screen_w * 0.5)
-    local dy = (ay / az) / tan_half_v * (screen_h * 0.5)
-
-    if dx ~= dx or dy ~= dy then return 0, 0, false end
-    if math_abs(dx) > 1e6 or math_abs(dy) > 1e6 then return 0, 0, false end
+    local position_active = math_abs(pos_x) > 1e-6
+        or math_abs(pos_y) > 1e-6
+        or math_abs(pos_z) > 1e-6
+    local aim_distance = self:_getAimDistance(player, position_active)
+    local dx, dy, valid = projectAimOffset(
+        yaw, pitch, roll,
+        pos_x, pos_y, pos_z, aim_distance,
+        h_fov_deg, v_fov_deg, screen_w, screen_h)
+    if not valid then return 0, 0, false end
 
     -- B2 diagnostic: log the raw FOV/zoom the projection used, so we can learn
     -- CP2077's zoom convention (does scope zoom multiply or divide the FOV?) and

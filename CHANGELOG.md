@@ -10,6 +10,7 @@
 ### Fixed
 
 - keep Page Up's position-only mode from restoring rotation through Native Settings UI sync
+- compensate the reticle against the live aim distance when leaning or moving vertically
 
 ## [1.1.0] - 2026-08-21
 
