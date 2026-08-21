@@ -438,13 +438,14 @@ function State:isTrackingAllowed()
 
     -- Aiming down sights: the game pulls the camera onto the weapon's sight
     -- line, and that sight picture IS the aim. What that should do to head
-    -- tracking is the user's call, toggled with Home / Ctrl+Shift+T:
+    -- tracking is the user's call, toggled with Home / Ctrl+Shift+U:
     --   "paused"  - stand tracking down, so the view swings onto the point the
     --               reticle was marking and the sight picture is the game's.
-    --   "marker" / "tracked" - keep the gate open. init.lua feeds poses relative
-    --               to the one the sights came up on, so the view makes that
-    --               same swing and then keeps tracking from there. "marker"
-    --               additionally draws an aim marker at the projected hit point.
+    --   "marker" / "tracked" - keep the gate open. ads_pose.lua feeds poses
+    --               relative to the one the sights came up on, so the view
+    --               makes that same swing and then keeps tracking from there.
+    --               "marker" additionally draws an aim marker at the projected
+    --               hit point.
     -- Last in the walk so a menu or cinematic still reports its own reason
     -- when both are true at once.
     if self:isAdsLive() then

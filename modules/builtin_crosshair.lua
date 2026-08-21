@@ -1467,6 +1467,12 @@ end
 --- Computed fresh rather than served from `_last_dx`: tick() returns early
 --- before computing anything when it has no controllers to write to, which is
 --- exactly the state the game leaves it in with the sights up.
+---
+--- Deliberately independent of `crosshair_enabled`. That setting governs
+--- whether this module moves the game's OWN reticle during normal play; the
+--- ADS marker is a separate widget in a mode where the game draws no reticle
+--- at all, and folding it in here would make ads_mode = "marker" silently
+--- behave as "tracked".
 --- @param screen_w number
 --- @param screen_h number
 --- @return number dx, number dy, boolean valid

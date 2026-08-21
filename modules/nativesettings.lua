@@ -56,6 +56,10 @@ function NativeSettingsIntegration.new(settings_ref)
     self.camera = nil
     self.ui = nil
     self.widgetRefs = {}
+    -- The master on/off switch is not backed by a single setting - it drives
+    -- `enabled` and `position_enabled` together - so it is tracked apart from
+    -- widgetRefs, which maps one setting to the one widget that stores it.
+    self.masterWidgetPath = nil
     self.settingsObserverUnsubscribe = nil
     return self
 end
@@ -117,6 +121,7 @@ function NativeSettingsIntegration:shutdown()
 
     -- Clear widget references
     self.widgetRefs = {}
+    self.masterWidgetPath = nil
     self.initialized = false
 end
 
@@ -129,13 +134,11 @@ function NativeSettingsIntegration:onSettingChanged(key, new_value)
         return
     end
 
-    -- The Enabled switch is the master on/off, so it covers rotation and
-    -- position together: either key moving has to re-read the pair. Position
-    -- also has a switch of its own now, so this refreshes the master and then
-    -- falls through to refresh that one with its own value.
+    -- The master switch is the OR of the two tracking keys, so either one
+    -- moving has to re-read the pair. It is refreshed alongside - not instead
+    -- of - the key's own switch, which falls through below.
     if key == "enabled" or key == "position_enabled" then
-        self:refreshWidget(self.widgetRefs["enabled"], self.settings:isTrackingEnabled())
-        if key == "enabled" then return end
+        self:refreshWidget(self.masterWidgetPath, self.settings:isTrackingEnabled())
     end
 
     if ENUM_SETTINGS[key] then
@@ -169,10 +172,14 @@ function NativeSettingsIntegration:registerSettings()
     -- =====================================================================
     -- ENABLE/DISABLE TOGGLE
     -- =====================================================================
+    -- Master on/off, matching the End hotkey: rotation and position go down
+    -- together. It is deliberately NOT widgetRefs["enabled"] - it writes both
+    -- keys, so the rotation switch below owns that mapping and this one is
+    -- refreshed by hand from isTrackingEnabled().
     ns.addSwitch(
         "/HeadTracking/Enabled",
         "Enable Head Tracking",
-        "Toggle head tracking on/off. Can also use hotkey (default: End)",
+        "Master switch for rotation and position together. Hotkey: End / Ctrl+Shift+Y.",
         self.settings:isTrackingEnabled(),
         self.settings:getDefaults().enabled,
         function(state)
@@ -191,7 +198,30 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
-    self.widgetRefs["enabled"] = "/HeadTracking/Enabled"
+    self.masterWidgetPath = "/HeadTracking/Enabled"
+
+    -- Rotation on its own, so rotation-only and position-only are both
+    -- reachable from the panel rather than only from the Page Up cycle.
+    ns.addSwitch(
+        "/HeadTracking/RotationEnabled",
+        "Rotational Tracking",
+        "Look around with your head. Turn this off and leave Positional Tracking on for lean-only. Hotkey: Page Up / Ctrl+Shift+G cycles rotation-only, position-only and both.",
+        self.settings:get("enabled"),
+        self.settings:getDefaults().enabled,
+        function(state)
+            if not state and not self.settings:get("position_enabled") then
+                self.settings:setTrackingEnabled(false)
+            else
+                self.settings:set("enabled", state)
+            end
+            -- Peel any baked head rotation back out, the same as the Page Up
+            -- handler does when rotation flips off.
+            if not state and self.camera then
+                self.camera:reset()
+            end
+        end
+    )
+    self.widgetRefs["enabled"] = "/HeadTracking/RotationEnabled"
 
     -- Aim-down-sights behaviour. Same three modes the Home hotkey cycles.
     do
@@ -199,7 +229,7 @@ function NativeSettingsIntegration:registerSettings()
         ns.addSelectorString(
             "/HeadTracking/AdsMode",
             "Aiming Down Sights",
-            "What happens to head tracking while the sights are up. Raising them always swings the view onto the point the reticle was marking; this picks what follows. Hotkey: Home / Ctrl+Shift+T.",
+            "What happens to head tracking while the sights are up. Raising them always swings the view onto the point the reticle was marking; this picks what follows. Hotkey: Home / Ctrl+Shift+U.",
             spec.labels,
             enumIndex("ads_mode", self.settings:get("ads_mode")),
             enumIndex("ads_mode", self.settings:getDefaults().ads_mode),
@@ -410,9 +440,6 @@ function NativeSettingsIntegration:registerSettings()
     self.widgetRefs["deadzone_roll"] = "/HeadTracking/Deadzones/Roll"
 
     -- =====================================================================
-    -- CROSSHAIR SECTION
-    -- =====================================================================
-    -- =====================================================================
     -- POSITION (6DOF) SECTION
     -- =====================================================================
     ns.addSubcategory("/HeadTracking/Position", "Position (6DOF)")
@@ -424,7 +451,11 @@ function NativeSettingsIntegration:registerSettings()
         self.settings:get("position_enabled"),
         self.settings:getDefaults().position_enabled,
         function(state)
-            self.settings:set("position_enabled", state)
+            if not state and not self.settings:get("enabled") then
+                self.settings:setTrackingEnabled(false)
+            else
+                self.settings:set("position_enabled", state)
+            end
         end
     )
     self.widgetRefs["position_enabled"] = "/HeadTracking/Position/Enabled"
@@ -474,6 +505,9 @@ function NativeSettingsIntegration:registerSettings()
         self.widgetRefs[key] = path
     end
 
+    -- =====================================================================
+    -- CROSSHAIR SECTION
+    -- =====================================================================
     ns.addSubcategory("/HeadTracking/Crosshair", "Crosshair Overlay")
 
     -- Crosshair enabled

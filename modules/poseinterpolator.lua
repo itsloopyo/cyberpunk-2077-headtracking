@@ -73,6 +73,11 @@ local function shortestAngleDelta(from, to)
     return normalizeAngle(to - from)
 end
 
+-- Exported so callers that subtract two tracker angles (init.lua's ADS entry
+-- pose) use this seam-aware delta rather than a plain `a - b`, which turns a
+-- 10-degree move across +-180 into its 350-degree complement.
+PoseInterpolator.shortestAngleDelta = shortestAngleDelta
+
 function PoseInterpolator.new()
     local self = setmetatable({}, PoseInterpolator)
     self.maxExtrapolationFraction = 0.5

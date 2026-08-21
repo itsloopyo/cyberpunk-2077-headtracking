@@ -126,7 +126,7 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 | Toggle tracking     | `End`       | `Ctrl+Shift+Y`  |
 | Cycle tracking mode | `Page Up`   | `Ctrl+Shift+G`  |
 | Toggle yaw mode     | `Page Down` | `Ctrl+Shift+H`  |
-| Cycle ADS mode      | `Home`      | `Ctrl+Shift+T`  |
+| Cycle ADS mode      | `Home`      | `Ctrl+Shift+U`  |
 
 `Page Up` / `Ctrl+Shift+G` cycles tracking mode:
 
@@ -135,7 +135,7 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 3. Rotational tracking disabled, positional tracking enabled
 4. Back to normal
 
-`Home` / `Ctrl+Shift+T` cycles what happens when you aim down sights. All three start the same way - raising the sights swings the view onto the point the reticle was marking, so your shot lands where you had it lined up - and they differ in what happens for the rest of the aim:
+`Home` / `Ctrl+Shift+U` cycles what happens when you aim down sights. All three start the same way - raising the sights swings the view onto the point the reticle was marking, so your shot lands where you had it lined up - and they differ in what happens for the rest of the aim:
 
 1. **Tracking paused** (default) - the game keeps the camera for as long as the sights are up. The sight picture is exactly the game's, and head movement does nothing until you lower the weapon.
 2. **Tracking on, with an aim marker** - head tracking carries on from the snapped position, and a small crosshair is drawn wherever your rounds will actually land. Use this one if you want to look around with the sights up: the game hides its own crosshair during ADS and the iron sights are not eye-levelled, so without the marker there is nothing on screen telling you where the gun is pointing once your head has moved off the sight line.
@@ -154,7 +154,8 @@ The mod writes its config to:
 Edit it directly, or configure the mod in game if you have a settings framework installed. The defaults below are what the mod ships with:
 
 - [Native Settings UI](https://www.nexusmods.com/cyberpunk2077/mods/3518) puts every option below (except the reverse-engineering diagnostic) into the game's own Settings menu, controller included. Optional: without it the mod runs exactly the same and you edit `config.json` by hand.
-- [Mod Configuration Menu](https://www.nexusmods.com/cyberpunk2077/mods/31640) works too, and needs nothing extra from this mod. MCM is a unified front-end over the existing frameworks rather than a registry of its own, so it picks the mod up through the Native Settings registration above.
+
+Native Settings is the only framework this mod registers with. If you use a different settings front-end, whether it picks this mod up is down to whether that front-end reads Native Settings' registry - nothing extra is needed from here either way.
 
 
 ```json
@@ -190,22 +191,25 @@ Edit it directly, or configure the mod in game if you have a settings framework 
   "position_limit_z_back": 0.10,
 
   "yaw_mode": "world",
-  "ads_mode": "paused"
+  "ads_mode": "paused",
+
+  "saved_tracking_mode": "both"
 }
 ```
 
-JSON has no comment syntax, so the settings worth touching are described here instead:
+JSON has no comment syntax, so the settings worth touching are described here instead. Ranges below are what the file accepts; the in-game sliders deliberately cover a narrower band, so a value you type into the file can sit outside what the slider can reach.
 
-- `sensitivity_*` (0.1 to 5.0): per-axis rotation multiplier. Raise pitch if you want more vertical range from less head movement.
+- `sensitivity_yaw` / `sensitivity_pitch` (0.1 to 5.0) and `sensitivity_roll` (0.0 to 5.0): per-axis rotation multiplier. Raise pitch if you want more vertical range from less head movement; set roll to 0 to ignore head tilt entirely.
 - `local_smoothing` (0.0 to 1.0, default 0.0): smoothing applied when the tracker runs on this machine (loopback). 0 = no smoothing, 1 = heavy.
 - `remote_smoothing` (0.0 to 1.0, default 0.15): smoothing applied when the tracker is a remote device on the network. 0 = no smoothing, 1 = heavy.
   The mod picks between the two from the source address of each tracking packet, so switching from a local OpenTrack instance to a phone on WiFi swaps the value with no restart. Both cover rotation and position, so there is no separate position smoothing setting. Local defaults to zero because a same-machine tracker is already stable and any smoothing there is pure added latency.
 - `clamp_*` (degrees): rotation caps, so head rotation cannot fight the aim system.
-- `crosshair_*`: parallax-correct reticle overlay. Set `crosshair_fov_degrees` to your in-game FOV so the marker tracks the true aim point at extreme head angles.
+- `crosshair_*`: parallax-correct reticle overlay. `crosshair_fov_degrees` is a fallback only - the mod reads your live field of view from the camera every frame, including weapon zoom, and falls back to this value if that read fails. Set it to your in-game FOV so the fallback is close if it ever fires. `crosshair_enabled` governs the game's own reticle during normal play only - it does not switch off the ADS aim marker, which is a separate widget drawn in a mode where the game shows no reticle at all.
 - `position_*`: 6DOF translation. Sensitivities are per-axis multipliers, limits are in meters.
 - `deadzone_yaw` / `deadzone_pitch` / `deadzone_roll`: degrees of head movement ignored around centre, to stop tracker noise drifting the view while you hold still. Roll defaults higher than the other two because head-roll noise is the usual cause of the view slowly rolling on its own; raise it if you still see that.
-- `ads_mode`: what aiming down sights does. `"paused"` (default) stands tracking down for as long as the sights are up. `"marker"` keeps head tracking live through the aim and draws a crosshair at the true aim point. `"tracked"` keeps tracking live with no marker. Cycled live with `Home` / `Ctrl+Shift+T`, and persisted. The marker's size and colour are fixed; there is no setting for them.
-- `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`, but note this one is **not persisted**: every launch starts back in `"world"`, so the toggle lasts for the session only.
+- `saved_tracking_mode`: not a setting - it is where the mod remembers which tracking mode to restore when tracking is switched back on, whether that is you pressing `End` or the mod bringing tracking up on the next launch after you quit with it off. Rewritten every time you switch tracking off. Leave it alone.
+- `ads_mode`: what aiming down sights does. `"paused"` (default) stands tracking down for as long as the sights are up. `"marker"` keeps head tracking live through the aim and draws a crosshair at the true aim point. `"tracked"` keeps tracking live with no marker. Cycled live with `Home` / `Ctrl+Shift+U`, and persisted. The marker's size and colour are fixed; there is no setting for them.
+- `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`. The choice is saved, so it survives a restart.
 
 ## Troubleshooting
 
@@ -241,7 +245,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 
 **Head tracking stops while aiming down sights.**
 - That is the default, and it is deliberate. Aiming down sights puts the camera on the weapon's sight line and that sight picture is the aim, so head rotation would swing the view off the sights while the rounds kept going where the sights point. Tracking pauses for as long as the sights are up and resumes when you lower the weapon.
-- Press `Home` / `Ctrl+Shift+T` if you would rather keep tracking through the aim. The snap onto the aim point still happens; tracking just carries on from there. The first press also turns on an aim marker so you can see where the gun is pointing.
+- Press `Home` / `Ctrl+Shift+U` if you would rather keep tracking through the aim. The snap onto the aim point still happens; tracking just carries on from there. The first press also turns on an aim marker so you can see where the gun is pointing.
 - Your view is the same before and after, so repeatedly aiming will not walk it around.
 
 **The view jumps when I lower the sights, with ADS tracking left on.**

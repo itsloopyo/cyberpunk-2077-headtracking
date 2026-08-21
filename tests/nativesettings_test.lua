@@ -78,7 +78,10 @@ assert_true(integration:init(), "integration initialises against the stub")
 -- diagnostic that writes a mouse-only orientation to the camera, and putting it
 -- in the settings panel would invite people to break their own view with it. It
 -- stays reachable from the CET console.
-local NOT_IN_UI = { decouple_diag_clean_cam = true }
+--
+-- saved_tracking_mode is persisted STATE, not a knob: it records which mode the
+-- master switch should restore, and is rewritten every time tracking goes off.
+local NOT_IN_UI = { decouple_diag_clean_cam = true, saved_tracking_mode = true }
 
 local missing = {}
 for key in pairs(settings:getDefaults()) do
@@ -123,23 +126,67 @@ refreshes = {}
 integration:onSettingChanged("ads_mode", "tracked")
 assert_eq(refreshes[ads_path], 3, "ads_mode refresh pushes the index, not the string")
 
--- (5) The master Enabled switch reflects rotation OR position, and a change to
---     position_enabled has to move BOTH it and the position switch - the bug
---     being pinned is the master remap swallowing the position refresh.
-local enabled_path = integration.widgetRefs["enabled"]
+-- (5) The master Enabled switch is the OR of rotation and position, and is a
+--     SEPARATE widget from the rotation switch that stores `enabled`. Folding
+--     the two together left no way to reach rotation-only from the panel, and
+--     made a position_enabled change refresh the master instead of the
+--     position switch.
+local master_path = integration.masterWidgetPath
+local rot_path = integration.widgetRefs["enabled"]
 local pos_path = integration.widgetRefs["position_enabled"]
-refreshes = {}
+assert_true(master_path ~= nil, "master switch is registered")
+assert_true(master_path ~= rot_path, "master switch is not the rotation switch")
+assert_true(widgets[master_path] ~= nil, "master switch points at a real widget")
+
+-- The rotation switch writes `enabled` alone, so rotation-only is reachable.
+settings:set("enabled", true)
+settings:set("position_enabled", true)
+widgets[rot_path].callback(false)
+assert_eq(settings:get("enabled"), false, "rotation switch turns rotation off on its own")
+assert_eq(settings:get("position_enabled"), true, "rotation switch leaves position alone")
+
+-- The master switch writes both, and restores the mode it took down.
+widgets[master_path].callback(false)
+assert_eq(settings:get("position_enabled"), false, "master switch clears position too")
+widgets[master_path].callback(true)
+assert_eq(settings:get("enabled"), false, "master restores position-only, rotation stays off")
+assert_eq(settings:get("position_enabled"), true, "master restores position-only, position back on")
+
+-- Turning off the last active axis also switches tracking off. It must record
+-- that axis as the mode the master restores.
+settings:set("enabled", true)
+settings:set("position_enabled", false)
+widgets[rot_path].callback(false)
+assert_eq(settings:get("saved_tracking_mode"), "rot", "last rotation axis records rotation-only")
+widgets[master_path].callback(true)
+assert_eq(settings:get("enabled"), true, "master restores rotation-only rotation")
+assert_eq(settings:get("position_enabled"), false, "master keeps position off in rotation-only")
+
 settings:set("enabled", false)
+settings:set("position_enabled", true)
+widgets[pos_path].callback(false)
+assert_eq(settings:get("saved_tracking_mode"), "pos", "last position axis records position-only")
+widgets[master_path].callback(true)
+assert_eq(settings:get("enabled"), false, "master keeps rotation off in position-only")
+assert_eq(settings:get("position_enabled"), true, "master restores position-only position")
+
+settings:set("enabled", true)
 settings:set("position_enabled", false)
 refreshes = {}
 integration:onSettingChanged("position_enabled", false)
-assert_eq(refreshes[enabled_path], false, "master switch follows position_enabled off")
+assert_eq(refreshes[master_path], true, "master follows the pair, not one key")
 assert_eq(refreshes[pos_path], false, "position switch refreshes with its own value")
+
+settings:set("enabled", false)
+refreshes = {}
+integration:onSettingChanged("enabled", false)
+assert_eq(refreshes[master_path], false, "master goes off once both keys are off")
+assert_eq(refreshes[rot_path], false, "rotation switch refreshes with its own value")
 
 settings:set("position_enabled", true)
 refreshes = {}
 integration:onSettingChanged("position_enabled", true)
-assert_eq(refreshes[enabled_path], true, "position-only counts as tracking on for the master switch")
+assert_eq(refreshes[master_path], true, "position-only counts as tracking on for the master switch")
 assert_eq(refreshes[pos_path], true, "position switch follows back on")
 
 -- (6) A setting with no widget must not throw on the way through - the observer

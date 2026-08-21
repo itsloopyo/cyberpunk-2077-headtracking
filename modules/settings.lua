@@ -13,7 +13,7 @@ Settings.__index = Settings
 local YAW_MODE_VALUES = { world = true, ["local"] = true }
 
 -- Allowed ads_mode strings, same reasoning as YAW_MODE_VALUES. Cycled with
--- Home / Ctrl+Shift+T; state.lua and init.lua branch on all three. Every mode
+-- Home / Ctrl+Shift+U; state.lua and init.lua branch on all three. Every mode
 -- makes the same swing onto the aim point when the sights come up; they differ
 -- in what happens for the rest of the aim.
 --   "paused"  - stand tracking down and hand the view back to the game.
@@ -22,10 +22,11 @@ local YAW_MODE_VALUES = { world = true, ["local"] = true }
 --   "tracked" - keep tracking, no marker.
 local ADS_MODE_VALUES = { paused = true, marker = true, tracked = true }
 
--- ads_mode = "reticle" was the pre-rename name for "paused". A config written
--- by that build is migrated rather than rejected: the value is not invalid,
--- it is the old spelling of the default.
-local RETIRED_ADS_MODES = { reticle = "paused" }
+-- Which tracking mode the master switch restores. Recorded when tracking is
+-- switched off and read back when it is switched on, so End -> quit -> relaunch
+-- -> End returns to the mode the player was in rather than forcing 6DOF.
+-- Persisted state rather than a knob: nothing in the settings panel shows it.
+local SAVED_TRACKING_MODE_VALUES = { both = true, rot = true, pos = true }
 
 -- Validation rules for each setting
 local VALIDATION_RULES = {
@@ -77,6 +78,8 @@ local VALIDATION_RULES = {
     yaw_mode = { type = "string" },
     -- What aiming down sights does to the view. See ADS_MODE_VALUES.
     ads_mode = { type = "string" },
+    -- Tracking mode the master switch restores. See SAVED_TRACKING_MODE_VALUES.
+    saved_tracking_mode = { type = "string" },
     -- Diagnostic: write CLEAN (mouse-only) orientation to cam.localOrientation
     -- instead of head-rotated. Used to probe which engine systems read
     -- cam+0xD0 for their "where is the camera pointing" answer. See
@@ -196,6 +199,12 @@ local function validateValue(key, value)
         end
     end
 
+    if rule.type == "string" and key == "saved_tracking_mode" then
+        if not SAVED_TRACKING_MODE_VALUES[value] then
+            return false, nil
+        end
+    end
+
     return true, value
 end
 
@@ -248,8 +257,11 @@ function Settings.new()
         yaw_mode = "world",
         -- Aiming down sights hands the view back to the game by default, so
         -- the sights land on the point the reticle was marking. Home /
-        -- Ctrl+Shift+T cycles to "marker" then "tracked".
+        -- Ctrl+Shift+U cycles to "marker" then "tracked".
         ads_mode = "paused",
+        -- Mode the master switch restores; rewritten every time tracking is
+        -- switched off. Not shown in the settings panel.
+        saved_tracking_mode = "both",
         -- Clean-camera diagnostic path. Lua keeps cam.localOrientation
         -- mouse-only while native experiments try to inject head rotation.
         decouple_diag_clean_cam = false,
@@ -316,13 +328,6 @@ function Settings:load()
                 -- these are not nil'd out: the merge below only walks
                 -- self.defaults, so they are already ignored. What was missing
                 -- was any word to the user that their tuned value is gone.
-                local renamed = loaded.ads_mode and RETIRED_ADS_MODES[loaded.ads_mode]
-                if renamed then
-                    print("[HeadTracking] Migrating ads_mode '" .. tostring(loaded.ads_mode) ..
-                          "' to '" .. renamed .. "' (renamed, same behaviour)")
-                    loaded.ads_mode = renamed
-                end
-
                 warnRetiredSmoothingKeys(loaded, self.defaults)
 
                 -- Merge and validate loaded values with defaults
@@ -493,24 +498,52 @@ end
 ---
 --- Rotation and position live in two settings because the mode hotkey cycles
 --- between them, so switching tracking off remembers which mode was in force
---- and switching it back on restores that mode rather than forcing 6DOF.
+--- and switching it back on restores that mode rather than forcing 6DOF. The
+--- memory is persisted (saved_tracking_mode), so it also survives a restart.
 --- @param on boolean
 function Settings:setTrackingEnabled(on)
     if on then
-        local mode = self._saved_tracking_mode or { rot = true, pos = true }
-        self:set("enabled", mode.rot)
-        self:set("position_enabled", mode.pos)
-        self._saved_tracking_mode = nil
+        local mode = self:get("saved_tracking_mode")
+        self:set("enabled", mode ~= "pos")
+        self:set("position_enabled", mode ~= "rot")
     else
+        -- Only record a mode that was actually live. Switching off something
+        -- already off would otherwise persist "both" over the real memory.
         if self:isTrackingEnabled() then
-            self._saved_tracking_mode = {
-                rot = self:get("enabled") and true or false,
-                pos = self:get("position_enabled") and true or false,
-            }
+            local rot = self:get("enabled") and true or false
+            local pos = self:get("position_enabled") and true or false
+            self:set("saved_tracking_mode", (rot and pos) and "both" or (rot and "rot" or "pos"))
         end
         self:set("enabled", false)
         self:set("position_enabled", false)
     end
+end
+
+--- Bring a freshly loaded config up into the state a session starts in.
+---
+--- Called once from init.lua, straight after :load(). Everything it does NOT
+--- touch is therefore persisted as-is - most of the config, including yaw_mode
+--- and ads_mode, both of which are settings the player sets from the panel or a
+--- hotkey and would be silently discarded if this reset them.
+---
+--- What it does touch, and why:
+---   * Tracking comes up ON, so a session that ended with End pressed does not
+---     start the next one doing nothing. Which MODE it comes up in is the
+---     player's: setTrackingEnabled reads the persisted saved_tracking_mode, so
+---     quitting in rotation-only comes back in rotation-only. A config that is
+---     already tracking is left alone, because the pair it holds IS the live
+---     mode from last session.
+---   * The reticle driver comes up on for the same reason.
+---   * decouple_diag_clean_cam is a reverse-engineering diagnostic that hands
+---     the view to an experimental native path. It is off every launch so a
+---     config left mid-investigation cannot ship a broken camera into normal
+---     play.
+function Settings:applyLaunchState()
+    if not self:isTrackingEnabled() then
+        self:setTrackingEnabled(true)
+    end
+    self:set("crosshair_enabled", true)
+    self:set("decouple_diag_clean_cam", false)
 end
 
 --- Get all current setting values as a table copy

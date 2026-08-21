@@ -156,11 +156,11 @@ $installRaw = [regex]::Replace($installRaw, 'set "MOD_VERSION=[^"]+"', "set `"MO
 [System.IO.File]::WriteAllText($installCmd, $installRaw)
 Write-Host "  [OK] scripts/install.cmd MOD_VERSION = $Version" -ForegroundColor Green
 
-# ---- Step 5: Build (release config) ---------------------------------------
-Write-Info 'Step 5/8: pixi run build...'
-& pixi run build
-if ($LASTEXITCODE -ne 0) { Write-Fail "pixi run build failed (exit $LASTEXITCODE)" }
-Write-Host '  [OK] Build succeeded' -ForegroundColor Green
+# ---- Step 5: Build, package and validate ----------------------------------
+Write-Info 'Step 5/8: pixi run package...'
+& pixi run package
+if ($LASTEXITCODE -ne 0) { Write-Fail "pixi run package failed (exit $LASTEXITCODE)" }
+Write-Host '  [OK] Package built and validated' -ForegroundColor Green
 
 # ---- Step 6: Commit -------------------------------------------------------
 Write-Info 'Step 6/8: Committing version bump + changelog...'

@@ -68,6 +68,7 @@ local State = safeRequire("modules/state")
 local UI = safeRequire("modules/ui")
 local BuiltinCrosshair = safeRequire("modules/builtin_crosshair")
 local AdsReticle = safeRequire("modules/ads_reticle")
+local AdsPose = safeRequire("modules/ads_pose")
 local Aim = safeRequire("modules/aim")
 local NativeSettingsIntegration = safeRequire("modules/nativesettings")
 local Perf = safeRequire("modules/perf")
@@ -259,17 +260,10 @@ local hotkey_last_fire = {}
 -- every cause uniformly, while last_head_quat is still validly baked.
 local was_tracking_allowed = true
 
--- Latest live pose, updated on every tracked frame. ads_mode = "tracked"
--- snapshots it on the frame the sights come up. Position survives frames with
--- no fresh packet, which is why it lives here rather than being read back off
--- the camera.
-local last_pose = { yaw = 0, pitch = 0, roll = 0, x = 0, y = 0, z = 0 }
-
--- The pose the sights came up on, non-nil for exactly as long as they are up
--- in an ads_mode that keeps tracking live. Subtracted from the live pose for
--- the duration, so raising the sights snaps the view onto the aim point and
--- head movement from there still tracks.
-local ads_entry_pose = nil
+-- Maps the absolute tracker pose to one relative to the pose the sights came up
+-- on, for the ads_modes that keep tracking live through the aim. See
+-- modules/ads_pose.lua.
+local ads_pose = nil
 
 -- Whether onDraw should paint the aim marker this frame. onUpdate owns the
 -- decision and onDraw only reads it, so it is cleared at the top of every
@@ -334,18 +328,10 @@ registerForEvent("onInit", function()
         local loaded = settings:load()
         print(loaded and "[HeadTracking] Settings loaded from config.json"
                       or "[HeadTracking] Created default config.json")
-        -- Always start with tracking and the reticle driver on, and with yaw
-        -- horizon-locked. Each can be toggled during play via hotkey, but every
-        -- fresh launch starts in the useful state instead of whatever the last
-        -- session happened to leave behind. yaw_mode matters most here: local
-        -- yaw is only the A/B counterpart, and because it used to persist
-        -- across launches a single stray PageDown left the camera un-horizon-
-        -- locked permanently, with no way to tell that from it being broken.
-        settings:set("enabled", true)
-        settings:set("crosshair_enabled", true)
-        settings:set("position_enabled", true)
-        settings:set("yaw_mode", "world")
-        settings:set("decouple_diag_clean_cam", false)
+        -- The few things a session starts in regardless of how the last one
+        -- ended. Everything else, yaw_mode and ads_mode included, is persisted.
+        -- See Settings:applyLaunchState.
+        settings:applyLaunchState()
     end)
 
     -- Seed any of our hotkey actions that aren't bound in CET's bindings.json.
@@ -411,6 +397,13 @@ registerForEvent("onInit", function()
         print("[HeadTracking] Pose interpolator initialized")
     end)
 
+    runInitStep("ads_pose", function()
+        if not AdsPose then
+            error("AdsPose module failed to load")
+        end
+        ads_pose = AdsPose.new()
+    end)
+
     runInitStep("nativeUI", function()
         nativeUI = NativeSettingsIntegration.new(settings)
         nativeUI:setCamera(camera)
@@ -454,7 +447,9 @@ registerForEvent("onInit", function()
         return
     end
 
-    if settings:get("enabled") then
+    -- Reads the master, not `enabled` alone: a player in position-only mode is
+    -- tracking and should get the same toast.
+    if settings:isTrackingEnabled() then
         ui:showSuccess("Head Tracking: Ready", 3.0)
     end
 
@@ -482,7 +477,7 @@ local function onUpdateImpl(deltaTime)
         end
     end
 
-    if not state or not udp or not camera or not aim or not pose_interp then
+    if not state or not udp or not camera or not aim or not pose_interp or not ads_pose then
         if (init_debug_frame % INIT_DEBUG_INTERVAL) == 1 then
             dlog("[HeadTracking:INIT] ===== init not complete; full diagnostic =====")
             for i = 1, #require_errors do
@@ -547,9 +542,7 @@ local function onUpdateImpl(deltaTime)
     -- tracking down - and head movement after it still moves the view.
     -- "paused" never reaches here: it blocks in state.lua.
     local ads_tracked = tracking_allowed and state:isAdsActive()
-    if not ads_tracked then
-        ads_entry_pose = nil
-    elseif settings:get("ads_mode") == "marker" then
+    if ads_tracked and settings:get("ads_mode") == "marker" then
         ads_marker_active = ads_reticle ~= nil
     end
 
@@ -577,7 +570,8 @@ local function onUpdateImpl(deltaTime)
         aim:publishSuppressedState()
         udp:poll()
         if crosshair then crosshair:tick(false) end
-        if pose_interp then pose_interp:reset() end
+        pose_interp:reset()
+        ads_pose:reset()
         return
     end
 
@@ -608,38 +602,12 @@ local function onUpdateImpl(deltaTime)
     local interp_yaw, interp_pitch, interp_roll =
         pose_interp:update(raw_yaw, raw_pitch, raw_roll, raw_seq, deltaTime)
 
-    if interp_yaw ~= nil then
-        last_pose.yaw, last_pose.pitch, last_pose.roll = interp_yaw, interp_pitch, interp_roll
-    end
-    if data then
-        last_pose.x, last_pose.y, last_pose.z = data.x or 0, data.y or 0, data.z or 0
-    end
+    local raw_x, raw_y, raw_z
+    if data then raw_x, raw_y, raw_z = data.x or 0, data.y or 0, data.z or 0 end
 
-    if ads_tracked and not ads_entry_pose then
-        ads_entry_pose = {
-            yaw = last_pose.yaw, pitch = last_pose.pitch, roll = last_pose.roll,
-            x = last_pose.x, y = last_pose.y, z = last_pose.z,
-        }
-    end
-
-    local pose_yaw, pose_pitch, pose_roll = interp_yaw, interp_pitch, interp_roll
-    local pose_x, pose_y, pose_z
-    if data then pose_x, pose_y, pose_z = data.x or 0, data.y or 0, data.z or 0 end
-
-    local entry = ads_entry_pose
-    if entry then
-        -- Relative to the entry pose, so raising the sights lands on identity
-        -- (the view snaps onto the aim point) and head movement from there
-        -- still tracks. Lowering them returns to the absolute pose, which
-        -- swings the view back by the same angle the snap took out - the same
-        -- pair of swings the default mode already makes.
-        pose_yaw   = pose_yaw   and (pose_yaw   - entry.yaw)
-        pose_pitch = pose_pitch and (pose_pitch - entry.pitch)
-        pose_roll  = pose_roll  and (pose_roll  - entry.roll)
-        if pose_x then
-            pose_x, pose_y, pose_z = pose_x - entry.x, pose_y - entry.y, pose_z - entry.z
-        end
-    end
+    local pose_yaw, pose_pitch, pose_roll, pose_x, pose_y, pose_z =
+        ads_pose:update(ads_tracked, interp_yaw, interp_pitch, interp_roll,
+                        raw_x, raw_y, raw_z)
 
     if pose_yaw ~= nil then
         local clean_cam_decouple = settings:get("decouple_diag_clean_cam") == true
@@ -758,10 +726,11 @@ local function diagCleanCam(force)
 end
 
 -- Standard CameraUnlock hotkey contract.
--- Defaults per rule: End / PageUp / PageDown (nav cluster) with
--- Ctrl+Shift+{Y,G,H} chord alternatives drawn from the T/Y/U/G/H/J cluster.
--- Keys are user-rebindable from CET's Bindings menu; see bindings.json for
--- shipped defaults.
+-- Defaults per rule: End / PageUp / PageDown / Home (nav cluster) with
+-- Ctrl+Shift+{Y,G,H,U} chord alternatives drawn from the T/Y/U/G/H/J cluster.
+-- Both sets are polled natively in ScriptChannel.cpp and are NOT rebindable:
+-- CET's registerHotkey dispatch crashes before entering Lua on this game
+-- build, so none of these can go through the Bindings menu.
 
 -- End  /  Ctrl+Shift+Y - Toggle head tracking
 --
@@ -857,9 +826,10 @@ end
 -- dispatch crashes before entering Lua on this game build, so do not bind
 -- PageDown here.
 
--- Home  /  Ctrl+Shift+T - Cycle what aiming down sights does to the view.
--- Both keys were the recenter binding until the mod stopped keeping a centre
--- of its own, so they are free and already in the user's fingers.
+-- Home  /  Ctrl+Shift+U - Cycle what aiming down sights does to the view.
+-- U is the next free letter in the T/Y/U/G/H/J cluster after Y, G and H.
+-- Ctrl+Shift+T is deliberately skipped: it was the recenter chord before mods
+-- stopped keeping a centre, so it would still fire on muscle memory.
 local ADS_MODE_CYCLE = { "paused", "marker", "tracked" }
 local ADS_MODE_LABELS = {
     paused  = "ADS: tracking paused",
@@ -889,7 +859,7 @@ function handleCycleAdsMode()
     ui:showSuccess(ADS_MODE_LABELS[next_mode], 2.5)
     print("[HeadTracking] ads_mode -> " .. next_mode)
 end
--- Home / Ctrl+Shift+T are polled natively in ScriptChannel.cpp, same as the
+-- Home / Ctrl+Shift+U are polled natively in ScriptChannel.cpp, same as the
 -- other three.
 
 -- Public API for the CET console. Reachable as

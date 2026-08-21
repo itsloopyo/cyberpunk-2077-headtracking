@@ -82,6 +82,8 @@ $requiredModFiles = @(
     "modules\ui.lua",
     "modules\GameUI.lua",
     "modules\builtin_crosshair.lua",
+    "modules\ads_pose.lua",
+    "modules\ads_reticle.lua",
     "modules\aim.lua",
     "modules\nativesettings.lua",
     "modules\perf.lua",
@@ -318,6 +320,13 @@ New-ZipFromDirectory -SourceDir $installerStaging -ZipPath $installerZip
 
 Write-Info "Creating Nexus ZIP..."
 New-ZipFromDirectory -SourceDir $nexusStaging -ZipPath $nexusZip
+
+Write-Info "Validating installer manifest..."
+$manifestValidator = Join-Path $projectRoot "cameraunlock-core\scripts\validate-manifest.mjs"
+& node $manifestValidator $installerZip
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "Installer manifest validation failed"
+}
 
 # --- Clean up staging ------------------------------------------------------
 Remove-Item -Path $installerStaging -Recurse -Force

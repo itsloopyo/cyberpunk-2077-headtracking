@@ -325,27 +325,120 @@ for _, mode in ipairs({ "paused", "marker", "tracked" }) do
     assert_true(a:set("ads_mode", mode), "ads_mode=" .. mode .. " accepted")
     assert_eq(a:get("ads_mode"), mode, "ads_mode=" .. mode .. " round-trips")
 end
-assert_false(a:set("ads_mode", "center"), "retired ads_mode=center rejected")
+assert_false(a:set("ads_mode", "center"), "unknown ads_mode rejected")
 assert_eq(a:get("ads_mode"), "tracked", "rejected ads_mode leaves the previous value")
 assert_false(a:set("ads_mode", 2), "ads_mode number rejected")
 
--- "reticle" was renamed to "paused". :set() rejects the old spelling like any
--- other unknown value, but a config.json still holding it must MIGRATE rather
--- than log an error, because the value was never wrong - only its name was.
-assert_false(a:set("ads_mode", "reticle"), "old ads_mode spelling rejected by set()")
-
-local mig_path = "ads_mode_migration_config.json"
-local mf = io.open(mig_path, "w")
-mf:write('{"ads_mode":"reticle","sensitivity_yaw":1.7}')
-mf:close()
-local mg = Settings.new()
-mg.path = mig_path
-mg:load()
+-- A config.json holding a value outside the enum falls back to the shipped
+-- default and says so, rather than reaching state.lua where an unmatched
+-- string would read as "not paused" and quietly keep the gate open on ADS.
+local bad_path = "ads_mode_invalid_config.json"
+local bf = io.open(bad_path, "w")
+bf:write('{"ads_mode":"center","sensitivity_yaw":1.7}')
+bf:close()
+local bg = Settings.new()
+bg.path = bad_path
+bg:load()
 -- Assert a second key first: "paused" is also what an unreadable file yields,
--- so without this the migration assertion below would pass vacuously.
-assert_eq(mg:get("sensitivity_yaw"), 1.7, "migration fixture was actually read")
-assert_eq(mg:get("ads_mode"), "paused", "config holding the old name migrates to paused")
-os.remove(mig_path)
+-- so without this the assertion below would pass vacuously.
+assert_eq(bg:get("sensitivity_yaw"), 1.7, "fixture was actually read")
+assert_eq(bg:get("ads_mode"), "paused", "out-of-enum ads_mode falls back to the default")
+os.remove(bad_path)
+os.remove(bad_path .. ".bak")
+
+-- (9) The mode the master switch restores is PERSISTED, so End -> quit ->
+-- relaunch -> End returns to the mode the player was in rather than forcing
+-- 6DOF back on.
+local persist_path = "tracking_mode_persist_config.json"
+local p1 = Settings.new()
+p1.path = persist_path
+p1:load()
+p1:set("enabled", false)
+p1:set("position_enabled", true)
+p1:setTrackingEnabled(false)
+assert_eq(p1:get("saved_tracking_mode"), "pos", "position-only recorded on the way off")
+
+local p2 = Settings.new()
+p2.path = persist_path
+p2:load()
+assert_false(p2:isTrackingEnabled(), "reloaded config is still tracking-off")
+p2:setTrackingEnabled(true)
+assert_eq(p2:get("enabled"), false, "restored across a reload, rotation stays off")
+assert_eq(p2:get("position_enabled"), true, "restored across a reload, position back on")
+
+-- Switching off something already off must not overwrite the memory.
+p2:setTrackingEnabled(false)
+p2:setTrackingEnabled(false)
+assert_eq(p2:get("saved_tracking_mode"), "pos", "a second off does not clobber the memory")
+
+p2:set("enabled", true)
+p2:set("position_enabled", true)
+p2:setTrackingEnabled(false)
+assert_eq(p2:get("saved_tracking_mode"), "both", "6DOF recorded on the way off")
+p2:setTrackingEnabled(true)
+assert_eq(p2:get("enabled"), true, "6DOF restored, rotation on")
+assert_eq(p2:get("position_enabled"), true, "6DOF restored, position on")
+
+assert_false(p2:set("saved_tracking_mode", "sideways"), "unknown saved_tracking_mode rejected")
+os.remove(persist_path)
+os.remove(persist_path .. ".bak")
+
+-- (10) The launch path, exercised through the SAME method init.lua calls. The
+-- persistence above only means anything if what runs at startup does not
+-- overwrite it before the player can press anything, which is exactly what
+-- forcing `enabled` / `position_enabled` / `yaw_mode` on every launch used to
+-- do.
+local launch_path = "launch_state_config.json"
+
+-- Quit in position-only with tracking switched off: the next launch brings
+-- tracking up in position-only, not 6DOF.
+local l1 = Settings.new()
+l1.path = launch_path
+l1:load()
+l1:set("enabled", false)
+l1:set("position_enabled", true)
+l1:set("yaw_mode", "local")
+l1:setTrackingEnabled(false)
+
+local l2 = Settings.new()
+l2.path = launch_path
+l2:load()
+l2:applyLaunchState()
+assert_true(l2:isTrackingEnabled(), "launch brings tracking up")
+assert_eq(l2:get("enabled"), false, "launch restores the saved mode, rotation stays off")
+assert_eq(l2:get("position_enabled"), true, "launch restores the saved mode, position on")
+assert_eq(l2:get("saved_tracking_mode"), "pos", "launch reads the memory without clobbering it")
+assert_eq(l2:get("yaw_mode"), "local", "launch leaves yaw_mode alone")
+assert_eq(l2:get("crosshair_enabled"), true, "launch turns the reticle driver on")
+assert_eq(l2:get("decouple_diag_clean_cam"), false, "launch clears the RE diagnostic")
+
+-- Quit mid-session in rotation-only WITHOUT pressing End: the live pair in
+-- config.json is the mode, and launch must not overwrite it from a stale
+-- saved_tracking_mode.
+local l3 = Settings.new()
+l3.path = launch_path
+l3:load()
+l3:set("enabled", true)
+l3:set("position_enabled", false)
+assert_eq(l3:get("saved_tracking_mode"), "pos", "stale memory from the earlier switch-off")
+
+local l4 = Settings.new()
+l4.path = launch_path
+l4:load()
+l4:applyLaunchState()
+assert_eq(l4:get("enabled"), true, "already-tracking launch keeps the live mode, rotation on")
+assert_eq(l4:get("position_enabled"), false, "already-tracking launch keeps the live mode, position off")
+
+-- And the round trip the README promises: End off, quit, relaunch, End on.
+l4:setTrackingEnabled(false)
+local l5 = Settings.new()
+l5.path = launch_path
+l5:load()
+l5:applyLaunchState()
+assert_eq(l5:get("enabled"), true, "End -> quit -> relaunch returns rotation-only, rotation on")
+assert_eq(l5:get("position_enabled"), false, "End -> quit -> relaunch returns rotation-only, position off")
+os.remove(launch_path)
+os.remove(launch_path .. ".bak")
 
 print("== All settings tests passed ==")
 

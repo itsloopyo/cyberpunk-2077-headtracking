@@ -35,7 +35,19 @@ bool s_cycleModeChordWasDown = false;
 bool s_yawModeChordWasDown = false;
 bool s_adsModeChordWasDown = false;
 
-// Polls the standard CameraUnlock chords (Ctrl+Shift+{Y,G,H,T}). Each chord is
+// True when the foreground window belongs to this process. The chords below
+// are read from GetAsyncKeyState, which is global to the session: without this
+// they fire while the player is alt-tabbed into a browser or a chat window,
+// and Home is a scroll key in every one of those.
+bool GameWindowHasFocus() {
+    const HWND fg = GetForegroundWindow();
+    if (!fg) return false;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return pid == GetCurrentProcessId();
+}
+
+// Polls the standard CameraUnlock chords (Ctrl+Shift+{Y,G,H,U}). Each chord is
 // paired with the canonical nav-cluster key as a parallel edge source; either
 // firing produces one edge. Neither set can go through CET: registerHotkey
 // dispatch crashes before entering Lua on this game build, and the sandbox
@@ -65,18 +77,23 @@ ChordEdges ConsumeChordEdges() {
     const bool yawDown =
         ((GetAsyncKeyState(VK_NEXT) & 0x8000) != 0) ||
         (modsDown && ((GetAsyncKeyState('H') & 0x8000) != 0));
-    // Home / Ctrl+Shift+T cycle the aim-down-sights behaviour. Both were the
-    // recenter binding until the mod stopped keeping a centre of its own, so
-    // they are free and already in the user's fingers.
+    // Home / Ctrl+Shift+U cycle the aim-down-sights behaviour. U is the next
+    // free letter in the T/Y/U/G/H/J cluster after Y, G and H. Ctrl+Shift+T is
+    // deliberately NOT used: it was the recenter chord before mods stopped
+    // keeping a centre, so it would still fire on muscle memory.
     const bool adsDown =
         ((GetAsyncKeyState(VK_HOME) & 0x8000) != 0) ||
-        (modsDown && ((GetAsyncKeyState('T') & 0x8000) != 0));
+        (modsDown && ((GetAsyncKeyState('U') & 0x8000) != 0));
+
+    // Latch the physical state even while unfocused, so a key held across the
+    // focus boundary is not read as a fresh press the moment the game returns.
+    const bool focused = GameWindowHasFocus();
 
     ChordEdges e{};
-    e.toggleTracking = toggleDown && !s_toggleTrackingChordWasDown;
-    e.cycleMode      = cycleDown  && !s_cycleModeChordWasDown;
-    e.yawMode        = yawDown    && !s_yawModeChordWasDown;
-    e.adsMode        = adsDown    && !s_adsModeChordWasDown;
+    e.toggleTracking = focused && toggleDown && !s_toggleTrackingChordWasDown;
+    e.cycleMode      = focused && cycleDown  && !s_cycleModeChordWasDown;
+    e.yawMode        = focused && yawDown    && !s_yawModeChordWasDown;
+    e.adsMode        = focused && adsDown    && !s_adsModeChordWasDown;
     s_toggleTrackingChordWasDown = toggleDown;
     s_cycleModeChordWasDown      = cycleDown;
     s_yawModeChordWasDown        = yawDown;
