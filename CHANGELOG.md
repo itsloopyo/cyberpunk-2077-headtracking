@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0] - 2026-08-21
+
+### Added
+
+- add a three-way aim-down-sights mode cycled with Home
+- rework the ADS modes around a shared aim-point snap and add an aim marker
+- expose ADS mode, yaw mode and the 6DOF position settings in the settings panel
+
+### Fixed
+
+- harden ADS tracking modes and release validation
+
 ## [1.0.1] - 2026-08-20
 
 ### Added
