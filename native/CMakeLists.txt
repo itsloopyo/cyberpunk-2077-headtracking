@@ -33,6 +33,7 @@ add_library(HeadTrackingAim SHARED
     src/NativeRunningHook.cpp
     src/CamPropagatorHook.cpp
     src/AimProviderHook.cpp
+    src/PositionProviderHook.cpp
     src/AimGetterHook.cpp
     src/UdpReceiver.cpp
     src/ScriptChannel.cpp

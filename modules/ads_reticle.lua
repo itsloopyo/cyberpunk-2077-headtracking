@@ -10,11 +10,10 @@
 -- the player no on-screen mark for where they are actually aiming. This is that
 -- mark.
 --
--- The projection is NOT recomputed here. builtin_crosshair owns the one
--- projection in this mod - it is 6DOF-aware, roll-aware, and reads the live
--- ADS zoom - and a second copy of that math would agree at small single-axis
--- angles and drift apart on combined poses, which is the failure AGENTS.md
--- calls out. This module asks for that offset and draws at it.
+-- The projection is not recomputed here. builtin_crosshair projects the
+-- compensated default crosshair axis through Cyberpunk's active camera,
+-- then adds the weapon-sway displacement published by the game's HUD. This
+-- module asks for that result and draws at it.
 
 local AdsReticle = {}
 AdsReticle.__index = AdsReticle

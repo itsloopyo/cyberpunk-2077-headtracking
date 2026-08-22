@@ -403,32 +403,6 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("crosshair_enabled", state)
         end
     )
-    -- Crosshair fallback FOV (used only when live FOV from FPPCameraComponent is unavailable)
-    self.widgetRefs["crosshair_fov_degrees"] = ns.addRangeFloat(
-        "/HeadTracking/Crosshair",
-        "Fallback FOV (degrees)",
-        "Horizontal FOV used for reticle projection when the live game FOV cannot be read. Match your in-game FOV setting.",
-        30.0, 140.0, 1.0,
-        "%.0f",
-        self.settings:get("crosshair_fov_degrees"),
-        self.settings:getDefaults().crosshair_fov_degrees,
-        function(value)
-            self.settings:set("crosshair_fov_degrees", value)
-        end
-    )
-    -- Reticle forward-extrapolation - compensates dynamic drift during motion
-    self.widgetRefs["crosshair_lead_factor"] = ns.addRangeFloat(
-        "/HeadTracking/Crosshair",
-        "Reticle Lead (frames)",
-        "Forward-extrapolates the reticle by N frames of per-frame head delta. 0 = use latest head rotation (correct at rest). Bump up if reticle drifts in head-motion direction during motion and settles correct at rest. At rest the lead collapses to zero, so the rest position never shifts.",
-        0.0, 2.0, 0.05,
-        "%.2f",
-        self.settings:get("crosshair_lead_factor"),
-        self.settings:getDefaults().crosshair_lead_factor,
-        function(value)
-            self.settings:set("crosshair_lead_factor", value)
-        end
-    )
     -- Network section removed: UDP 4242 is owned by the native RED4ext plugin,
     -- nothing here is user-configurable. Point OpenTrack at 127.0.0.1:4242.
 

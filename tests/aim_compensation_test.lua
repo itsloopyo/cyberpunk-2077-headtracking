@@ -1,164 +1,162 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026 itsloopyo
--- Equivalence test for aim.lua's compensateForward() extraction.
---
--- modules/aim.lua registers CET Overrides for GetCrosshairData,
--- GetBestComponentOnTargetObject, and GetDefaultCrosshairData. Each one used
--- to spell out the same decision inline:
---
---     if not aim_state.enabled or not fwd then return <original> end
---     local yaw, pitch = aim_state.smooth_yaw, aim_state.smooth_pitch
---     if math_abs(yaw) < 0.1 and math_abs(pitch) < 0.1 then return <original> end
---     return rotateVectorByAngles(fwd, -yaw, -pitch)
---
--- That is now a single compensateForward(fwd). This is the aim-decoupling
--- hot path - it decides where every bullet goes - so the extraction is pinned
--- here against a verbatim copy of the original inline form.
---
--- The two implementations below mirror modules/aim.lua. If that file's
--- compensateForward changes, update `extracted` and re-run.
+
+local function assert_near(actual, expected, label, tolerance)
+    tolerance = tolerance or 1e-6
+    if math.abs(actual - expected) > tolerance then
+        error(string.format("FAIL %s: expected %.12f, got %.12f",
+            label, expected, actual), 2)
+    end
+end
 
 local function assert_eq(actual, expected, label)
     if actual ~= expected then
-        error(string.format("FAIL %s:\n  expected: %s\n  actual:   %s",
+        error(string.format("FAIL %s: expected %s, got %s",
             label, tostring(expected), tostring(actual)), 2)
     end
 end
 
-local math_abs, math_rad, math_cos, math_sin =
-      math.abs, math.rad, math.cos, math.sin
-
--- Stand-in for CET's Vector4 userdata.
-_G.Vector4 = {
-    new = function(x, y, z, w) return { x = x, y = y, z = z, w = w } end,
+Vector4 = {
+    new = function(x, y, z, w)
+        return { x = x, y = y, z = z, w = w }
+    end,
 }
 
-local aim_state = { enabled = true, smooth_yaw = 0, smooth_pitch = 0 }
+local AimGeometry = require("modules/aim_geometry")
+local right = { x = 1, y = 0, z = 0 }
+local forward = { x = 0, y = 1, z = 0 }
+local up = { x = 0, y = 0, z = 1 }
+local identity = { i = 0, j = 0, k = 0, r = 1 }
 
--- Copied verbatim from modules/aim.lua.
-local function rotateVectorByAngles(vec, yaw_deg, pitch_deg)
-    local yaw = math_rad(yaw_deg)
-    local pitch = math_rad(pitch_deg)
+print("== aim compensation geometry ==")
 
-    local cy = math_cos(yaw)
-    local sy = math_sin(yaw)
-    local cp = math_cos(pitch)
-    local sp = math_sin(pitch)
+local centred = AimGeometry.compensateDirection(
+    right, forward, up, forward, identity, 0, 0, 0, 0, false, 7)
+assert_near(centred.x, 0, "centred x")
+assert_near(centred.y, 1, "centred y")
+assert_near(centred.z, 0, "centred z")
+assert_eq(centred.w, 7, "centred w")
 
-    local x = vec.x
-    local y = vec.y
-    local z = vec.z
+local translated = AimGeometry.compensateDirection(
+    right, forward, up, forward, identity, 0.2, 0.5, 0.4, 10, true, 3)
+local translated_len = math.sqrt(0.2 * 0.2 + 10.5 * 10.5 + 0.4 * 0.4)
+assert_near(translated.x, -0.2 / translated_len, "translated x")
+assert_near(translated.y, 10.5 / translated_len, "translated y")
+assert_near(translated.z, -0.4 / translated_len, "translated z")
+assert_eq(translated.w, 3, "translated w")
 
-    local x1 = x * cy - y * sy
-    local y1 = x * sy + y * cy
-    local z1 = z
+local half = math.sqrt(0.5)
+local head_yaw_90 = { i = 0, j = 0, k = half, r = half }
+local rendered_right = { x = 0, y = 1, z = 0 }
+local rendered_forward = { x = -1, y = 0, z = 0 }
+local yaw_peeled = AimGeometry.compensateDirection(
+    rendered_right, rendered_forward, up, rendered_forward, head_yaw_90,
+    0, 0, 0, 0, false, 0)
+assert_near(yaw_peeled.x, 0, "90-degree yaw peel x")
+assert_near(yaw_peeled.y, 1, "90-degree yaw peel y")
+assert_near(yaw_peeled.z, 0, "90-degree yaw peel z")
 
-    local x2 = x1
-    local y2 = y1 * cp - z1 * sp
-    local z2 = y1 * sp + z1 * cp
+local head_roll_90 = { i = 0, j = half, k = 0, r = half }
+local rolled_right = { x = 0, y = 0, z = -1 }
+local rolled_up = { x = 1, y = 0, z = 0 }
+local roll_peeled = AimGeometry.compensateDirection(
+    rolled_right, forward, rolled_up, forward, head_roll_90,
+    0, 0, 0, 0, false, 0)
+assert_near(roll_peeled.x, 0, "90-degree roll peel x")
+assert_near(roll_peeled.y, 1, "90-degree roll peel y")
+assert_near(roll_peeled.z, 0, "90-degree roll peel z")
 
-    return Vector4.new(x2, y2, z2, vec.w)
+local function quat_mul(a, b)
+    return {
+        i = a.r * b.i + a.i * b.r + a.j * b.k - a.k * b.j,
+        j = a.r * b.j - a.i * b.k + a.j * b.r + a.k * b.i,
+        k = a.r * b.k + a.i * b.j - a.j * b.i + a.k * b.r,
+        r = a.r * b.r - a.i * b.i - a.j * b.j - a.k * b.k,
+    }
 end
 
--- ---------------------------------------------------------------------------
--- ORIGINAL: the inline form, as it appeared in each of the five Overrides.
--- ---------------------------------------------------------------------------
-local function original(fwd)
-    if not aim_state.enabled or not fwd then
-        return fwd
-    end
-    local yaw = aim_state.smooth_yaw
-    local pitch = aim_state.smooth_pitch
-    if math_abs(yaw) < 0.1 and math_abs(pitch) < 0.1 then
-        return fwd
-    end
-    return rotateVectorByAngles(fwd, -yaw, -pitch)
+local function axis_quat(x, y, z, degrees)
+    local half_angle = math.rad(degrees) * 0.5
+    local s = math.sin(half_angle)
+    return { i = x * s, j = y * s, k = z * s, r = math.cos(half_angle) }
 end
 
--- ---------------------------------------------------------------------------
--- EXTRACTED: copied from modules/aim.lua.
--- ---------------------------------------------------------------------------
-local AIM_COMPENSATION_MIN_DEGREES = 0.1
-
-local function extracted(fwd)
-    if not aim_state.enabled or not fwd then
-        return fwd
-    end
-
-    local yaw = aim_state.smooth_yaw
-    local pitch = aim_state.smooth_pitch
-    if math_abs(yaw) < AIM_COMPENSATION_MIN_DEGREES
-       and math_abs(pitch) < AIM_COMPENSATION_MIN_DEGREES then
-        return fwd
-    end
-
-    return rotateVectorByAngles(fwd, -yaw, -pitch)
+local function rotate(q, x, y, z)
+    local cx = q.j * z - q.k * y
+    local cy = q.k * x - q.i * z
+    local cz = q.i * y - q.j * x
+    return {
+        x = x + 2 * (q.r * cx + q.j * cz - q.k * cy),
+        y = y + 2 * (q.r * cy + q.k * cx - q.i * cz),
+        z = z + 2 * (q.r * cz + q.i * cy - q.j * cx),
+    }
 end
 
-print("== aim compensation equivalence ==")
+local clean_quat = quat_mul(axis_quat(0, 0, 1, 37), axis_quat(1, 0, 0, -23))
+local head_quat = quat_mul(
+    axis_quat(0, 0, 1, -31),
+    quat_mul(axis_quat(1, 0, 0, 19), axis_quat(0, 1, 0, 12)))
+local rendered_quat = quat_mul(clean_quat, head_quat)
+local combined_right = rotate(rendered_quat, 1, 0, 0)
+local combined_forward = rotate(rendered_quat, 0, 1, 0)
+local combined_up = rotate(rendered_quat, 0, 0, 1)
 
--- Deadzone boundary values matter most: 0.1 is the threshold, and the guard
--- is an AND, so one axis alone crossing it must still compensate.
-local ANGLES = {
-    0, 0.05, 0.0999, 0.1, 0.1001, 1, -1, 15, -15, 44.9, 90, -90, 179.9, 360,
+local px, py, pz, distance = 0.27, -0.18, 0.11, 7.5
+local tx, ty, tz = -px, distance + py, -pz
+local target_len = math.sqrt(tx * tx + ty * ty + tz * tz)
+local target_x, target_y, target_z = tx / target_len, ty / target_len, tz / target_len
+local parallax_quat = {
+    i = target_z,
+    j = 0,
+    k = -target_x,
+    r = 1 + target_y,
 }
-local VECTORS = {
-    { x = 0, y = 1, z = 0, w = 0 },
-    { x = 1, y = 0, z = 0, w = 1 },
-    { x = 0, y = 0, z = 1, w = 0 },
-    { x = 0.3, y = -0.6, z = 0.74, w = 1 },
-    { x = 0, y = 0, z = 0, w = 0 },
-}
+local parallax_len = math.sqrt(
+    parallax_quat.i * parallax_quat.i + parallax_quat.k * parallax_quat.k
+        + parallax_quat.r * parallax_quat.r)
+parallax_quat.i = parallax_quat.i / parallax_len
+parallax_quat.k = parallax_quat.k / parallax_len
+parallax_quat.r = parallax_quat.r / parallax_len
 
-local checks = 0
-for _, enabled in ipairs({ true, false }) do
-    for _, yaw in ipairs(ANGLES) do
-        for _, pitch in ipairs(ANGLES) do
-            for _, vec in ipairs(VECTORS) do
-                aim_state.enabled = enabled
-                aim_state.smooth_yaw = yaw
-                aim_state.smooth_pitch = pitch
+local native_output_quat = quat_mul(clean_quat, parallax_quat)
+local native_direction = rotate(native_output_quat, 0, 1, 0)
+local lua_direction = AimGeometry.compensateDirection(
+    combined_right, combined_forward, combined_up, combined_forward, head_quat,
+    px, py, pz, distance, true, 0)
+assert_near(lua_direction.x, native_direction.x, "combined pose matches native x")
+assert_near(lua_direction.y, native_direction.y, "combined pose matches native y")
+assert_near(lua_direction.z, native_direction.z, "combined pose matches native z")
 
-                local label = string.format(
-                    "enabled=%s yaw=%s pitch=%s vec=(%s,%s,%s,%s)",
-                    tostring(enabled), tostring(yaw), tostring(pitch),
-                    tostring(vec.x), tostring(vec.y), tostring(vec.z), tostring(vec.w))
-
-                local a = original(vec)
-                local b = extracted(vec)
-
-                -- The untouched path must return the SAME OBJECT, not a copy:
-                -- callers hand this straight back to the engine.
-                if a == vec then
-                    assert_eq(b, vec, label .. " -> returns input unchanged (identity)")
-                else
-                    assert_eq(type(b), "table", label .. " -> compensated is a table")
-                    assert_eq(b.x, a.x, label .. " -> x")
-                    assert_eq(b.y, a.y, label .. " -> y")
-                    assert_eq(b.z, a.z, label .. " -> z")
-                    assert_eq(b.w, a.w, label .. " -> w (must be preserved)")
-                end
-                checks = checks + 1
-            end
-        end
-    end
-end
-
--- nil forward: both must hand nil straight back rather than throwing.
-for _, enabled in ipairs({ true, false }) do
-    aim_state.enabled = enabled
-    aim_state.smooth_yaw, aim_state.smooth_pitch = 30, 30
-    assert_eq(extracted(nil), original(nil), "nil forward (enabled=" .. tostring(enabled) .. ")")
-    assert_eq(extracted(nil), nil, "nil forward returns nil")
-    checks = checks + 1
-end
-
-print(string.format("== Aim compensation equivalence OK: %d cases ==", checks))
+local sway_local = { x = 0.04, y = 0.99795, z = -0.05 }
+local sway_length = math.sqrt(
+    sway_local.x * sway_local.x + sway_local.y * sway_local.y + sway_local.z * sway_local.z)
+sway_local.x = sway_local.x / sway_length
+sway_local.y = sway_local.y / sway_length
+sway_local.z = sway_local.z / sway_length
+local swayed_forward = rotate(
+    rendered_quat, sway_local.x, sway_local.y, sway_local.z)
+local swayed_tx = sway_local.x * distance - px
+local swayed_ty = sway_local.y * distance + py
+local swayed_tz = sway_local.z * distance - pz
+local expected_sway_direction = rotate(clean_quat, swayed_tx, swayed_ty, swayed_tz)
+local expected_sway_length = math.sqrt(
+    expected_sway_direction.x * expected_sway_direction.x
+        + expected_sway_direction.y * expected_sway_direction.y
+        + expected_sway_direction.z * expected_sway_direction.z)
+local swayed_direction = AimGeometry.compensateDirection(
+    combined_right, combined_forward, combined_up, swayed_forward, head_quat,
+    px, py, pz, distance, true, 0)
+assert_near(swayed_direction.x,
+    expected_sway_direction.x / expected_sway_length, "sway preserved x")
+assert_near(swayed_direction.y,
+    expected_sway_direction.y / expected_sway_length, "sway preserved y")
+assert_near(swayed_direction.z,
+    expected_sway_direction.z / expected_sway_length, "sway preserved z")
 
 local aim_source = assert(io.open("modules/aim.lua", "rb")):read("*a")
 for _, method in ipairs({ "GetCrosshairData", "GetDefaultCrosshairData" }) do
     local callback = aim_source:match(
-        'Override%(%"TargetingSystem%", %"' .. method .. '%",%s*(function%b())')
+        'Override%(%' .. '"TargetingSystem"' .. '%, %"' .. method .. '%",%s*(function%b())')
     if not callback then
         error("FAIL could not find " .. method .. " override callback")
     end
@@ -169,4 +167,4 @@ for _, method in ipairs({ "GetCrosshairData", "GetDefaultCrosshairData" }) do
     end
 end
 
-print("== Aim override OUT parameter signatures OK ==")
+print("== Aim compensation geometry OK ==")

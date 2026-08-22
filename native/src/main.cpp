@@ -9,6 +9,7 @@
 #include "NativeRunningHook.hpp"
 #include "CamPropagatorHook.hpp"
 #include "AimProviderHook.hpp"
+#include "PositionProviderHook.hpp"
 #include "AimGetterHook.hpp"
 #include "builds/build_registry.hpp"
 
@@ -88,6 +89,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         NativeRunningHook_Stop(aSdk, aHandle);
 
         AimGetterHook_Stop(aSdk, aHandle);
+        PositionProviderHook_Stop();
         AimProviderHook_Stop();
         UdpReceiver_Stop();
 

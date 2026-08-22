@@ -42,7 +42,6 @@ local EXPECTED = {
     DiagNameplateAnchor   = CROSSHAIR_MISSING,
     DiagNameplateHide     = CROSSHAIR_MISSING,
     DiagNameplateProbe    = CROSSHAIR_MISSING,
-    DiagReticleFov        = CROSSHAIR_MISSING,
     DiagShoveHitMarker    = CROSSHAIR_MISSING,
     DiagShoveNameplate    = CROSSHAIR_MISSING,
     DiagShoveOnly         = CROSSHAIR_MISSING,

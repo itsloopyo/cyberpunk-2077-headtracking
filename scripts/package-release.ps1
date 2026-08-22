@@ -85,6 +85,7 @@ $requiredModFiles = @(
     "modules\ads_pose.lua",
     "modules\ads_reticle.lua",
     "modules\aim.lua",
+    "modules\aim_geometry.lua",
     "modules\nativesettings.lua",
     "modules\perf.lua",
     "modules\debuglog.lua",

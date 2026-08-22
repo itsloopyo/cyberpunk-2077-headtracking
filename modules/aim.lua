@@ -17,6 +17,8 @@ local cdef_done = false
 local Aim = {}
 Aim.__index = Aim
 
+local AimGeometry = require("modules/aim_geometry")
+
 -- Diagnostic logger. Mirrors to CET console AND to a file next to the
 -- mod so we can grep it without scrolling the console.
 local dlog
@@ -390,9 +392,6 @@ local aim_state = {
 }
 
 -- Pre-cache math functions
-local math_rad = math.rad
-local math_cos = math.cos
-local math_sin = math.sin
 local math_abs = math.abs
 
 -- Hoisted pcall trampolines so the per-frame / per-shot paths don't allocate
@@ -405,51 +404,18 @@ local function _camSetLocalOrientation(cam, q)
 end
 
 
---- Rotate a Vector4 direction by yaw and pitch angles
---- @param vec table Vector4 direction to rotate
---- @param yaw_deg number Yaw rotation in degrees (around Z axis)
---- @param pitch_deg number Pitch rotation in degrees (around X axis)
---- @return table Rotated Vector4 direction
-local function rotateVectorByAngles(vec, yaw_deg, pitch_deg)
-    local yaw = math_rad(yaw_deg)
-    local pitch = math_rad(pitch_deg)
-
-    local cy = math_cos(yaw)
-    local sy = math_sin(yaw)
-    local cp = math_cos(pitch)
-    local sp = math_sin(pitch)
-
-    -- Extract components (Cyberpunk uses Y-forward, Z-up coordinate system)
-    local x = vec.x
-    local y = vec.y
-    local z = vec.z
-
-    -- Apply yaw rotation (around Z axis)
-    local x1 = x * cy - y * sy
-    local y1 = x * sy + y * cy
-    local z1 = z
-
-    -- Apply pitch rotation (around X axis, after yaw)
-    local x2 = x1
-    local y2 = y1 * cp - z1 * sp
-    local z2 = y1 * sp + z1 * cp
-
-    return Vector4.new(x2, y2, z2, vec.w)
-end
-
---- Below this many degrees on BOTH axes the head is effectively centred, and
+--- Below this many degrees on every axis the head is effectively centred, and
 --- rotating the aim vector would only add float noise to a direction the game
 --- is about to use for a raycast. Skipping the work also leaves the vanilla
 --- vector object untouched on the overwhelmingly common centred-head frames.
 local AIM_COMPENSATION_MIN_DEGREES = 0.1
 
---- Rotate an engine-supplied forward vector by the INVERSE of the current head
---- rotation, so the game's aim/raycast keeps pointing where the mouse points
---- while the view follows the head.
+--- Remove head rotation and translation from an engine-supplied forward vector,
+--- so targeting previews and raycasts agree with the projectile aim point.
 ---
 --- Returns the input UNCHANGED (same object) when tracking is off, the vector
---- is missing, or the head is within the deadzone - callers rely on that to
---- hand the engine its original vector back untouched.
+--- is missing, or both rotation and translation are centred - callers rely on
+--- that to hand the engine its original vector back untouched.
 --- @param fwd table|nil Vector4 forward direction from the engine.
 --- @return table|nil Compensated direction, or `fwd` as-is.
 local function compensateForward(fwd)
@@ -459,12 +425,26 @@ local function compensateForward(fwd)
 
     local yaw = aim_state.smooth_yaw
     local pitch = aim_state.smooth_pitch
-    if math_abs(yaw) < AIM_COMPENSATION_MIN_DEGREES
-       and math_abs(pitch) < AIM_COMPENSATION_MIN_DEGREES then
+    local roll = aim_state.smooth_roll
+    local rotation_active = math_abs(yaw) >= AIM_COMPENSATION_MIN_DEGREES
+        or math_abs(pitch) >= AIM_COMPENSATION_MIN_DEGREES
+        or math_abs(roll) >= AIM_COMPENSATION_MIN_DEGREES
+    local position_active = aim_state.aim_distance > 0.001
+        and math_abs(aim_state.position_x) + math_abs(aim_state.position_y)
+            + math_abs(aim_state.position_z) > 0.00001
+    if not rotation_active and not position_active then
         return fwd
     end
 
-    return rotateVectorByAngles(fwd, -yaw, -pitch)
+    local camera_system = Game.GetCameraSystem()
+    local right = camera_system:GetActiveCameraRight()
+    local forward = camera_system:GetActiveCameraForward()
+    local up = camera_system:GetActiveCameraUp()
+
+    return AimGeometry.compensateDirection(
+        right, forward, up, fwd, aim_state.head_quat,
+        aim_state.position_x, aim_state.position_y, aim_state.position_z,
+        aim_state.aim_distance, position_active, fwd.w)
 end
 
 -- ---------------------------------------------------------------------------

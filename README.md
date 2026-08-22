@@ -140,7 +140,7 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 `Insert` / `Ctrl+Shift+U` cycles what happens when you aim down sights. All three start the same way - raising the sights swings the view onto the point the reticle was marking, so your shot lands where you had it lined up - and they differ in what happens for the rest of the aim:
 
 1. **Tracking paused** (default) - the game keeps the camera for as long as the sights are up. The sight picture is exactly the game's, and head movement does nothing until you lower the weapon.
-2. **Tracking on, with an aim marker** - head tracking carries on from the snapped position, and a small crosshair is drawn wherever your rounds will actually land. Use this one if you want to look around with the sights up: the game hides its own crosshair during ADS and the iron sights are not eye-levelled, so without the marker there is nothing on screen telling you where the gun is pointing once your head has moved off the sight line.
+2. **Tracking on, with an aim marker** - head tracking carries on from the snapped position, and a small white crosshair is drawn wherever your rounds will actually land. This white marker is authoritative, including with scoped weapons. A scope's built-in reticle is only accurate while your eye is exactly aligned with the optic, so the two reticles separate when head tracking moves your view off that sight line.
 3. **Tracking on, no aim marker** - the same as 2 without the marker, for a cleaner screen when you are happy reading the sights themselves.
 
 The choice is saved, so it survives a restart. Pressing the key shows a toast naming the mode you switched to.
@@ -172,8 +172,6 @@ Native Settings is the only framework this mod registers with. If you use a diff
   "clamp_roll": 45.0,
 
   "crosshair_enabled": true,
-  "crosshair_fov_degrees": 84.0,
-  "crosshair_lead_factor": 0.0,
 
   "position_enabled": true,
   "position_limit_x": 0.30,
@@ -195,10 +193,10 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - `remote_smoothing` (0.0 to 1.0, default 0.15): smoothing applied when the tracker is a remote device on the network. 0 = no smoothing, 1 = heavy.
   The mod picks between the two from the source address of each tracking packet, so switching from a local OpenTrack instance to a phone on WiFi swaps the value with no restart. Both cover rotation and position, so there is no separate position smoothing setting. Local defaults to zero because a same-machine tracker is already stable and any smoothing there is pure added latency.
 - `clamp_*` (degrees): rotation caps, so head rotation cannot fight the aim system.
-- `crosshair_*`: parallax-correct reticle overlay. Positional correction uses the live distance along the game's clean aim ray, so a lean moves the reticle more against a nearby wall than a distant one and falls back to infinity when the ray hits nothing. `crosshair_fov_degrees` is a fallback only - the mod reads your live field of view from the camera every frame, including weapon zoom, and falls back to this value if that read fails. Set it to your in-game FOV so the fallback is close if it ever fires. `crosshair_enabled` governs the game's own reticle during normal play only - it does not switch off the ADS aim marker, which is a separate widget drawn in a mode where the game shows no reticle at all.
+- `crosshair_enabled`: moves the game's own reticle to the true aim point during normal play. The ADS marker is separate and remains available in `ads_mode: "marker"`. Both use Cyberpunk's live camera projection, including the exact scope projection, rather than an estimated field of view.
 - `position_enabled` and `position_limit_*`: enable 6DOF translation and set Cyberpunk-specific camera travel limits in metres. Positional sensitivity belongs in the tracker.
 - `saved_tracking_mode`: not a setting - it is where the mod remembers which tracking mode to restore when tracking is switched back on, whether that is you pressing `End` or the mod bringing tracking up on the next launch after you quit with it off. Rewritten every time you switch tracking off. Leave it alone.
-- `ads_mode`: what aiming down sights does. `"paused"` (default) stands tracking down for as long as the sights are up. `"marker"` keeps head tracking live through the aim and draws a crosshair at the true aim point. `"tracked"` keeps tracking live with no marker. Cycled live with `Insert` / `Ctrl+Shift+U`, and persisted. The marker's size and colour are fixed; there is no setting for them.
+- `ads_mode`: what aiming down sights does. `"paused"` (default) stands tracking down for as long as the sights are up. `"marker"` keeps head tracking live through the aim and draws a white crosshair at the true aim point. Treat that marker as authoritative when a scope's reticle no longer lines up with it. `"tracked"` keeps tracking live with no marker. Cycled live with `Insert` / `Ctrl+Shift+U`, and persisted. The marker's size and colour are fixed; there is no setting for them.
 - `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`. The choice is saved, so it survives a restart.
 
 ## Troubleshooting

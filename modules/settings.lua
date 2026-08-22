@@ -44,13 +44,6 @@ local VALIDATION_RULES = {
     clamp_roll = { type = "number", min = 0.0, max = 90.0 },
     -- Crosshair settings
     crosshair_enabled = { type = "boolean" },
-    crosshair_fov_degrees = { type = "number", min = 30.0, max = 140.0 },
-    -- Frame-lead for the reticle. 0 = use the latest head_quat (correct at
-    -- rest, may drift during motion if rendered camera state runs ahead of
-    -- our writes). 1.0 = extrapolate forward by one full logic frame's head
-    -- delta. Tune up if reticle trails the target during head motion (drifts
-    -- in motion direction, settles correct at rest); leave at 0 if no drift.
-    crosshair_lead_factor = { type = "number", min = 0.0, max = 2.0 },
     -- Position tracking and Cyberpunk-specific camera travel limits.
     position_enabled = { type = "boolean" },
     position_limit_x = { type = "number", min = 0.0, max = 0.5 },
@@ -81,6 +74,10 @@ local RETIRED_TRACKER_SHAPING_KEYS = {
     "sensitivity_yaw", "sensitivity_pitch", "sensitivity_roll",
     "deadzone_yaw", "deadzone_pitch", "deadzone_roll",
     "position_sens_x", "position_sens_y", "position_sens_z",
+}
+
+local RETIRED_CROSSHAIR_PROJECTION_KEYS = {
+    "crosshair_fov_degrees", "crosshair_lead_factor",
 }
 
 -- Warned once per session rather than once per load: settings are re-read when
@@ -219,8 +216,6 @@ function Settings.new()
         clamp_roll = 45.0,
         -- Crosshair overlay
         crosshair_enabled = true,
-        crosshair_fov_degrees = 84.0,
-        crosshair_lead_factor = 0.0,
         -- Position tracking (6DOF)
         position_enabled = true,
         position_limit_x = 0.30,
@@ -318,6 +313,14 @@ function Settings:load()
                     end
                 end
 
+                local removed_projection_keys = {}
+                for _, key in ipairs(RETIRED_CROSSHAIR_PROJECTION_KEYS) do
+                    if loaded[key] ~= nil then
+                        loaded[key] = nil
+                        removed_projection_keys[#removed_projection_keys + 1] = key
+                    end
+                end
+
                 -- Merge and validate loaded values with defaults
                 for k, default_value in pairs(self.defaults) do
                     local loaded_value = loaded[k]
@@ -341,8 +344,14 @@ function Settings:load()
                 if #removed_tracker_keys > 0 then
                     print("[HeadTracking] Removed tracker-owned settings from config.json: "
                         .. table.concat(removed_tracker_keys, ", "))
+                end
+                if #removed_projection_keys > 0 then
+                    print("[HeadTracking] Removed obsolete reticle projection settings from config.json: "
+                        .. table.concat(removed_projection_keys, ", "))
+                end
+                if #removed_tracker_keys > 0 or #removed_projection_keys > 0 then
                     if not self:save() then
-                        error("[HeadTracking] Failed to remove tracker-owned settings from config.json")
+                        error("[HeadTracking] Failed to remove obsolete settings from config.json")
                     end
                 end
             else

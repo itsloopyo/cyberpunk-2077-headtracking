@@ -951,7 +951,6 @@ return {
     DiagLockSignal        = delegate("crosshair", "probeLockSignal"),
     DiagShoveOnly         = delegate("crosshair", "setShoveOnly"),
     DiagHitMarker         = delegate("crosshair", "probeHitMarker"),
-    DiagReticleFov        = delegate("crosshair", "probeReticleFov"),
     DiagBracketScale      = delegate("crosshair", "setBracketScale",
                                      { announce = "in-car bracket_scale = " }),
 

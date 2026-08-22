@@ -4,6 +4,7 @@
 #include "SharedState.hpp"
 #include "AimCompensation.hpp"  // LogInfo / LogWarning
 #include "AimProviderHook.hpp"
+#include "PositionProviderHook.hpp"
 #include "AimGetterHook.hpp"
 #include "ScriptChannel.hpp"
 
@@ -305,6 +306,7 @@ bool OnUpdate(RED4ext::CGameApplication*) {
     // is long after plugin load - this retries until it takes, then just mirrors
     // counters.
     AimProviderHook_Tick();
+    PositionProviderHook_Tick();
     AimGetterHook_Tick();
 
     if (HeadTrackingState* w = g_sharedState.GetWritable()) {
