@@ -2,14 +2,16 @@
 -- Copyright (c) 2026 itsloopyo
 -- ADS entry-pose self-test. Runnable under stock lua.
 --
--- Two rules here are easy to get wrong and invisible from the settings and gate
--- suites, and both were wrong in the first cut:
+-- Three rules here are easy to get wrong and invisible from the settings and
+-- gate suites:
 --   * the entry pose must be captured from a LIVE rotation, not from whatever
 --     was last seen. The interpolator is reset on every suppressed frame and
 --     returns nil until a fresh packet lands, so an ungated capture freezes a
 --     pre-suppression pose and holds the whole aim at that offset.
---   * yaw and roll wrap into -180..180, so the entry subtraction has to take
---     the short way round the seam. A plain a-b reads a 10-degree move as -350.
+--   * yaw wraps into -180..180, so the entry subtraction has to take the short
+--     way round the seam. A plain a-b reads a 10-degree move as -350.
+--   * roll is never made relative. It moves no aim point, so zeroing it on
+--     entry only snaps a head tilt the player is holding back to level.
 
 local function assert_eq(actual, expected, label)
     if actual ~= expected then
@@ -46,7 +48,7 @@ assert_eq(p:isActive(), false, "no entry pose while hip firing")
 y, pi, r, x, yy, z = p:update(true, 12, -5, 3, 0.1, 0.2, 0.3)
 assert_eq(y, 0, "entry frame yaw is identity")
 assert_eq(pi, 0, "entry frame pitch is identity")
-assert_eq(r, 0, "entry frame roll is identity")
+assert_eq(r, 3, "entry frame keeps the absolute roll")
 assert_eq(x, 0, "entry frame x is identity")
 assert_eq(yy, 0, "entry frame y is identity")
 assert_eq(z, 0, "entry frame z is identity")
@@ -56,7 +58,7 @@ assert_eq(p:isActive(), true, "entry pose captured")
 y, pi, r, x, yy, z = p:update(true, 22, 0, 8, 0.4, 0.2, 0.3)
 assert_near(y, 10, "yaw tracks relative to entry")
 assert_near(pi, 5, "pitch tracks relative to entry")
-assert_near(r, 5, "roll tracks relative to entry")
+assert_near(r, 8, "roll stays absolute through the aim")
 assert_near(x, 0.3, "x tracks relative to entry")
 assert_near(yy, 0, "y tracks relative to entry")
 assert_near(z, 0, "z tracks relative to entry")
@@ -67,12 +69,13 @@ assert_eq(y, 22, "lowering the sights returns the absolute yaw")
 assert_eq(p:isActive(), false, "entry pose dropped on the way out")
 
 -- 5. Seam. Entry near +180 with the live pose just past it must read as the
---    small move it is, not its 360-degree complement.
+--    small move it is, not its 360-degree complement. Roll needs no seam
+--    handling because it is never differenced.
 local seam = AdsPose.new()
 seam:update(true, 175, 0, 178, 0, 0, 0)
 y, pi, r = seam:update(true, -175, 0, -177, 0, 0, 0)
 assert_near(y, 10, "yaw crossing +-180 takes the short way")
-assert_near(r, 5, "roll crossing +-180 takes the short way")
+assert_near(r, -177, "roll passes through unchanged across the seam")
 
 -- ... and the same in reverse.
 local seam2 = AdsPose.new()

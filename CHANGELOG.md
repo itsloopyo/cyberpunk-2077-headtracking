@@ -1,24 +1,12 @@
 # Changelog
 
-## [1.1.0] - 2026-08-22
-
-### Added
-
-- add a three-way aim-down-sights mode cycled with Home
-- rework the ADS modes around a shared aim-point snap and add an aim marker
-- expose ADS mode, yaw mode and the 6DOF position settings in the settings panel
-- hand pose shaping to the tracker and move the ADS cycle to Insert
+## Unreleased
 
 ### Fixed
 
-- harden ADS tracking modes and release validation
-- drive the settings panel through NativeSettings option refs
-- project the reticle through the live aim distance for positional parallax
-- keep reticle and rounds aligned while leaning
-- keep aim indicators aligned with weapon fire
-- aim the ricochet preview and hit markers at the true impact point
+- ADS no longer levels your head tilt: roll stays as-is through the aim in both head-tracked modes
 
-## [1.2.0] - 2026-08-22
+## [1.1.0] - 2026-08-22
 
 ### Added
 

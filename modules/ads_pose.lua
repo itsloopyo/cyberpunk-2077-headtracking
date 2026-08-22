@@ -6,10 +6,12 @@
 -- ("marker" and "tracked"). "paused" never reaches here - the gate in state.lua
 -- blocks first.
 --
--- Relative means the entry frame is identity, so raising the sights snaps the
--- view onto the point the reticle was marking - the same swing "paused" gets by
--- standing tracking down - and head movement from there still tracks. Lowering
--- them returns to the absolute pose, which swings back by the same angle.
+-- Relative means the entry frame is identity in yaw, pitch and position, so
+-- raising the sights snaps the view onto the point the reticle was marking -
+-- the same swing "paused" gets by standing tracking down - and head movement
+-- from there still tracks. Lowering them returns to the absolute pose, which
+-- swings back by the same angle. Roll passes through absolute throughout; see
+-- the note in update().
 --
 -- Lives in its own module rather than inline in init.lua so the seam and
 -- capture-timing rules below are covered by tests/ads_pose_test.lua. Both were
@@ -72,7 +74,7 @@ function AdsPose:update(ads_tracked, yaw, pitch, roll, x, y, z)
         -- path that hits it: aim down sights, open the map or press the ADS
         -- hotkey, move your head, come back with the sights still up.
         self.entry = {
-            yaw = yaw, pitch = pitch, roll = roll,
+            yaw = yaw, pitch = pitch,
             x = self.last_x, y = self.last_y, z = self.last_z,
         }
     end
@@ -82,11 +84,18 @@ function AdsPose:update(ads_tracked, yaw, pitch, roll, x, y, z)
         return yaw, pitch, roll, x, y, z
     end
 
-    -- Yaw and roll go through the seam-aware delta for the same reason the
-    -- interpolator does: they arrive wrapped into -180..180, so a plain
+    -- Yaw goes through the seam-aware delta for the same reason the
+    -- interpolator does: it arrives wrapped into -180..180, so a plain
     -- subtraction across the seam reads a 10-degree move as -350 and whips the
     -- view a full turn the wrong way. Pitch is bounded to +-90 by the tracker's
     -- own asin and cannot wrap, so it stays a plain difference.
+    --
+    -- Roll is deliberately NOT made relative. Yaw and pitch are the aim axes,
+    -- and zeroing them is the whole point of the snap - it puts the view on the
+    -- point the reticle was marking. Roll moves no aim point, it only tilts the
+    -- horizon, so zeroing it on entry yanks a head tilt the player is actively
+    -- holding back to level and then leans it in again as they move: two
+    -- horizon jolts per aim, buying nothing.
     --
     -- The three rotation axes arrive as one triple, so one nil check covers
     -- them; position is independent and gets its own.
@@ -94,7 +103,7 @@ function AdsPose:update(ads_tracked, yaw, pitch, roll, x, y, z)
     if yaw ~= nil then
         out_yaw   = angleDelta(e.yaw, yaw)
         out_pitch = pitch - e.pitch
-        out_roll  = angleDelta(e.roll, roll)
+        out_roll  = roll
     end
 
     if x == nil then
