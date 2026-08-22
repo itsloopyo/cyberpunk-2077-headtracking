@@ -9,7 +9,7 @@
 #include "NativeRunningHook.hpp"
 #include "CamPropagatorHook.hpp"
 #include "AimProviderHook.hpp"
-#include "PositionProviderHook.hpp"
+#include "RicochetPreviewHook.hpp"
 #include "AimGetterHook.hpp"
 #include "builds/build_registry.hpp"
 
@@ -54,6 +54,8 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         // aim decoupling resolve their targets by name and carry on.
         builds::SelectProfile();
 
+        RicochetPreviewHook_Start(aSdk, aHandle);
+
         NativeRunningHook_Start(aSdk, aHandle);
         CamPropagatorHook_Start(aSdk, aHandle);
 
@@ -89,7 +91,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         NativeRunningHook_Stop(aSdk, aHandle);
 
         AimGetterHook_Stop(aSdk, aHandle);
-        PositionProviderHook_Stop();
+        RicochetPreviewHook_Stop(aSdk, aHandle);
         AimProviderHook_Stop();
         UdpReceiver_Stop();
 

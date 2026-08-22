@@ -214,6 +214,58 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     if (aOut) *aOut = true;
 }
 
+void PushRicochetState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame,
+                        bool* aOut, int64_t) {
+    bool valid = false;
+    float hitX = 0.0f, hitY = 0.0f, hitZ = 0.0f;
+    float normalX = 0.0f, normalY = 0.0f, normalZ = 0.0f;
+    float forwardX = 0.0f, forwardY = 0.0f, forwardZ = 0.0f;
+    float endX = 0.0f, endY = 0.0f, endZ = 0.0f;
+    RED4ext::GetParameter(aFrame, &valid);
+    RED4ext::GetParameter(aFrame, &hitX);
+    RED4ext::GetParameter(aFrame, &hitY);
+    RED4ext::GetParameter(aFrame, &hitZ);
+    RED4ext::GetParameter(aFrame, &normalX);
+    RED4ext::GetParameter(aFrame, &normalY);
+    RED4ext::GetParameter(aFrame, &normalZ);
+    RED4ext::GetParameter(aFrame, &forwardX);
+    RED4ext::GetParameter(aFrame, &forwardY);
+    RED4ext::GetParameter(aFrame, &forwardZ);
+    RED4ext::GetParameter(aFrame, &endX);
+    RED4ext::GetParameter(aFrame, &endY);
+    RED4ext::GetParameter(aFrame, &endZ);
+    ++aFrame->code;
+
+    if (!std::isfinite(hitX) || !std::isfinite(hitY) || !std::isfinite(hitZ) ||
+        !std::isfinite(normalX) || !std::isfinite(normalY) || !std::isfinite(normalZ) ||
+        !std::isfinite(forwardX) || !std::isfinite(forwardY) || !std::isfinite(forwardZ) ||
+        !std::isfinite(endX) || !std::isfinite(endY) || !std::isfinite(endZ)) {
+        if (aOut) *aOut = false;
+        return;
+    }
+
+    HeadTrackingState* w = g_sharedState.GetWritable();
+    if (!w) {
+        if (aOut) *aOut = false;
+        return;
+    }
+    w->ricochet_hit_valid = valid ? 1u : 0u;
+    w->ricochet_hit_x = hitX;
+    w->ricochet_hit_y = hitY;
+    w->ricochet_hit_z = hitZ;
+    w->ricochet_normal_x = normalX;
+    w->ricochet_normal_y = normalY;
+    w->ricochet_normal_z = normalZ;
+    w->ricochet_forward_x = forwardX;
+    w->ricochet_forward_y = forwardY;
+    w->ricochet_forward_z = forwardZ;
+    w->ricochet_end_x = endX;
+    w->ricochet_end_y = endY;
+    w->ricochet_end_z = endZ;
+    w->frame = w->frame + 1;
+    if (aOut) *aOut = true;
+}
+
 void RegisterFunctions() {
     auto* rtti = RED4ext::CRTTISystem::Get();
 
@@ -250,7 +302,27 @@ void RegisterFunctions() {
     push->SetReturnType("Bool");
     rtti->RegisterFunction(push);
 
-    LogInfo("[ScriptChannel] registered HeadTrackingPollPose / HeadTrackingPushState");
+    auto* pushRicochet = RED4ext::CGlobalFunction::Create(
+        "HeadTrackingPushRicochetState", "HeadTrackingPushRicochetState",
+        &PushRicochetState);
+    pushRicochet->flags.isNative = true;
+    pushRicochet->AddParam("Bool", "valid");
+    pushRicochet->AddParam("Float", "hitX");
+    pushRicochet->AddParam("Float", "hitY");
+    pushRicochet->AddParam("Float", "hitZ");
+    pushRicochet->AddParam("Float", "normalX");
+    pushRicochet->AddParam("Float", "normalY");
+    pushRicochet->AddParam("Float", "normalZ");
+    pushRicochet->AddParam("Float", "forwardX");
+    pushRicochet->AddParam("Float", "forwardY");
+    pushRicochet->AddParam("Float", "forwardZ");
+    pushRicochet->AddParam("Float", "endX");
+    pushRicochet->AddParam("Float", "endY");
+    pushRicochet->AddParam("Float", "endZ");
+    pushRicochet->SetReturnType("Bool");
+    rtti->RegisterFunction(pushRicochet);
+
+    LogInfo("[ScriptChannel] registered pose and ricochet state functions");
 }
 
 } // namespace

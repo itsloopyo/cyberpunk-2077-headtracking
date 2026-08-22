@@ -114,6 +114,7 @@ std::atomic<uint32_t> s_overrides{0};
 uint32_t              s_loggedA = 0, s_loggedB = 0, s_loggedC = 0;
 uint64_t              s_lastHeartbeatMs = 0;
 uint32_t              s_lastCallsA = 0, s_lastCallsB = 0, s_lastCallsC = 0;
+uint32_t              s_lastMode = 0xFFFFFFFFu;
 
 using GetWorldOrientationFn = void* (*)(void*, void*);
 using GetWorldTransformFn   = uintptr_t (*)(void*, void*, void*);
@@ -225,6 +226,60 @@ bool PeelWorldDirection(float* d, const float* head, const float* camWorld) {
     if (!std::isfinite(lenSq) || lenSq < 0.01f) return false;
     const float inv = 1.0f / std::sqrt(lenSq);
     d[0] = out[0]*inv; d[1] = out[1]*inv; d[2] = out[2]*inv;
+    return true;
+}
+
+bool ApplyPositionToWorldDirection(float* d, const float* head,
+                                   const float* camWorld) {
+    const HeadTrackingState state = g_sharedState.Read();
+    if (state.aim_distance <= 0.001f ||
+        std::fabs(state.position_x) + std::fabs(state.position_y) +
+                std::fabs(state.position_z) <= 0.00001f) {
+        return true;
+    }
+
+    float clean[4];
+    QuatMul(camWorld[0], camWorld[1], camWorld[2], camWorld[3],
+            -head[0], -head[1], -head[2], head[3],
+            clean[0], clean[1], clean[2], clean[3]);
+    const float cleanLenSq = clean[0]*clean[0] + clean[1]*clean[1] +
+                             clean[2]*clean[2] + clean[3]*clean[3];
+    if (!std::isfinite(cleanLenSq) || cleanLenSq < 0.01f) return false;
+    const float cleanInv = 1.0f / std::sqrt(cleanLenSq);
+    for (float& component : clean) component *= cleanInv;
+
+    const float tx = -state.position_x;
+    const float ty = state.aim_distance + state.position_y;
+    const float tz = -state.position_z;
+    const float targetLenSq = tx*tx + ty*ty + tz*tz;
+    if (!std::isfinite(targetLenSq) || targetLenSq < 0.0001f) return false;
+    const float targetInv = 1.0f / std::sqrt(targetLenSq);
+    const float dx = tx * targetInv;
+    const float dy = ty * targetInv;
+    const float dz = tz * targetInv;
+    float position[4] = {dz, 0.0f, -dx, 1.0f + dy};
+    const float positionLenSq = position[0]*position[0] +
+                                position[2]*position[2] +
+                                position[3]*position[3];
+    if (!std::isfinite(positionLenSq) || positionLenSq < 0.0001f) return false;
+    const float positionInv = 1.0f / std::sqrt(positionLenSq);
+    for (float& component : position) component *= positionInv;
+
+    const float cleanConj[4] = {-clean[0], -clean[1], -clean[2], clean[3]};
+    float local[3];
+    RotateVec(cleanConj, d, local);
+    float correctedLocal[3];
+    RotateVec(position, local, correctedLocal);
+    float correctedWorld[3];
+    RotateVec(clean, correctedLocal, correctedWorld);
+    const float outLenSq = correctedWorld[0]*correctedWorld[0] +
+                           correctedWorld[1]*correctedWorld[1] +
+                           correctedWorld[2]*correctedWorld[2];
+    if (!std::isfinite(outLenSq) || outLenSq < 0.01f) return false;
+    const float outInv = 1.0f / std::sqrt(outLenSq);
+    d[0] = correctedWorld[0] * outInv;
+    d[1] = correctedWorld[1] * outInv;
+    d[2] = correctedWorld[2] * outInv;
     return true;
 }
 
@@ -530,49 +585,42 @@ void AimGetterHook_Tick() {
         w->aim_getter_overrides = s_overrides.load(std::memory_order_relaxed);
     }
 
+    // Heartbeat on a 30s wall clock, and only when a counter actually moved.
+    // A shipped build that is not firing sits silent instead of writing two
+    // lines every five seconds for the life of the session.
     const uint64_t now = GetTickCount64();
-    if (s_lastHeartbeatMs != 0 && now - s_lastHeartbeatMs < 5000) return;
-    const uint64_t elapsed = s_lastHeartbeatMs ? (now - s_lastHeartbeatMs) : 5000;
-    s_lastHeartbeatMs = now;
-
-    // Which of cam.localOrientation / cam.worldTransform.Orientation carries the
-    // head rotation decides whether the world-space peel in lever C conjugates
-    // through the dirty or the clean basis, so dump all three every heartbeat.
-    {
-        void* cam = g_camInstance;
-        const int camOff = g_camOrientationOffset;
-        float local[4] = {0, 0, 0, 0};
-        float world[4] = {0, 0, 0, 0};
-        if (cam && camOff >= 0) {
-            __try {
-                const float* l = reinterpret_cast<const float*>(
-                    reinterpret_cast<uint8_t*>(cam) + camOff);
-                for (int i = 0; i < 4; ++i) {
-                    local[i] = l[i];
-                    world[i] = l[i + kWorldOrientationDelta / 4];
-                }
-            } __except (EXCEPTION_EXECUTE_HANDLER) {}
-        }
-        LogInfo("[AimGetter] pose: head=(%+.4f,%+.4f,%+.4f,%+.4f) local=(%+.4f,%+.4f,%+.4f,%+.4f) "
-                "world=(%+.4f,%+.4f,%+.4f,%+.4f)",
-                g_headQuat[0], g_headQuat[1], g_headQuat[2], g_headQuat[3],
-                local[0], local[1], local[2], local[3],
-                world[0], world[1], world[2], world[3]);
-    }
+    if (s_lastHeartbeatMs != 0 && now - s_lastHeartbeatMs < 30000) return;
+    const uint64_t elapsed = s_lastHeartbeatMs ? (now - s_lastHeartbeatMs) : 30000;
 
     const uint32_t a = s_callsA.load(std::memory_order_relaxed);
     const uint32_t b = s_callsB.load(std::memory_order_relaxed);
     const uint32_t c = s_callsC.load(std::memory_order_relaxed);
+    const uint32_t mode = s_mode.load(std::memory_order_relaxed);
+    if (a == s_lastCallsA && b == s_lastCallsB && c == s_lastCallsC &&
+        mode == s_lastMode) {
+        return;
+    }
+    s_lastHeartbeatMs = now;
+
     LogInfo("[AimGetter] heartbeat: mode=%u A=%u (%.1f/s match=%u) B=%u (%.1f/s match=%u) "
             "C=%u (%.1f/s match=%u) overrides=%u",
-            s_mode.load(std::memory_order_relaxed),
+            mode,
             a, (a - s_lastCallsA) * 1000.0 / elapsed, s_matchA.load(std::memory_order_relaxed),
             b, (b - s_lastCallsB) * 1000.0 / elapsed, s_matchB.load(std::memory_order_relaxed),
             c, (c - s_lastCallsC) * 1000.0 / elapsed, s_matchC.load(std::memory_order_relaxed),
             s_overrides.load(std::memory_order_relaxed));
-    s_lastCallsA = a; s_lastCallsB = b; s_lastCallsC = c;
+    s_lastCallsA = a; s_lastCallsB = b; s_lastCallsC = c; s_lastMode = mode;
 }
 
 bool AimGetterHook_IsActive() {
     return s_started.load(std::memory_order_acquire);
+}
+
+bool AimGetterHook_CorrectPreviewDirection(float* direction) {
+    if (!direction) return false;
+    float head[4];
+    float camWorld[4];
+    if (!ReadHead(head) || !ReadCamWorld(camWorld)) return false;
+    if (!PeelWorldDirection(direction, head, camWorld)) return false;
+    return ApplyPositionToWorldDirection(direction, head, camWorld);
 }

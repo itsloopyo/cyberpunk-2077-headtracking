@@ -23,3 +23,4 @@ bool AimGetterHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle 
 void AimGetterHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle);
 void AimGetterHook_Tick();
 bool AimGetterHook_IsActive();
+bool AimGetterHook_CorrectPreviewDirection(float* direction);

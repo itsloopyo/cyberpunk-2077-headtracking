@@ -17,6 +17,10 @@
 //                              Bool propagatorInject,
 //                              Float positionX, Float positionY, Float positionZ,
 //                              Float aimDistance)
+//   Bool HeadTrackingPushRicochetState(Bool valid,
+//                                      Float hitX, Float hitY, Float hitZ,
+//                                      Float normalX, Float normalY, Float normalZ,
+//                                      Float forwardX, Float forwardY, Float forwardZ)
 //
 // Registration is queued at plugin load and runs when the game builds its RTTI
 // registry. It does not depend on the build fingerprint, so on an unrecognised

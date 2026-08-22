@@ -30,6 +30,8 @@ local function _readCamFov(cam) return cam.fov end
 local function _getRootWidget(ctrl) return ctrl:GetRootWidget() end
 local function _getRootCompoundWidget(ctrl) return ctrl:GetRootCompoundWidget() end
 local function _rootSetMargin(root, m) root:SetMargin(m) end
+local function _getNumChildren(root) return root:GetNumChildren() end
+local function _getWidgetByIndex(root, index) return root:GetWidgetByIndex(index) end
 local function _getCrosshairData(targeting, player)
     return targeting:GetDefaultCrosshairData(player)
 end
@@ -40,6 +42,10 @@ local function _getNormalizedWeaponSway()
 end
 local function _raycastStatic(spatial, from, to)
     return spatial:SyncRaycastByCollisionGroup(from, to, 'Static', false, false)
+end
+local function _raycastWorldStatic(spatial, from, to)
+    return spatial:SyncRaycastByCollisionPreset(
+        from, to, 'World Static', true, false)
 end
 
 -- Lock-on gating. The in-car / combat reticle is the SAME widget the engine
@@ -78,7 +84,7 @@ local GATE_RESTING_PX = 8.0
 local GATE_MATCH_EPS  = 1.0
 local GATE_WALK_DEPTH = 6
 local AIM_RAY_LENGTH_M = 1000.0
-local AIM_DISTANCE_SAMPLE_INTERVAL = 1.0 / 30.0
+local RICOCHET_PREVIEW_LENGTH_M = 20.0
 local AIM_DISTANCE_SMOOTH_SPEED = 18.0
 local LOCK_CHILD_TRANSLATION_PX = 8.0
 -- The child-translation lock heuristic latches ANY visible descendant displaced
@@ -166,7 +172,7 @@ function BuiltinCrosshair.new(settings, camera)
     -- with its own root widget in the HUD layer (kill_marker.script,
     -- targetHitIndicator.script), NOT a child of the crosshair, so the reticle
     -- shove never reaches them and they draw at screen centre while the reticle
-    -- sits on the true aim point. They get the same offset as the reticle.
+    -- sits on the true aim point. DamageInfo supplies their exact world point.
     self.hit_markers = {}
     self._np_probe_frames = 0
     self._ch_probe_frames = 0
@@ -180,8 +186,18 @@ function BuiltinCrosshair.new(settings, camera)
     self._last_dy = 0
     self._aim_distance = nil
     self._aim_distance_sample_t = nil
-    self._aim_distance_next_t = 0
     self._aim_distance_error_logged = false
+    self._aim_hit_valid = false
+    self._aim_hit_x = 0
+    self._aim_hit_y = 0
+    self._aim_hit_z = 0
+    self._aim_hit_normal_x = 0
+    self._aim_hit_normal_y = 0
+    self._aim_hit_normal_z = 0
+    self._aim_hit_forward_x = 0
+    self._aim_hit_forward_y = 0
+    self._aim_hit_forward_z = 0
+    self._hit_marker_tracking_allowed = false
 
     -- Diagnostic: when true, tick() skips all crosshair/bracket writes so the
     -- game's native projection is left untouched. Used to decide whether the
@@ -303,7 +319,10 @@ function BuiltinCrosshair:_trackHitMarker(class, this)
     for i = 1, #self.hit_markers do
         if self.hit_markers[i].ctrl == this then return end
     end
-    self.hit_markers[#self.hit_markers + 1] = { ctrl = this, class = class }
+    self.hit_markers[#self.hit_markers + 1] = {
+        ctrl = this,
+        class = class,
+    }
     dlog(string.format("[HeadTracking:HitMarker] captured (%s); live count=%d",
         class, #self.hit_markers))
 end
@@ -315,6 +334,14 @@ function BuiltinCrosshair:_untrackHitMarker(this)
             return
         end
     end
+end
+
+function BuiltinCrosshair:_writeHitMarkersAtAim()
+    if not self._shove_hitmarker or not self._hit_marker_tracking_allowed then return end
+    local screen_w, screen_h = GetDisplayResolution()
+    if not screen_w or screen_w <= 0 then return end
+    local dx, dy, valid = self:_computeOffset(screen_w, screen_h)
+    if valid then self:_writeHitMarkers(dx, dy) end
 end
 
 -- Wipe every per-widget gate store. The gate compares the widget's current root
@@ -1063,9 +1090,8 @@ function BuiltinCrosshair:_installObservers()
         this_self:_untrackNameplate(this)
     end)
 
-    -- On-hit / on-kill markers. Both live in their own inkGameController with
-    -- their own HUD root widget, so the reticle shove leaves them at screen
-    -- centre; capture them here and give them the reticle's offset each frame.
+    -- On-hit / on-kill markers own separate HUD roots. Capture the damage
+    -- event's world hit point and keep those roots projected onto it.
     for _, cls in ipairs(HIT_MARKER_CLASSES) do
         tryBind('ObserveAfter', cls, 'OnInitialize', function(this)
             this_self:_trackHitMarker(cls, this)
@@ -1074,6 +1100,25 @@ function BuiltinCrosshair:_installObservers()
             this_self:_untrackHitMarker(this)
         end)
     end
+    tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'OnDamageAdded',
+        function()
+            this_self:_writeHitMarkersAtAim()
+        end)
+    tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'OnKillAdded', function()
+        this_self:_writeHitMarkersAtAim()
+    end)
+    tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'PlayAnimation', function()
+        this_self:_writeHitMarkersAtAim()
+    end)
+    tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'OnSway', function()
+        this_self:_writeHitMarkersAtAim()
+    end)
+    tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'UpdateWidgetPosition', function()
+        this_self:_writeHitMarkersAtAim()
+    end)
+    tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'OnNormalizeAndSaveSwayEvent', function()
+        this_self:_writeHitMarkersAtAim()
+    end)
 
     for _, cls in ipairs(classes) do
         tryBind('Observe', cls, 'OnInitialize', function(this)
@@ -1104,21 +1149,17 @@ function BuiltinCrosshair:_findEntry(this)
     end
     return nil
 end
-function BuiltinCrosshair:_getAimDistance(player, position_active)
-    if not position_active then return nil end
+function BuiltinCrosshair:_getAimDistance(player)
     if not Game then return nil end
 
     local now = os.clock()
-    if now < self._aim_distance_next_t then
-        return self._aim_distance
-    end
-    self._aim_distance_next_t = now + AIM_DISTANCE_SAMPLE_INTERVAL
 
     local targeting = Game.GetTargetingSystem and Game.GetTargetingSystem()
     local spatial = Game.GetSpatialQueriesSystem and Game.GetSpatialQueriesSystem()
     if not player or not targeting or not spatial then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
         return nil
     end
 
@@ -1131,15 +1172,62 @@ function BuiltinCrosshair:_getAimDistance(player, position_active)
         end
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
         return nil
     end
 
+    local camera_system = Game.GetCameraSystem and Game.GetCameraSystem()
+    local ok_sway, sway = pcall(_getNormalizedWeaponSway)
+    if not camera_system or not ok_sway or not sway then
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
+        return nil
+    end
+    local projected = camera_system:ProjectPoint(Vector4.new(
+        from.x + forward.x * 10,
+        from.y + forward.y * 10,
+        from.z + forward.z * 10,
+        from.w))
+    local sway_x = sway.X or sway.x
+    local sway_y = sway.Y or sway.y
+    if not projected or type(sway_x) ~= "number" or type(sway_y) ~= "number" then
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
+        return nil
+    end
+    local aim_point = camera_system:UnprojectPoint(
+        Vector2.new(projected.x + sway_x, projected.y - sway_y))
+    if not aim_point then
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
+        return nil
+    end
+    local aim_x = aim_point.x - from.x
+    local aim_y = aim_point.y - from.y
+    local aim_z = aim_point.z - from.z
+    local forward_length = math.sqrt(
+        aim_x * aim_x + aim_y * aim_y + aim_z * aim_z)
+    if forward_length <= 0 or forward_length ~= forward_length then
+        self._aim_distance = nil
+        self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
+        return nil
+    end
+    local ray_x = aim_x / forward_length
+    local ray_y = aim_y / forward_length
+    local ray_z = aim_z / forward_length
     local to = Vector4.new(
-        from.x + forward.x * AIM_RAY_LENGTH_M,
-        from.y + forward.y * AIM_RAY_LENGTH_M,
-        from.z + forward.z * AIM_RAY_LENGTH_M,
+        from.x + ray_x * AIM_RAY_LENGTH_M,
+        from.y + ray_y * AIM_RAY_LENGTH_M,
+        from.z + ray_z * AIM_RAY_LENGTH_M,
         from.w)
     local ok_raycast, hit, result = pcall(_raycastStatic, spatial, from, to)
+    if ok_raycast and not hit then
+        ok_raycast, hit, result = pcall(_raycastWorldStatic, spatial, from, to)
+    end
     if not ok_raycast then
         if not self._aim_distance_error_logged then
             self._aim_distance_error_logged = true
@@ -1148,13 +1236,16 @@ function BuiltinCrosshair:_getAimDistance(player, position_active)
         end
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
         return nil
     end
 
     local hit_position = hit and result and result.position
+    local hit_normal = hit and result and result.normal
     if not hit_position then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
         return nil
     end
 
@@ -1165,7 +1256,70 @@ function BuiltinCrosshair:_getAimDistance(player, position_active)
     if hit_distance <= 0 or hit_distance ~= hit_distance then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
+        self._aim_hit_valid = false
         return nil
+    end
+
+    self._aim_hit_x = hit_position.x
+    self._aim_hit_y = hit_position.y
+    self._aim_hit_z = hit_position.z
+    self._aim_hit_forward_x = ray_x
+    self._aim_hit_forward_y = ray_y
+    self._aim_hit_forward_z = ray_z
+    self._aim_hit_end_x = hit_position.x
+    self._aim_hit_end_y = hit_position.y
+    self._aim_hit_end_z = hit_position.z
+    self._aim_hit_normal_x = 0
+    self._aim_hit_normal_y = 0
+    self._aim_hit_normal_z = 0
+    self._aim_hit_valid = true
+    if hit_normal then
+        local dot = ray_x * hit_normal.x + ray_y * hit_normal.y +
+            ray_z * hit_normal.z
+        local reflected_x = ray_x - 2 * dot * hit_normal.x
+        local reflected_y = ray_y - 2 * dot * hit_normal.y
+        local reflected_z = ray_z - 2 * dot * hit_normal.z
+        local reflected_length = math.sqrt(
+            reflected_x * reflected_x + reflected_y * reflected_y +
+            reflected_z * reflected_z)
+        if reflected_length <= 0 or reflected_length ~= reflected_length then
+            return self._aim_distance
+        end
+        reflected_x = reflected_x / reflected_length
+        reflected_y = reflected_y / reflected_length
+        reflected_z = reflected_z / reflected_length
+        local ricochet_from = Vector4.new(
+            hit_position.x + reflected_x * 0.01,
+            hit_position.y + reflected_y * 0.01,
+            hit_position.z + reflected_z * 0.01,
+            hit_position.w)
+        local ricochet_to = Vector4.new(
+            hit_position.x + reflected_x * RICOCHET_PREVIEW_LENGTH_M,
+            hit_position.y + reflected_y * RICOCHET_PREVIEW_LENGTH_M,
+            hit_position.z + reflected_z * RICOCHET_PREVIEW_LENGTH_M,
+            hit_position.w)
+        local ok_ricochet, ricochet_hit, ricochet_result =
+            pcall(_raycastStatic, spatial, ricochet_from, ricochet_to)
+        if ok_ricochet and not ricochet_hit then
+            ok_ricochet, ricochet_hit, ricochet_result =
+                pcall(_raycastWorldStatic, spatial, ricochet_from, ricochet_to)
+        end
+        if not ok_ricochet then
+            if not self._aim_distance_error_logged then
+                self._aim_distance_error_logged = true
+                dlog("[HeadTracking:Reticle] ricochet raycast failed: " ..
+                    tostring(ricochet_hit))
+            end
+            return self._aim_distance
+        end
+        local ricochet_end = ricochet_hit and ricochet_result and
+            ricochet_result.position or ricochet_to
+        self._aim_hit_normal_x = hit_normal.x
+        self._aim_hit_normal_y = hit_normal.y
+        self._aim_hit_normal_z = hit_normal.z
+        self._aim_hit_end_x = ricochet_end.x
+        self._aim_hit_end_y = ricochet_end.y
+        self._aim_hit_end_z = ricochet_end.z
     end
 
     local previous = self._aim_distance
@@ -1182,16 +1336,17 @@ function BuiltinCrosshair:_getAimDistance(player, position_active)
     return self._aim_distance
 end
 
---- Return the live distance used for positional parallax. Nil means the clean
---- aim ray did not hit anything, so translation converges at infinity.
+--- Return the live distance used for positional parallax, plus the surface hit
+--- used by the ricochet preview. Nil means the aim ray missed.
 --- @return number|nil
 function BuiltinCrosshair:getAimDistance()
-    local pos_x, pos_y, pos_z = self.camera:getAppliedPosition()
-    local position_active = math_abs(pos_x) > 1e-6
-        or math_abs(pos_y) > 1e-6
-        or math_abs(pos_z) > 1e-6
     local player = Game and Game.GetPlayer and Game.GetPlayer()
-    return self:_getAimDistance(player, position_active)
+    local distance = self:_getAimDistance(player)
+    return distance, self._aim_hit_valid,
+        self._aim_hit_x, self._aim_hit_y, self._aim_hit_z,
+        self._aim_hit_normal_x, self._aim_hit_normal_y, self._aim_hit_normal_z,
+        self._aim_hit_forward_x, self._aim_hit_forward_y, self._aim_hit_forward_z,
+        self._aim_hit_end_x, self._aim_hit_end_y, self._aim_hit_end_z
 end
 
 
@@ -1417,22 +1572,53 @@ function BuiltinCrosshair:_writeNameplates(dx, dy)
     end
 end
 
--- Shove the on-hit / on-kill marker roots by the reticle offset so the marker
--- confirms the shot where the reticle is drawn, not at screen centre. These
--- controllers own their own HUD root widget and inherit nothing from the
--- crosshair, so nothing else in this module reaches them.
 function BuiltinCrosshair:_writeHitMarkers(dx, dy)
     for i = 1, #self.hit_markers do
-        local root = self:_resolveRoot(self.hit_markers[i])
+        local entry = self.hit_markers[i]
+        local root = self:_resolveRoot(entry)
         if root ~= nil then
-            pcall(_rootSetMargin, root,
-                inkMargin.new({ left = dx, top = dy, right = 0, bottom = 0 }))
+            if entry.class == 'TargetHitIndicatorGameController' then
+                local inverse_scale = Game.GetUISystem():GetInverseUIScale()
+                local marker_dx = dx * inverse_scale
+                local marker_dy = dy * inverse_scale
+                local ok_reset, reset_error = pcall(_rootSetMargin, root,
+                    inkMargin.new({ left = 0, top = 0, right = 0, bottom = 0 }))
+                if not ok_reset then
+                    error("[HeadTracking:HitMarker] root SetMargin reset failed: " ..
+                        tostring(reset_error))
+                end
+                local ok_count, child_count = pcall(_getNumChildren, root)
+                if not ok_count or type(child_count) ~= 'number' then
+                    error("[HeadTracking:HitMarker] GetNumChildren failed: " ..
+                        tostring(child_count))
+                end
+                for child_index = 0, child_count - 1 do
+                    local ok_child, child = pcall(_getWidgetByIndex, root, child_index)
+                    if not ok_child or child == nil then
+                        error("[HeadTracking:HitMarker] GetWidgetByIndex failed at " ..
+                            tostring(child_index))
+                    end
+                    local ok_write, write_error = pcall(_rootSetMargin, child,
+                        inkMargin.new({ left = marker_dx, top = marker_dy, right = 0, bottom = 0 }))
+                    if not ok_write then
+                        error("[HeadTracking:HitMarker] child SetMargin failed: " ..
+                            tostring(write_error))
+                    end
+                end
+            else
+                local ok_write, write_error = pcall(_rootSetMargin, root,
+                    inkMargin.new({ left = dx, top = dy, right = 0, bottom = 0 }))
+                if not ok_write then
+                    error("[HeadTracking:HitMarker] SetMargin failed: " ..
+                        tostring(write_error))
+                end
+            end
         end
     end
 end
 
---- Diagnostic toggle for the on-hit / on-kill marker offset. Off leaves the
---- marker where the game draws it (screen centre).
+--- Diagnostic toggle for impact-point projection. Off leaves the marker where
+--- the game draws it.
 ---   GetMod("HeadTracking").DiagShoveHitMarker(false)
 function BuiltinCrosshair:setShoveHitMarker(on)
     self._shove_hitmarker = on and true or false
@@ -1483,6 +1669,7 @@ function BuiltinCrosshair:getAimOffset(screen_w, screen_h)
 end
 
 function BuiltinCrosshair:tick(tracking_allowed)
+    self._hit_marker_tracking_allowed = self.enabled and tracking_allowed
     if self._np_probe_frames > 0 then
         pcall(function() self:_probeNameplatesTick() end)
     end
@@ -1514,6 +1701,7 @@ function BuiltinCrosshair:tick(tracking_allowed)
         end
         return
     end
+    self:_writeHitMarkersAtAim()
     if #self.controllers == 0 then
         self._stat.ticks_with_zero_ctrls = self._stat.ticks_with_zero_ctrls + 1
         return
@@ -1540,7 +1728,6 @@ function BuiltinCrosshair:tick(tracking_allowed)
     -- nameplate no longer suppresses the free-aim compensation.
     self:_writeBrackets(dx, dy)
     if self._shove_nameplate then self:_writeNameplates(dx, dy) end
-    if self._shove_hitmarker then self:_writeHitMarkers(dx, dy) end
 end
 
 function BuiltinCrosshair:setBracketScale(s)

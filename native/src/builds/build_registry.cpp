@@ -24,7 +24,7 @@ const BuildProfile* const kKnownProfiles[] = {
 
 constexpr size_t kKnownProfileCount = sizeof(kKnownProfiles) / sizeof(kKnownProfiles[0]);
 
-const BuildProfile kNoProfile = { "none", { 0, 0, 0 }, { 0, 0, 0, 0, 0 } };
+const BuildProfile kNoProfile = { "none", { 0, 0, 0 }, { 0, 0, 0, 0, 0, 0, 0, 0 } };
 
 bool         s_selected = false;
 SelectResult s_result   = SelectResult::NoImage;

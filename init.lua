@@ -636,10 +636,27 @@ local function onUpdateImpl(deltaTime)
     aim:setEnabled(true)
     local rotation = camera:getSmoothedRotation()
     local position_x, position_y, position_z = camera:getAppliedPosition()
-    local aim_distance = crosshair and crosshair:getAimDistance() or nil
+    local aim_distance, ricochet_hit_valid,
+        ricochet_hit_x, ricochet_hit_y, ricochet_hit_z,
+        ricochet_normal_x, ricochet_normal_y, ricochet_normal_z,
+        ricochet_forward_x, ricochet_forward_y, ricochet_forward_z,
+        ricochet_end_x, ricochet_end_y, ricochet_end_z
+    if crosshair then
+        aim_distance, ricochet_hit_valid,
+            ricochet_hit_x, ricochet_hit_y, ricochet_hit_z,
+            ricochet_normal_x, ricochet_normal_y, ricochet_normal_z,
+            ricochet_forward_x, ricochet_forward_y, ricochet_forward_z,
+            ricochet_end_x, ricochet_end_y, ricochet_end_z =
+            crosshair:getAimDistance()
+    end
     aim:update(rotation.yaw, rotation.pitch, rotation.roll,
                camera:getHeadQuat(),
-               position_x, position_y, position_z, aim_distance)
+               position_x, position_y, position_z, aim_distance,
+               ricochet_hit_valid,
+               ricochet_hit_x, ricochet_hit_y, ricochet_hit_z,
+               ricochet_normal_x, ricochet_normal_y, ricochet_normal_z,
+               ricochet_forward_x, ricochet_forward_y, ricochet_forward_z,
+               ricochet_end_x, ricochet_end_y, ricochet_end_z)
     if aim.summarizeDiscovery then aim:summarizeDiscovery() end
 
     if crosshair then crosshair:tick(true) end

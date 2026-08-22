@@ -53,6 +53,9 @@ struct OffsetTable {
     uintptr_t GetWorldTransform;    // AimGetter lever B detour target
     uintptr_t FireNormaliseCall;    // AimGetter lever C: the `call Normalize` site
     uintptr_t NormaliseFn;          // AimGetter lever C: the Normalize callee
+    uintptr_t RicochetEffectExecute;
+    uintptr_t PhysicalRayExecute;
+    uintptr_t PhysicalRayNormaliseCall;
 };
 
 struct BuildProfile {

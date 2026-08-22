@@ -29,6 +29,11 @@ static bool IsSane(const HeadTrackingState& s) {
     if (!finite(s.quat_i) || !finite(s.quat_j) || !finite(s.quat_k) || !finite(s.quat_r)) return false;
     if (!finite(s.position_x) || !finite(s.position_y) ||
         !finite(s.position_z) || !finite(s.aim_distance)) return false;
+    if (!finite(s.ricochet_hit_x) || !finite(s.ricochet_hit_y) ||
+        !finite(s.ricochet_hit_z) || !finite(s.ricochet_normal_x) ||
+        !finite(s.ricochet_normal_y) || !finite(s.ricochet_normal_z) ||
+        !finite(s.ricochet_forward_x) || !finite(s.ricochet_forward_y) ||
+        !finite(s.ricochet_forward_z)) return false;
     // Yaw/pitch/roll are degrees, not radians - a reading outside ±720 is
     // almost certainly a torn-read artefact, not a real head pose.
     if (std::abs(s.yaw) > 720.0f || std::abs(s.pitch) > 720.0f || std::abs(s.roll) > 720.0f) return false;

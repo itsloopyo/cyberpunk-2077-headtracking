@@ -26,6 +26,7 @@ os.clock = function() return now end
 
 local raycasts = 0
 local next_distance = 2
+local next_normal = { x = 0, y = -1, z = 0 }
 local sampled_crosshair_calls = 0
 local default_crosshair_calls = 0
 local targeting = {
@@ -46,15 +47,28 @@ local spatial = {
         assert_eq(group, "Static", "raycast collision group")
         assert_eq(a, false, "raycast flag a")
         assert_eq(b, false, "raycast flag b")
-        assert_near(to.x, from.x, "ray end x")
-        assert_near(to.y, from.y + 1000, "ray end y")
-        assert_near(to.z, from.z, "ray end z")
+        local dx = to.x - from.x
+        local dy = to.y - from.y
+        local dz = to.z - from.z
+        local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+        assert_near(length, dy < 0 and 19.99 or 1000,
+            "ray length", 1e-3)
         if next_distance == nil then return false, {} end
         return true, {
-            position = { x = from.x, y = from.y + next_distance, z = from.z },
+            position = {
+                x = from.x + dx / length * next_distance,
+                y = from.y + dy / length * next_distance,
+                z = from.z + dz / length * next_distance,
+            },
+            normal = next_normal,
         }
     end,
 }
+spatial.SyncRaycastByCollisionPreset = function(_, from, to, preset, a, b)
+    assert_eq(preset, "World Static", "raycast collision preset")
+    return spatial.SyncRaycastByCollisionGroup(
+        spatial, from, to, "Static", false, false)
+end
 local project_calls = 0
 local camera_forward = { x = 0, y = 1, z = 0, w = 0 }
 local normalized_sway = { X = 0.1, Y = -0.2 }
@@ -69,6 +83,11 @@ local camera_system = {
         assert_near(point.z, 3, "projected point z")
         return { x = 0.25, y = -0.5, z = 0.9, w = 1 }
     end,
+    UnprojectPoint = function(_, point)
+        assert_near(point.x, 0.35, "unprojected sway x")
+        assert_near(point.y, -0.3, "unprojected sway y")
+        return { x = 1, y = 3, z = 3, w = 1 }
+    end,
 }
 
 Game = {
@@ -76,6 +95,12 @@ Game = {
     GetTargetingSystem = function() return targeting end,
     GetSpatialQueriesSystem = function() return spatial end,
     GetCameraSystem = function() return camera_system end,
+    GetUISystem = function()
+        return {
+            GetCurrentWindowSize = function() return { X = 1000, Y = 800 } end,
+            GetInverseUIScale = function() return 0.8 end,
+        }
+    end,
     GetBlackboardSystem = function()
         return {
             Get = function()
@@ -94,32 +119,44 @@ end
 Vector4 = {
     new = function(x, y, z, w) return { x = x, y = y, z = z, w = w } end,
 }
+Vector2 = {
+    new = function(x, y) return { x = x, y = y } end,
+}
 
 local driver = setmetatable({
     _aim_distance = nil,
     _aim_distance_sample_t = nil,
-    _aim_distance_next_t = 0,
     _aim_distance_error_logged = false,
 }, BuiltinCrosshair)
 
 local distance = driver:_getAimDistance({}, true)
 assert_near(distance, 2, "first raycast distance")
-assert_eq(raycasts, 1, "first sample raycast count")
+assert_eq(raycasts, 2, "first sample raycast count")
+assert_near(driver._aim_hit_end_y, 1.99, "ricochet endpoint")
 assert_eq(default_crosshair_calls, 1, "distance uses default crosshair axis")
 assert_eq(sampled_crosshair_calls, 0, "distance does not consume spread sample")
 
 now = 1.01
 next_distance = 10
 distance = driver:_getAimDistance({}, true)
-assert_near(distance, 2, "distance cached inside sample interval")
-assert_eq(raycasts, 1, "cached sample raycast count")
+if distance <= 2 or distance >= 10 then
+    error("FAIL changed hit distance was not smoothed", 2)
+end
+assert_eq(raycasts, 4, "second-frame sample raycast count")
 
 now = 1.04
 distance = driver:_getAimDistance({}, true)
 if distance <= 2 or distance >= 10 then
     error("FAIL changed hit distance was not smoothed", 2)
 end
-assert_eq(raycasts, 2, "second sample raycast count")
+assert_eq(raycasts, 6, "third-frame sample raycast count")
+
+now = 1.06
+next_normal = nil
+distance = driver:_getAimDistance({}, true)
+assert_eq(driver._aim_hit_valid, true, "first impact remains valid without a surface normal")
+assert_near(driver._aim_hit_end_y, 12, "missing normal leaves endpoint at first impact")
+assert_eq(raycasts, 7, "missing normal skips reflected raycast")
 
 now = 1.08
 next_distance = nil
@@ -129,14 +166,14 @@ assert_eq(driver._aim_distance, nil, "miss clears smoothed hit distance")
 
 now = 1.12
 driver:_getAimDistance({}, false)
-assert_eq(raycasts, 3, "no raycast without positional tracking")
+assert_eq(raycasts, 11, "ricochet impact sampled without positional tracking")
 
 local screen_dx, screen_dy, screen_valid = driver:_computeOffset(1000, 800)
 assert_eq(screen_valid, true, "engine projection is valid")
 assert_near(screen_dx, 175, "engine projection includes horizontal weapon sway")
 assert_near(screen_dy, 120, "engine projection includes vertical weapon sway")
-assert_eq(project_calls, 1, "engine projector called once")
-assert_eq(default_crosshair_calls, 4, "projection uses default crosshair axis")
+assert_eq(project_calls, 7, "engine projector called for aim samples and reticle")
+assert_eq(default_crosshair_calls, 7, "projection uses default crosshair axis")
 assert_eq(sampled_crosshair_calls, 0, "projection does not consume spread sample")
 
 targeting.GetDefaultCrosshairData = function()
@@ -146,7 +183,45 @@ targeting.GetDefaultCrosshairData = function()
 end
 _, _, screen_valid = driver:_computeOffset(1000, 800)
 assert_eq(screen_valid, false, "target behind camera is hidden")
-assert_eq(project_calls, 1, "behind-camera target is not projected")
+assert_eq(project_calls, 7, "behind-camera target is not projected")
+
+GetDisplayResolution = function() return 1000, 800 end
+local marker_root_margin = { left = 0, top = 0 }
+local marker_margin = { left = 0, top = 0 }
+local marker_active_widget
+local marker_root = {
+    SetMargin = function(_, value) marker_root_margin = value end,
+    GetMargin = function() return marker_root_margin end,
+    GetNumChildren = function() return 1 end,
+    GetWidgetByIndex = function(_, index)
+        assert_eq(index, 0, "hit marker child index")
+        return marker_active_widget
+    end,
+}
+marker_active_widget = {
+    SetMargin = function(_, value) marker_margin = value end,
+    GetMargin = function() return marker_margin end,
+}
+inkMargin = {
+    new = function(value) return value end,
+}
+driver.hit_markers = {
+    {
+        ctrl = {
+            GetRootWidget = function() return marker_root end,
+        },
+        class = "TargetHitIndicatorGameController",
+        children_logged = false,
+    },
+}
+driver._hit_marker_tracking_allowed = true
+driver._shove_hitmarker = true
+driver._computeOffset = function() return 125, 200, true end
+driver:_writeHitMarkersAtAim()
+assert_near(marker_margin.left, 100, "hit marker UI-scaled x")
+assert_near(marker_margin.top, 160, "hit marker UI-scaled y")
+assert_near(marker_root_margin.left, 0, "hit marker root reset x")
+assert_near(marker_root_margin.top, 0, "hit marker root reset y")
 
 os.clock = saved_clock
 

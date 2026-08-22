@@ -19,6 +19,9 @@ extern const BuildProfile kGogProfile_20250827 = {
         0x1D92A0,  // GetWorldTransform
         0x84C968,  // FireNormaliseCall
         0x13DE80,  // NormaliseFn
+        0x84AAC8,  // RicochetEffectExecute
+        0x84E2D0,  // PhysicalRayExecute
+        0x84E376,  // PhysicalRayNormaliseCall
     },
 };
 

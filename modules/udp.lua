@@ -10,6 +10,7 @@
 --   Game.HeadTrackingPushState(yaw, pitch, roll, enabled, isAds,
 --                              qi, qj, qk, qr, propagatorInject,
 --                              positionX, positionY, positionZ, aimDistance) -> ok
+--   Game.HeadTrackingPushRicochetState(valid, hit, normal, forward) -> ok
 --
 -- This used to be a TCP socket served by the plugin and driven from Lua by
 -- RedSocket, a separate CET mod. That mod was never shipped with ours, so any
@@ -55,11 +56,19 @@ local native_cycle_ads_mode_requested = false
 -- ride in upvalues instead. Neither is reentrant, which is what makes the
 -- upvalue reuse safe (same reasoning as guardedVar in init.lua).
 local push_args = { 0, 0, 0, false, false, 0, 0, 0, 1, false, 0, 0, 0, 0 }
+local ricochet_args = { false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 local function _callPush()
     return Game.HeadTrackingPushState(
         push_args[1], push_args[2], push_args[3], push_args[4], push_args[5],
         push_args[6], push_args[7], push_args[8], push_args[9], push_args[10],
         push_args[11], push_args[12], push_args[13], push_args[14])
+end
+local function _callPushRicochet()
+    return Game.HeadTrackingPushRicochetState(
+        ricochet_args[1], ricochet_args[2], ricochet_args[3], ricochet_args[4],
+        ricochet_args[5], ricochet_args[6], ricochet_args[7],
+        ricochet_args[8], ricochet_args[9], ricochet_args[10],
+        ricochet_args[11], ricochet_args[12], ricochet_args[13])
 end
 local function _callPoll()
     return Game.HeadTrackingPollPose()
@@ -79,7 +88,8 @@ function TrackingInput:init()
     -- never deployed. Nothing downstream works without it, so say which half is
     -- missing rather than failing later with a nil call.
     if type(Game.HeadTrackingPollPose) ~= "function" or
-       type(Game.HeadTrackingPushState) ~= "function" then
+       type(Game.HeadTrackingPushState) ~= "function" or
+       type(Game.HeadTrackingPushRicochetState) ~= "function" then
         error("[HeadTracking] FATAL: the native plugin's script functions are missing. " ..
               "Check that red4ext/plugins/HeadTrackingAim.dll is installed and see " ..
               "red4ext/logs/ for why it did not load.")
@@ -101,7 +111,12 @@ end
 
 function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat,
                                       propagator_inject, position_x, position_y,
-                                      position_z, aim_distance)
+                                      position_z, aim_distance, ricochet_hit_valid,
+                                      ricochet_hit_x, ricochet_hit_y, ricochet_hit_z,
+                                      ricochet_normal_x, ricochet_normal_y, ricochet_normal_z,
+                                      ricochet_forward_x, ricochet_forward_y,
+                                      ricochet_forward_z, ricochet_end_x,
+                                      ricochet_end_y, ricochet_end_z)
     -- Reuse the state table to avoid a 10-field heap allocation every frame
     -- (this is called once per onUpdate via Aim:update). The table is left nil
     -- until the first call so poll() knows there is nothing to push yet.
@@ -124,6 +139,19 @@ function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat,
     st.position_y = position_y or 0
     st.position_z = position_z or 0
     st.aim_distance = aim_distance or 0
+    st.ricochet_hit_valid = ricochet_hit_valid and true or false
+    st.ricochet_hit_x = ricochet_hit_x or 0
+    st.ricochet_hit_y = ricochet_hit_y or 0
+    st.ricochet_hit_z = ricochet_hit_z or 0
+    st.ricochet_normal_x = ricochet_normal_x or 0
+    st.ricochet_normal_y = ricochet_normal_y or 0
+    st.ricochet_normal_z = ricochet_normal_z or 0
+    st.ricochet_forward_x = ricochet_forward_x or 0
+    st.ricochet_forward_y = ricochet_forward_y or 0
+    st.ricochet_forward_z = ricochet_forward_z or 0
+    st.ricochet_end_x = ricochet_end_x or 0
+    st.ricochet_end_y = ricochet_end_y or 0
+    st.ricochet_end_z = ricochet_end_z or 0
 end
 
 function TrackingInput:isNativeCameraHookActive()
@@ -201,7 +229,21 @@ function TrackingInput:poll()
         push_args[12] = st.position_y
         push_args[13] = st.position_z
         push_args[14] = st.aim_distance
+        ricochet_args[1] = st.ricochet_hit_valid
+        ricochet_args[2] = st.ricochet_hit_x
+        ricochet_args[3] = st.ricochet_hit_y
+        ricochet_args[4] = st.ricochet_hit_z
+        ricochet_args[5] = st.ricochet_normal_x
+        ricochet_args[6] = st.ricochet_normal_y
+        ricochet_args[7] = st.ricochet_normal_z
+        ricochet_args[8] = st.ricochet_forward_x
+        ricochet_args[9] = st.ricochet_forward_y
+        ricochet_args[10] = st.ricochet_forward_z
+        ricochet_args[11] = st.ricochet_end_x
+        ricochet_args[12] = st.ricochet_end_y
+        ricochet_args[13] = st.ricochet_end_z
         pcall(_callPush)
+        pcall(_callPushRicochet)
     end
 
     poll_count = poll_count + 1
