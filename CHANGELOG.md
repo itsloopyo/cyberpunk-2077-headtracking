@@ -1,30 +1,30 @@
 # Changelog
 
-## Unreleased
-
-### Changed
-
-- move the ADS mode shortcut from Home to Insert to avoid MCM's shortcut
-- remove in-mod rotation and position sensitivity plus deadzone processing; configure pose shaping in the tracker
-- make the white ADS marker authoritative for scoped aiming
-
-### Fixed
-
-- keep Page Up's position-only mode from restoring rotation through Native Settings UI sync
-- keep the reticle and rounds fixed on the live aim point while leaning
-- project the reticle through Cyberpunk's live camera and align ricochet previews with the compensated shot
-
-## [1.1.0] - 2026-08-21
+## [1.2.0] - 2026-08-22
 
 ### Added
 
-- add a three-way aim-down-sights mode cycled with Home
-- rework the ADS modes around a shared aim-point snap and add an aim marker
-- expose ADS mode, yaw mode and the 6DOF position settings in the settings panel
+- three aim-down-sights modes, cycled in game with `Insert`: tracking paused, tracking on with an aim marker, tracking on without one
+- raising the sights swings the view onto the point the reticle was marking, so the shot lands where you lined it up
+- a white aim marker drawn at the true impact point while aiming down sights
+- ADS mode, yaw mode and the 6DOF position limits in the settings panel
+
+### Changed
+
+- sensitivity, deadzones and response curves are gone from the mod - set them in OpenTrack or your tracking app and the mod consumes the pose at 1:1
+- retired sensitivity and deadzone keys are stripped from `config.json` on load, with a log line naming what came out
+- the white ADS aim marker is authoritative for scoped weapons; a scope's own reticle is only true while your eye sits on the optic
+- the frozen-centre ADS mode is gone; configs holding the old `reticle` name migrate to `paused` on load
 
 ### Fixed
 
-- harden ADS tracking modes and release validation
+- the Native Settings panel works again - it registered nothing usable before, so changes never reached the mod
+- Page Up's position-only mode no longer has rotation switched back on by the settings panel
+- the reticle projects through the live aim distance, so it stays on target when you lean
+- rounds land on the reticle while leaning
+- hit and kill markers appear on the surface the round struck instead of at screen centre
+- the ricochet preview line follows the path the round actually takes
+- ADS mode switching no longer leaves tracking in a stale state
 
 ## [1.0.1] - 2026-08-20
 
