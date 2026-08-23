@@ -46,13 +46,15 @@ void UdpReceiver_PublishLatest() {
     float yaw = 0.0f;
     float pitch = 0.0f;
     float roll = 0.0f;
+    if (!s_receiver.GetRotation(yaw, pitch, roll)) return;
+
+    // Position is optional: a tracker that sends rotation only still has to
+    // drive the view. Folding GetPosition into the same guard dropped the
+    // rotation too, so the whole mod went dead for a rotation-only sender.
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
-    if (!s_receiver.GetRotation(yaw, pitch, roll) ||
-        !s_receiver.GetPosition(x, y, z)) {
-        return;
-    }
+    s_receiver.GetPosition(x, y, z);
 
     HeadTrackingState* state = g_sharedState.GetWritable();
     if (state == nullptr) return;

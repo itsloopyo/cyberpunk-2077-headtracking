@@ -370,11 +370,16 @@ bool OnUpdate(RED4ext::CGameApplication*) {
             const uint32_t delta = w->native_running_frame - s_prevLogCount;
             const double hz = (elapsedMs > 0) ? (delta * 1000.0 / elapsedMs) : 0.0;
             LogInfo("[HeadTrackingAim] NativeRunningHook heartbeat: frame=%u (+%u in %llums = %.1f Hz) "
-                    "cam=%p cam_ori_off=+0x%X",
+                    "cam=%p cam_ori_off=+0x%X cet_gate=%s ads=%d head=%.1fdeg",
                     w->native_running_frame, delta,
                     (unsigned long long)elapsedMs, hz,
                     (void*)::g_camInstance,
-                    ::g_camOrientationOffset);
+                    ::g_camOrientationOffset,
+                    ScriptChannel_HasEverPushed()
+                        ? (ScriptChannel_LastPushEnabled() ? "open" : "SHUT")
+                        : "none",
+                    ScriptChannel_LastPushIsAds() ? 1 : 0,
+                    ScriptChannel_LastPushHeadDegrees());
             s_lastLogMs = now;
             s_prevLogCount = w->native_running_frame;
 

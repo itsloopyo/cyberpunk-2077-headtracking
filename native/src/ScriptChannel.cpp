@@ -28,6 +28,9 @@ constexpr uint32_t kFlagRemoteConnection = 1u << 6;
 constexpr uint32_t kFlagCycleAdsMode     = 1u << 7;
 
 std::atomic<uint64_t> s_lastPushMs{0};
+std::atomic<bool> s_lastPushEnabled{false};
+std::atomic<bool> s_lastPushIsAds{false};
+std::atomic<float> s_lastPushHeadDegrees{0.0f};
 std::atomic<bool> s_loggedFirstPush{false};
 
 bool s_toggleTrackingChordWasDown = false;
@@ -207,6 +210,12 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     w->applied_frame = w->applied_frame + 1;
     w->frame = w->frame + 1;
 
+    s_lastPushEnabled.store(enabled, std::memory_order_relaxed);
+    s_lastPushIsAds.store(isAds, std::memory_order_relaxed);
+    const float absR = std::abs(qr) > 1.0f ? 1.0f : std::abs(qr);
+    s_lastPushHeadDegrees.store(
+        static_cast<float>(2.0 * std::acos(absR) * 57.2957795), std::memory_order_relaxed);
+
     if (!s_loggedFirstPush.exchange(true)) {
         LogInfo("[ScriptChannel] first state push from the CET mod: enabled=%d propInject=%d yaw=%.2f pitch=%.2f roll=%.2f",
                 enabled ? 1 : 0, propagatorInject ? 1 : 0, yaw, pitch, roll);
@@ -339,4 +348,16 @@ uint64_t ScriptChannel_MsSinceLastPush() {
 
 bool ScriptChannel_HasEverPushed() {
     return s_lastPushMs.load(std::memory_order_relaxed) != 0;
+}
+
+bool ScriptChannel_LastPushEnabled() {
+    return s_lastPushEnabled.load(std::memory_order_relaxed);
+}
+
+bool ScriptChannel_LastPushIsAds() {
+    return s_lastPushIsAds.load(std::memory_order_relaxed);
+}
+
+float ScriptChannel_LastPushHeadDegrees() {
+    return s_lastPushHeadDegrees.load(std::memory_order_relaxed);
 }

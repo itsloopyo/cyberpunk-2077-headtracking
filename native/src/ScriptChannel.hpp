@@ -32,3 +32,15 @@ void ScriptChannel_Register();
 // it never has. Drives the "nothing is listening" diagnostic.
 uint64_t ScriptChannel_MsSinceLastPush();
 bool ScriptChannel_HasEverPushed();
+
+// The last state the CET mod pushed. A healthy plugin log looks identical
+// whether the Lua gameplay gate is open or shut - the push keeps arriving
+// either way - so without these the native log cannot tell "the mod is
+// suppressing tracking" (a menu / cinematic / ADS verdict, whose reason is in
+// CET's scripting.log) from "the mod thinks it is tracking and the camera
+// write is not landing". Those are different investigations and the log people
+// send us has to pick one.
+bool ScriptChannel_LastPushEnabled();
+bool ScriptChannel_LastPushIsAds();
+// Rotation magnitude of the last pushed head quaternion, in degrees.
+float ScriptChannel_LastPushHeadDegrees();
