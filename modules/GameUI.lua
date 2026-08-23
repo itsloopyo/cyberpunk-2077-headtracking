@@ -1,14 +1,16 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 --[[
 GameUI Module - Game State Detection for Cyberpunk 2077
-Vendored from cp2077-cet-kit (https://github.com/psiberx/cp2077-cet-kit)
 
-This module provides game state detection for context-aware mod behavior.
+Original implementation. The module name and the shape of its public API
+(IsLoading / IsMenuOpen / IsBraindance / Listen) follow the convention set by
+psiberx's GameUI in cp2077-cet-kit (https://github.com/psiberx/cp2077-cet-kit),
+so CET mod authors find a familiar surface. No code is taken from it: the
+observer set, the state machine and the event dispatch here are all written
+from scratch and differ from that module throughout.
+
 It registers itself globally as 'GameUI' when required.
-
-Original source: https://github.com/psiberx/cp2077-cet-kit/blob/main/mods/GameUI.lua
-SPDX-License-Identifier: MIT
-Copyright (c) 2021 Pavel Siberx
-License: MIT (https://github.com/psiberx/cp2077-cet-kit/blob/main/LICENSE)
 
 Features:
 - Loading screen detection (IsLoading)

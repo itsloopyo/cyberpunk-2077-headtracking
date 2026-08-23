@@ -288,10 +288,12 @@ Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICE
 - [Cyber Engine Tweaks](https://github.com/maximegmd/CyberEngineTweaks) by maximegmd, hosting the Lua mod.
 - [RED4ext](https://github.com/WopsS/RED4ext) and [RED4ext.SDK](https://github.com/WopsS/RED4ext.SDK) by WopsS, loading the native plugin.
 - [TweakXL](https://github.com/psiberx/cp2077-tweak-xl) by psiberx, applying the projectile-bullet record changes.
-- [GameUI](https://github.com/psiberx/cp2077-cet-kit) by psiberx, for game-state detection.
+- [cp2077-cet-kit](https://github.com/psiberx/cp2077-cet-kit) by psiberx, whose GameUI module set the API convention our own `modules/GameUI.lua` follows (no code is taken from it).
 - [OpenTrack](https://github.com/opentrack/opentrack) for the head-tracking UDP protocol.
 - [Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut, for the in-game crosshair overlay, used through CET.
 
 ## Disclaimer
 
 This mod is not affiliated with, endorsed by, or supported by CD PROJEKT RED. It is a single-player utility, so do not use it in any multiplayer or competitive context. Use at your own risk.
+
+Cyberpunk 2077 and CD PROJEKT RED are trademarks of CD PROJEKT S.A. This repository contains no game assets, engine code, or decompiled game code, and a legitimate copy of the game is required to use the mod. The clip at the top of this page is in-game footage that remains the property of CD PROJEKT RED, shown non-commercially to demonstrate the mod under their fan content guidelines. Full attribution for every third-party component is in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
