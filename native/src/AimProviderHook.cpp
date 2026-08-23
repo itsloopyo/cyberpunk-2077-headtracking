@@ -137,6 +137,8 @@ uint32_t              s_loggedOverrides = 0;
 uint32_t              s_loggedNoMatch = 0;
 uint32_t              s_loggedIdentity = 0;
 int                   s_loggedTop[3] = {-1, -1, -1};
+// Whether each counter was MOVING at the last reported line, not its value.
+bool                  s_loggedMoving[4] = {false, false, false, false};
 
 using quatmath::QuatMul;
 
@@ -466,23 +468,37 @@ void Heartbeat() {
 
     // Until the player fires, every counter here sits still and the busiest
     // slots do not move, so a plain 5s heartbeat repeated one dead line for the
-    // whole session - 21% of the log. Log a change immediately, and otherwise
-    // keep a slow liveness line. The comparison uses the top slot INDICES, not
-    // their hit counts: the indices are what re-identifies the aim slot after a
-    // patch, while the counts tick constantly and would defeat the gate.
+    // whole session - 21% of the log. Once the player DOES fire the counters
+    // move every window, so comparing their values instead reported every 5s
+    // for the length of the firefight. Report what a reader actually acts on:
+    // the mode, the top slot INDICES (what re-identifies the aim slot after a
+    // patch), and whether each counter is moving at all. A 5-minute liveness
+    // line keeps a quiet log proving the hook is still installed.
     const uint32_t mode      = s_mode.load(std::memory_order_relaxed);
     const uint32_t aimCalls  = s_aimCalls.load(std::memory_order_relaxed);
     const uint32_t overrides = s_overrides.load(std::memory_order_relaxed);
     const uint32_t noMatch   = s_rejectedNoMatch.load(std::memory_order_relaxed);
     const uint32_t identity  = s_rejectedIdentity.load(std::memory_order_relaxed);
+    const bool moving[4] = {aimCalls  != s_loggedAimCalls,
+                            overrides != s_loggedOverrides,
+                            noMatch   != s_loggedNoMatch,
+                            identity  != s_loggedIdentity};
     const bool changed = !s_haveLogged ||
-                         mode != s_loggedMode || aimCalls != s_loggedAimCalls ||
-                         overrides != s_loggedOverrides || noMatch != s_loggedNoMatch ||
-                         identity != s_loggedIdentity ||
+                         mode != s_loggedMode ||
+                         moving[0] != s_loggedMoving[0] ||
+                         moving[1] != s_loggedMoving[1] ||
+                         moving[2] != s_loggedMoving[2] ||
+                         moving[3] != s_loggedMoving[3] ||
                          topIdx[0] != s_loggedTop[0] ||
                          topIdx[1] != s_loggedTop[1] ||
                          topIdx[2] != s_loggedTop[2];
-    if (!changed && now - s_lastLogMs < 30000) return;
+    // Counters are rebased on every pass so `moving` describes the window just
+    // closed; only the reported snapshot is held back to the emitted line.
+    s_loggedAimCalls = aimCalls;
+    s_loggedOverrides = overrides;
+    s_loggedNoMatch = noMatch;
+    s_loggedIdentity = identity;
+    if (!changed && now - s_lastLogMs < 300000) return;
 
     LogInfo("[AimProvider] heartbeat: mode=%u aimCalls=%u overrides=%u noMatch=%u identity=%u slots[%s]",
             mode, aimCalls, overrides, noMatch, identity, slots);
@@ -490,10 +506,10 @@ void Heartbeat() {
     s_lastLogMs = now;
     s_haveLogged = true;
     s_loggedMode = mode;
-    s_loggedAimCalls = aimCalls;
-    s_loggedOverrides = overrides;
-    s_loggedNoMatch = noMatch;
-    s_loggedIdentity = identity;
+    s_loggedMoving[0] = moving[0];
+    s_loggedMoving[1] = moving[1];
+    s_loggedMoving[2] = moving[2];
+    s_loggedMoving[3] = moving[3];
     s_loggedTop[0] = topIdx[0];
     s_loggedTop[1] = topIdx[1];
     s_loggedTop[2] = topIdx[2];

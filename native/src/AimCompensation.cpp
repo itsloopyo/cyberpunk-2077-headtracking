@@ -1,75 +1,48 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 itsloopyo
 #include "AimCompensation.hpp"
+
+#include <cameraunlock/logging/file_log.h>
+
 #include <windows.h>
 #include <cstdarg>
 #include <cstdio>
-#include <mutex>
 #include <string>
 
-// red4ext doesn't expose its logger to plugins by default and OutputDebugString
-// only shows in a debugger. Mirror everything to a plain file at
-// <game>\red4ext\logs\HeadTrackingAim.log so users can read it after the fact.
+// One log for the whole mod, written next to Cyberpunk2077.exe as
+// HeadTracking.log. A "no head tracking" report has to be answerable from a
+// single file the player can find without being told where RED4ext keeps its
+// own logs, and the game folder they already browsed to install the mod is the
+// one place they will look. cameraunlock::logging rotates the outgoing
+// generation to HeadTracking.prev.log and truncates, once per process, so the
+// file never grows across sessions while the launch before a crash survives
+// the relaunch the player makes before sending it.
 
 namespace {
-std::mutex g_logMutex;
-FILE* g_logFile = nullptr;
-bool g_logFileTried = false;
 
-FILE* OpenLogFile() {
-    if (g_logFileTried) return g_logFile;
-    g_logFileTried = true;
-
+std::wstring LogPathBesideExe() {
     wchar_t exePath[MAX_PATH] = {0};
-    HMODULE hExe = GetModuleHandleW(L"Cyberpunk2077.exe");
-    if (!hExe || GetModuleFileNameW(hExe, exePath, MAX_PATH) == 0) {
-        return nullptr;
-    }
-
-    // Strip "Cyberpunk2077.exe", "x64\", "bin\" -> game root.
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     std::wstring path(exePath);
-    for (int i = 0; i < 3; ++i) {
-        size_t slash = path.find_last_of(L"\\/");
-        if (slash == std::wstring::npos) return nullptr;
-        path.resize(slash);
-    }
-    const std::wstring logPath = path + L"\\red4ext\\logs\\HeadTrackingAim.log";
-
-    // Rotate one generation per launch. The two 3s heartbeats alone add about
-    // 325 KB per hour of play, so appending across every session the mod has
-    // ever run buries the startup chain a user is asked to read. One previous
-    // generation is kept because the session worth diagnosing is usually the
-    // one that just crashed, and the user relaunches before sending it.
-    MoveFileExW(logPath.c_str(),
-                (path + L"\\red4ext\\logs\\HeadTrackingAim.prev.log").c_str(),
-                MOVEFILE_REPLACE_EXISTING);
-
-    g_logFile = _wfopen(logPath.c_str(), L"w");
-    if (g_logFile) {
-        SYSTEMTIME st;
-        GetLocalTime(&st);
-        fprintf(g_logFile,
-                "=== HeadTrackingAim log opened %04d-%02d-%02d %02d:%02d:%02d ===\n",
-                st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-        fflush(g_logFile);
-    }
-    return g_logFile;
+    path.resize(path.find_last_of(L"\\/"));
+    return path + L"\\HeadTracking.log";
 }
 
 void WriteLog(const char* level, const char* msg) {
     OutputDebugStringA(msg);
     OutputDebugStringA("\n");
-
-    std::lock_guard<std::mutex> lock(g_logMutex);
-    FILE* f = OpenLogFile();
-    if (!f) return;
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    fprintf(f, "[%02d:%02d:%02d.%03d] [%s] %s\n",
-            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, level, msg);
-    fflush(f);
+    cameraunlock::logging::Line("[%s] %s", level, msg);
 }
+
 } // namespace
+
+void Log_Open() {
+    cameraunlock::logging::Open(LogPathBesideExe());
+}
+
+void Log_Close() {
+    cameraunlock::logging::Close();
+}
 
 void LogInfo(const char* format, ...) {
     char buffer[512];

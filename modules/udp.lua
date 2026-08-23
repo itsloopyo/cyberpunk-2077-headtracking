@@ -91,8 +91,9 @@ function TrackingInput:init()
        type(Game.HeadTrackingPushState) ~= "function" or
        type(Game.HeadTrackingPushRicochetState) ~= "function" then
         error("[HeadTracking] FATAL: the native plugin's script functions are missing. " ..
-              "Check that red4ext/plugins/HeadTrackingAim.dll is installed and see " ..
-              "red4ext/logs/ for why it did not load.")
+              "Check that red4ext/plugins/HeadTrackingAim.dll is installed. If " ..
+              "HeadTracking.log is missing beside the game EXE the plugin never " ..
+              "loaded; red4ext/logs/red4ext.log says why.")
     end
 
     self.initialized = true

@@ -27,7 +27,7 @@ When this hook is live:
 - `ViewMatrixFn` typedef — adjust if the real signature has extra args.
 - `ApplyHeadRotationToMatrix` — row-major 4x4 assumed; swap indices if heartbeat log shows wrong axis.
 
-The scaffold already attaches via the RED4ext SDK, reads the head quaternion out of shared state, and writes a heartbeat to `red4ext/logs/HeadTrackingAim.log` every 3 seconds. Kill-switch semantics: if offset stays `0`, the hook refuses to attach, `camera_hook_active` stays `false`, and Lua falls back to `SetLocalOrientation` — i.e. regressions are safe.
+The scaffold already attaches via the RED4ext SDK, reads the head quaternion out of shared state, and writes a heartbeat to `bin/x64/HeadTracking.log` (rotated per launch) when the picture changes, and at least every 5 minutes. Kill-switch semantics: if offset stays `0`, the hook refuses to attach, `camera_hook_active` stays `false`, and Lua falls back to `SetLocalOrientation`, i.e. regressions are safe.
 
 ### Discovery workflow
 
@@ -48,7 +48,7 @@ The scaffold already attaches via the RED4ext SDK, reads the head quaternion out
 
 ### Checklist when the hook lands
 
-- `red4ext/logs/HeadTrackingAim.log` shows `view-matrix hook attached at 0x...`
+- `bin/x64/HeadTracking.log` shows `view-matrix hook attached at 0x...`
 - Heartbeat log lines appear every ~3s with `fires > 0` and `inject=yes` during gameplay.
 - CET console shows `[HeadTracking:AIM] native camera hook active` (Lua detected the flag).
 - With head turned, bullet impact is on the *in-game crosshair* (the offset reticle drawn by `modules/crosshair.lua`), not the centre of the screen.

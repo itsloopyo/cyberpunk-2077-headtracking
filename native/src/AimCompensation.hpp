@@ -30,6 +30,11 @@ inline bool IsNormalizedDirection(float x, float y, float z) {
     return mag > 0.9f && mag < 1.1f;
 }
 
+// Opens <game>\bin\x64\HeadTracking.log, rotating the previous session to
+// HeadTracking.prev.log. Call once at plugin load, before anything else logs.
+void Log_Open();
+void Log_Close();
+
 void LogInfo(const char* format, ...);
 void LogWarning(const char* format, ...);
 void LogError(const char* format, ...);

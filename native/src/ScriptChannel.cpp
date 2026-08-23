@@ -3,6 +3,7 @@
 #include "ScriptChannel.hpp"
 
 #include <RED4ext/RED4ext.hpp>
+#include <RED4ext/CString.hpp>
 #include <RED4ext/RTTISystem.hpp>
 #include <RED4ext/Scripting/Functions.hpp>
 #include <RED4ext/Scripting/Utils.hpp>
@@ -275,6 +276,19 @@ void PushRicochetState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame,
     if (aOut) *aOut = true;
 }
 
+// The CET half's init result is the single most common answer to a "no head
+// tracking" report, and it used to be reachable only through CET's own
+// scripting.log - a second file, in a third place, that we had to ask for.
+// This lets the Lua mod write its lifecycle lines into the same
+// HeadTracking.log the native half uses.
+void ScriptLog(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame,
+               void*, int64_t) {
+    RED4ext::CString text;
+    RED4ext::GetParameter(aFrame, &text);
+    ++aFrame->code;
+    LogInfo("[CET] %s", text.c_str());
+}
+
 void RegisterFunctions() {
     auto* rtti = RED4ext::CRTTISystem::Get();
 
@@ -334,10 +348,33 @@ void RegisterFunctions() {
     LogInfo("[ScriptChannel] registered pose and ricochet state functions");
 }
 
+// Registered from the POST-register callback, not the one above. `String` is a
+// class type the engine registers alongside everything else, so during the
+// register pass CRTTISystem::GetType("String") still returns null, AddParam
+// silently drops the parameter, and the function reaches Lua declaring zero
+// arguments - every call then fails with "requires 0 parameter(s)". The pose
+// functions above only take Float/Bool/Uint32, which are fundamentals present
+// from the start, which is why they work where they are.
+void RegisterLogFunction() {
+    auto* rtti = RED4ext::CRTTISystem::Get();
+
+    auto* scriptLog = RED4ext::CGlobalFunction::Create(
+        "HeadTrackingLog", "HeadTrackingLog", &ScriptLog);
+    scriptLog->flags.isNative = true;
+    if (!scriptLog->AddParam("String", "text")) {
+        LogError("[ScriptChannel] String type unavailable - HeadTrackingLog not registered, "
+                 "the CET mod's lines will not reach this log");
+        return;
+    }
+    rtti->RegisterFunction(scriptLog);
+    LogInfo("[ScriptChannel] registered the script log function");
+}
+
 } // namespace
 
 void ScriptChannel_Register() {
     RED4ext::CRTTISystem::Get()->AddRegisterCallback(&RegisterFunctions);
+    RED4ext::CRTTISystem::Get()->AddPostRegisterCallback(&RegisterLogFunction);
 }
 
 uint64_t ScriptChannel_MsSinceLastPush() {

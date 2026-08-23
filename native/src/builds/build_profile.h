@@ -56,6 +56,13 @@ struct OffsetTable {
     uintptr_t RicochetEffectExecute;
     uintptr_t PhysicalRayExecute;
     uintptr_t PhysicalRayNormaliseCall;
+    // The two sites inside the smart weapon's camera-transform builder that ask
+    // lever A for the camera orientation. They are return addresses, not
+    // function entries: the peel is selected by WHO asked, so only the smart
+    // weapon's targeting sees a head-free camera. Identified by the caller
+    // histogram - they appear only while a smart weapon is equipped.
+    uintptr_t SmartGunCameraCallA;
+    uintptr_t SmartGunCameraCallB;
 };
 
 struct BuildProfile {

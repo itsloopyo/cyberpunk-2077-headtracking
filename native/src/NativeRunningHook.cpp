@@ -40,6 +40,14 @@ RED4ext::v1::GameState s_state{};
 
 uint64_t s_lastLogMs = 0;
 uint32_t s_prevLogCount = 0;
+// Last reported values of the fields worth a line. `head=` and the frame
+// counter move every frame, so they are carried by the line but never gate it.
+void*    s_loggedCam = nullptr;
+int      s_loggedCamOff = -1;
+int      s_loggedGate = -1;
+int      s_loggedAds = -1;
+bool     s_loggedAlive = false;
+uint64_t s_lastLiveLogMs = 0;
 bool     s_enterFired = false;
 uint64_t s_firstRunningMs = 0;
 uint64_t s_lastNoScriptWarnMs = 0;
@@ -361,25 +369,46 @@ bool OnUpdate(RED4ext::CGameApplication*) {
         // per-renderable-entity transform builder, not per-camera).
         // All ring data was noise. See DECOUPLING.md.
         //
+        // Heartbeat on a 30s wall clock, and only when the diagnostic picture
+        // actually changed: at 3s unconditional this was ~1200 lines an hour of
+        // a line whose interesting half (cam pointer, offset, CET gate, ADS)
+        // does not move once gameplay settles, which buried the startup chain a
+        // user is asked to read. A 5-minute liveness line keeps a quiet log
+        // proving the per-frame callback is still firing.
         const uint64_t now = GetTickCount64();
         if (s_lastLogMs == 0) {
             s_lastLogMs = now;
             s_prevLogCount = w->native_running_frame;
-        } else if ((now - s_lastLogMs) > 3000) {
+        } else if ((now - s_lastLogMs) > 30000) {
             const uint64_t elapsedMs = now - s_lastLogMs;
             const uint32_t delta = w->native_running_frame - s_prevLogCount;
             const double hz = (elapsedMs > 0) ? (delta * 1000.0 / elapsedMs) : 0.0;
-            LogInfo("[HeadTrackingAim] NativeRunningHook heartbeat: frame=%u (+%u in %llums = %.1f Hz) "
-                    "cam=%p cam_ori_off=+0x%X cet_gate=%s ads=%d head=%.1fdeg",
-                    w->native_running_frame, delta,
-                    (unsigned long long)elapsedMs, hz,
-                    (void*)::g_camInstance,
-                    ::g_camOrientationOffset,
-                    ScriptChannel_HasEverPushed()
-                        ? (ScriptChannel_LastPushEnabled() ? "open" : "SHUT")
-                        : "none",
-                    ScriptChannel_LastPushIsAds() ? 1 : 0,
-                    ScriptChannel_LastPushHeadDegrees());
+            const int gateState = !ScriptChannel_HasEverPushed() ? 0
+                                  : (ScriptChannel_LastPushEnabled() ? 1 : 2);
+            const char* gate = gateState == 0 ? "none" : (gateState == 1 ? "open" : "SHUT");
+            const int ads = ScriptChannel_LastPushIsAds() ? 1 : 0;
+            const bool alive = delta > 0;
+            const bool changed = ::g_camInstance != s_loggedCam ||
+                                 ::g_camOrientationOffset != s_loggedCamOff ||
+                                 gateState != s_loggedGate ||
+                                 ads != s_loggedAds ||
+                                 alive != s_loggedAlive;
+            if (changed || (now - s_lastLiveLogMs) > 300000) {
+                LogInfo("[HeadTrackingAim] NativeRunningHook heartbeat: frame=%u (+%u in %llums = %.1f Hz) "
+                        "cam=%p cam_ori_off=+0x%X cet_gate=%s ads=%d head=%.1fdeg",
+                        w->native_running_frame, delta,
+                        (unsigned long long)elapsedMs, hz,
+                        (void*)::g_camInstance,
+                        ::g_camOrientationOffset,
+                        gate, ads,
+                        ScriptChannel_LastPushHeadDegrees());
+                s_lastLiveLogMs = now;
+                s_loggedCam = ::g_camInstance;
+                s_loggedCamOff = ::g_camOrientationOffset;
+                s_loggedGate = gateState;
+                s_loggedAds = ads;
+                s_loggedAlive = alive;
+            }
             s_lastLogMs = now;
             s_prevLogCount = w->native_running_frame;
 

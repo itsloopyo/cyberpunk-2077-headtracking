@@ -31,11 +31,13 @@
 #include "AimGetterHook.hpp"
 
 #include <Windows.h>
+#include <intrin.h>
 
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 
 #include "ModuleGuard.hpp"
 #include "NativeRunningHook.hpp"
@@ -67,6 +69,8 @@ namespace {
 // builds/build_profile.h. They are zero on a build we have not derived them
 // against, and each lever checks for that before it touches anything.
 inline uintptr_t GetWorldOrientationRva() { return builds::ActiveProfile().Offsets.GetWorldOrientation; }
+inline uintptr_t SmartGunCallARva() { return builds::ActiveProfile().Offsets.SmartGunCameraCallA; }
+inline uintptr_t SmartGunCallBRva() { return builds::ActiveProfile().Offsets.SmartGunCameraCallB; }
 inline uintptr_t GetWorldTransformRva()   { return builds::ActiveProfile().Offsets.GetWorldTransform; }
 inline uintptr_t FireNormaliseCallRva()   { return builds::ActiveProfile().Offsets.FireNormaliseCall; }
 inline uintptr_t NormaliseFnRva()         { return builds::ActiveProfile().Offsets.NormaliseFn; }
@@ -108,13 +112,125 @@ constexpr float kTestYawRadians = 0.785398f;  // 45 degrees
 
 std::atomic<uint32_t> s_mode{kModeInstrument};
 
+// Caller histogram for the camera-orientation answers (instrument mode).
+//
+// Every consumer that asks for the camera orientation shows up here as the RVA
+// of its call site, so a system whose behaviour follows the head - the smart
+// weapon targeting cone, for one - can be identified by equipping the weapon
+// that drives it and reading which call site appears. Only calls whose answer
+// actually WAS the camera orientation (dot >= kCamMatchDot) are recorded, which
+// cuts the generic transform getter's half a million calls a second down to the
+// handful that matter. Counts are per heartbeat window so the log reads as
+// "who asked in the last 30 seconds", making an A/B by equipped weapon legible.
+constexpr size_t kCallerSlots = 48;
+struct CallerSlot {
+    std::atomic<uintptr_t> rva{0};
+    std::atomic<uint32_t>  hits{0};
+};
+CallerSlot s_callersA[kCallerSlots];
+CallerSlot s_callersB[kCallerSlots];
+
+void RecordCaller(CallerSlot* table, void* returnAddress) {
+    const uintptr_t base = modguard::ExeBase();
+    if (!base || !returnAddress) return;
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(returnAddress);
+    if (addr < base) return;
+    const uintptr_t rva = addr - base;
+
+    for (size_t probe = 0; probe < kCallerSlots; ++probe) {
+        const size_t i = (static_cast<size_t>(rva >> 4) + probe) % kCallerSlots;
+        uintptr_t held = table[i].rva.load(std::memory_order_relaxed);
+        if (held == rva) {
+            table[i].hits.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        if (held == 0) {
+            uintptr_t expected = 0;
+            if (table[i].rva.compare_exchange_strong(expected, rva,
+                                                     std::memory_order_relaxed)) {
+                table[i].hits.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            if (table[i].rva.load(std::memory_order_relaxed) == rva) {
+                table[i].hits.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+    }
+    // Table full: the window's picture is already complete enough to read.
+}
+
+// Rank the busiest call sites this window, then clear so the next window
+// stands on its own.
+constexpr int kCallerRanks = 8;
+
+struct CallerCensus {
+    uintptr_t rva[kCallerRanks] = {0};
+    uint32_t  hits[kCallerRanks] = {0};
+    int       count = 0;
+};
+
+CallerCensus DrainCallers(CallerSlot* table) {
+    CallerCensus census;
+    for (int rank = 0; rank < kCallerRanks; ++rank) {
+        size_t best = kCallerSlots;
+        uint32_t bestHits = 0;
+        for (size_t i = 0; i < kCallerSlots; ++i) {
+            const uint32_t hits = table[i].hits.load(std::memory_order_relaxed);
+            if (hits > bestHits) { bestHits = hits; best = i; }
+        }
+        if (best == kCallerSlots) break;
+        census.rva[census.count]  = table[best].rva.load(std::memory_order_relaxed);
+        census.hits[census.count] = bestHits;
+        ++census.count;
+        table[best].hits.store(0, std::memory_order_relaxed);
+        table[best].rva.store(0, std::memory_order_relaxed);
+    }
+    for (size_t i = 0; i < kCallerSlots; ++i) {
+        table[i].hits.store(0, std::memory_order_relaxed);
+        table[i].rva.store(0, std::memory_order_relaxed);
+    }
+    return census;
+}
+
+// The census is a reverse-engineering instrument, so it earns a line in a
+// shipped log only when it says something new. The busiest call sites settle
+// within seconds of entering gameplay and then repeat for the rest of the
+// session. Compare the RANKED RVAs and stay silent while they hold; the hit
+// counts move every window and would defeat the gate.
+bool SameCallers(const CallerCensus& a, const CallerCensus& b) {
+    if (a.count != b.count) return false;
+    for (int i = 0; i < a.count; ++i) {
+        if (a.rva[i] != b.rva[i]) return false;
+    }
+    return true;
+}
+
+void LogCallers(const char* label, const CallerCensus& census) {
+    char line[512];
+    int  used = 0;
+    line[0] = 0;
+    for (int i = 0; i < census.count; ++i) {
+        const int written = snprintf(line + used, sizeof(line) - used,
+                                     "%s+0x%llX=%u", used ? " " : "",
+                                     (unsigned long long)census.rva[i], census.hits[i]);
+        if (written <= 0 || used + written >= (int)sizeof(line)) break;
+        used += written;
+    }
+    if (used > 0) LogInfo("[AimGetter] %s callers: %s", label, line);
+}
+
+std::atomic<uint32_t> s_smartGunPeels{0};
 std::atomic<uint32_t> s_callsA{0}, s_callsB{0}, s_callsC{0};
 std::atomic<uint32_t> s_matchA{0}, s_matchB{0}, s_matchC{0};
 std::atomic<uint32_t> s_overrides{0};
 uint32_t              s_loggedA = 0, s_loggedB = 0, s_loggedC = 0;
-uint64_t              s_lastHeartbeatMs = 0;
+uint64_t              s_lastWindowMs = 0;
 uint32_t              s_lastCallsA = 0, s_lastCallsB = 0, s_lastCallsC = 0;
 uint32_t              s_lastMode = 0xFFFFFFFFu;
+uint64_t              s_lastLiveLogMs = 0;
+bool                  s_lastMoving[3] = {false, false, false};
+CallerCensus          s_lastCensusA, s_lastCensusB;
 
 using GetWorldOrientationFn = void* (*)(void*, void*);
 using GetWorldTransformFn   = uintptr_t (*)(void*, void*, void*);
@@ -324,22 +440,53 @@ bool HandleCameraQuat(void* outQuat, bool peel, float* dotOut, bool testYaw = fa
     return rewrote;
 }
 
+// True when this camera-orientation answer is going to the smart weapon's
+// targeting, which decides which enemies are inside its cone and holds the
+// locks it already has.
+//
+// The cone is centred on whatever orientation it reads here. Head tracking
+// turns the camera, so an unpeeled answer turns the cone with the player's
+// head: an enemy they are still AIMING at leaves the cone as they look away
+// and the game plays its unlock animation. Peeling here leaves the cone on the
+// weapon's aim, where vanilla puts it, while the view stays free - the same
+// separation the shot path already gets, applied to target selection.
+bool IsSmartGunCameraRead(void* returnAddress) {
+    const uintptr_t callA = SmartGunCallARva();
+    const uintptr_t callB = SmartGunCallBRva();
+    if (!callA && !callB) return false;
+    const uintptr_t base = modguard::ExeBase();
+    if (!base || !returnAddress) return false;
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(returnAddress);
+    if (addr < base) return false;
+    const uintptr_t rva = addr - base;
+    return rva == callA || rva == callB;
+}
+
 void* Hook_GetWorldOrientation(void* rcx, void* rdx) {
     void* ret = s_origA ? s_origA(rcx, rdx) : nullptr;
     const uint32_t mode = s_mode.load(std::memory_order_relaxed);
     if (mode == kModeOff) return ret;
 
     s_callsA.fetch_add(1, std::memory_order_relaxed);
-    const bool peel = (mode == kModePeelA) && InFireWindow();
+    // Not gated on the fire window: target selection runs every frame, and a
+    // cone that only stops following the head while the trigger is down would
+    // drop the locks the moment the player stops firing.
+    const bool smartGun = IsSmartGunCameraRead(_ReturnAddress());
+    const bool peel = smartGun || ((mode == kModePeelA) && InFireWindow());
     const bool testYaw = (mode == kModeTestYawA) && InFireWindow();
     float dot = 0.0f;
     const bool rewrote = HandleCameraQuat(rdx, peel, &dot, testYaw);
-    if (dot >= kCamMatchDot) s_matchA.fetch_add(1, std::memory_order_relaxed);
+    if (dot >= kCamMatchDot) {
+        s_matchA.fetch_add(1, std::memory_order_relaxed);
+        RecordCaller(s_callersA, _ReturnAddress());
+    }
 
     if (s_loggedA < 8 && dot >= kCamMatchDot) {
         ++s_loggedA;
-        LogInfo("[AimGetter] A +0x802390 dot=%.5f peel=%d rewrote=%d", dot, peel ? 1 : 0, rewrote ? 1 : 0);
+        LogInfo("[AimGetter] A +0x802390 dot=%.5f peel=%d smartgun=%d rewrote=%d",
+                dot, peel ? 1 : 0, smartGun ? 1 : 0, rewrote ? 1 : 0);
     }
+    if (smartGun && rewrote) s_smartGunPeels.fetch_add(1, std::memory_order_relaxed);
     return ret;
 }
 
@@ -353,7 +500,10 @@ uintptr_t Hook_GetWorldTransform(void* rcx, void* rdx, void* r8) {
     void* outQuat = r8 ? reinterpret_cast<uint8_t*>(r8) + 0x10 : nullptr;
     float dot = 0.0f;
     const bool rewrote = HandleCameraQuat(outQuat, peel, &dot);
-    if (dot >= kCamMatchDot) s_matchB.fetch_add(1, std::memory_order_relaxed);
+    if (dot >= kCamMatchDot) {
+        s_matchB.fetch_add(1, std::memory_order_relaxed);
+        RecordCaller(s_callersB, _ReturnAddress());
+    }
 
     if (s_loggedB < 8 && dot >= kCamMatchDot) {
         ++s_loggedB;
@@ -585,32 +735,58 @@ void AimGetterHook_Tick() {
         w->aim_getter_overrides = s_overrides.load(std::memory_order_relaxed);
     }
 
-    // Heartbeat on a 30s wall clock, and only when a counter actually moved.
-    // A shipped build that is not firing sits silent instead of writing two
-    // lines every five seconds for the life of the session.
+    // One 30s wall-clock window drives both the heartbeat and the caller
+    // census, and each writes a line only when its own picture changed. A
+    // shipped build that is not firing therefore sits silent instead of
+    // writing four lines every five seconds for the life of the session.
     const uint64_t now = GetTickCount64();
-    if (s_lastHeartbeatMs != 0 && now - s_lastHeartbeatMs < 30000) return;
-    const uint64_t elapsed = s_lastHeartbeatMs ? (now - s_lastHeartbeatMs) : 30000;
+    if (s_lastWindowMs != 0 && now - s_lastWindowMs < 30000) return;
+    const uint64_t elapsed = s_lastWindowMs ? (now - s_lastWindowMs) : 30000;
+    s_lastWindowMs = now;
+
+    const CallerCensus censusA = DrainCallers(s_callersA);
+    const CallerCensus censusB = DrainCallers(s_callersB);
+    if (!SameCallers(censusA, s_lastCensusA)) {
+        LogCallers("A", censusA);
+        s_lastCensusA = censusA;
+    }
+    if (!SameCallers(censusB, s_lastCensusB)) {
+        LogCallers("B", censusB);
+        s_lastCensusB = censusB;
+    }
 
     const uint32_t a = s_callsA.load(std::memory_order_relaxed);
     const uint32_t b = s_callsB.load(std::memory_order_relaxed);
     const uint32_t c = s_callsC.load(std::memory_order_relaxed);
     const uint32_t mode = s_mode.load(std::memory_order_relaxed);
-    if (a == s_lastCallsA && b == s_lastCallsB && c == s_lastCallsC &&
-        mode == s_lastMode) {
-        return;
-    }
-    s_lastHeartbeatMs = now;
 
-    LogInfo("[AimGetter] heartbeat: mode=%u A=%u (%.1f/s match=%u) B=%u (%.1f/s match=%u) "
-            "C=%u (%.1f/s match=%u) overrides=%u",
-            mode,
-            a, (a - s_lastCallsA) * 1000.0 / elapsed, s_matchA.load(std::memory_order_relaxed),
-            b, (b - s_lastCallsB) * 1000.0 / elapsed, s_matchB.load(std::memory_order_relaxed),
-            c, (c - s_lastCallsC) * 1000.0 / elapsed, s_matchC.load(std::memory_order_relaxed),
-            s_overrides.load(std::memory_order_relaxed));
+    // A, B and C tick on every frame of ordinary gameplay, so comparing their
+    // VALUES reported the same line every 30s for the whole session. Report the
+    // mode and whether each lever is moving at all; the 5-minute liveness line
+    // carries the running totals, which is where growth shows up.
+    const bool moving[3] = {a != s_lastCallsA, b != s_lastCallsB, c != s_lastCallsC};
+    const bool changed = mode != s_lastMode ||
+                         moving[0] != s_lastMoving[0] ||
+                         moving[1] != s_lastMoving[1] ||
+                         moving[2] != s_lastMoving[2];
+    // Counters are rebased every window whether or not a line goes out, so the
+    // rates below always describe the window just closed rather than however
+    // many silent windows preceded it.
+    if (changed || now - s_lastLiveLogMs > 300000) {
+        s_lastLiveLogMs = now;
+        LogInfo("[AimGetter] heartbeat: mode=%u A=%u (%.1f/s match=%u) B=%u (%.1f/s match=%u) "
+                "C=%u (%.1f/s match=%u) overrides=%u smartPeels=%u",
+                mode,
+                a, (a - s_lastCallsA) * 1000.0 / elapsed, s_matchA.load(std::memory_order_relaxed),
+                b, (b - s_lastCallsB) * 1000.0 / elapsed, s_matchB.load(std::memory_order_relaxed),
+                c, (c - s_lastCallsC) * 1000.0 / elapsed, s_matchC.load(std::memory_order_relaxed),
+                s_overrides.load(std::memory_order_relaxed),
+                s_smartGunPeels.load(std::memory_order_relaxed));
+    }
     s_lastCallsA = a; s_lastCallsB = b; s_lastCallsC = c; s_lastMode = mode;
+    s_lastMoving[0] = moving[0]; s_lastMoving[1] = moving[1]; s_lastMoving[2] = moving[2];
 }
+
 
 bool AimGetterHook_IsActive() {
     return s_started.load(std::memory_order_acquire);

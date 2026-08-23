@@ -76,15 +76,29 @@ local DebugLog = safeRequire("modules/debuglog")
 local Hotkeys = safeRequire("modules/hotkeys")
 local PoseInterpolator = safeRequire("modules/poseinterpolator")
 
--- Convenience: log to both console and file when DebugLog is available,
--- otherwise fall back to plain print so the mod still works if the log
--- module somehow failed to load.
-local function dlog(msg)
-    if DebugLog and DebugLog.write then
-        DebugLog.write(msg)
-    else
-        print(msg)
+-- Mod log: the CET console plus the native plugin's HeadTracking.log, which
+-- sits next to the game EXE. A "no head tracking" report has to be answerable
+-- from that one file, and the most common answer is a CET-side init failure
+-- that used to be visible only in CET's own scripting.log. The native function
+-- is registered when the game builds its RTTI registry, long before onInit, so
+-- a missing one means the plugin is not loaded at all - udp.lua's init says so
+-- with a proper message, and until then the console still has the line.
+local function mlog(msg)
+    print(msg)
+    -- pcall because this crosses into the native RTTI dispatcher, and an error
+    -- raised there escapes to CET's panic path, which abort()s the process. The
+    -- line has already reached the console by this point, so swallowing the
+    -- failure loses nothing a reader needs; the native side logs why it could
+    -- not register the function.
+    if type(Game.HeadTrackingLog) == "function" then
+        pcall(Game.HeadTrackingLog, msg)
     end
+end
+
+-- Verbose diagnostic stream. Muted unless DebugLog is switched on for an
+-- investigative session; goes to the mod folder, not to HeadTracking.log.
+local function dlog(msg)
+    if DebugLog and DebugLog.write then DebugLog.write(msg) end
 end
 
 -- Boundary guard for CET callbacks (onUpdate/onDraw/hotkey handlers).
@@ -123,6 +137,14 @@ local function _truncateYawDiag()
     if f then f:close() end
 end
 
+-- The smart-weapon bracket probe appends and is armed from the console, so
+-- without this its file was the one that carried over between sessions.
+local function _truncateSmartProbe()
+    if not BuiltinCrosshair or not BuiltinCrosshair.SMART_PROBE_PATH then return end
+    local f = io.open(BuiltinCrosshair.SMART_PROBE_PATH, "w")
+    if f then f:close() end
+end
+
 -- Per-callback log throttle: a per-frame Override that throws would otherwise
 -- fsync crash-trace.log 60x/sec. Always log the FIRST occurrence of a given
 -- callback name immediately, then at most once every 2s for that name.
@@ -145,7 +167,7 @@ local function _writeCrash(name, err)
         f:write(string.format("[%s] CAUGHT in %s: %s\n", os.date("%H:%M:%S"), name, tb))
         f:close()
     end
-    print("[HeadTracking] CAUGHT error in " .. tostring(name) .. ": " .. msg)
+    mlog("[HeadTracking] CAUGHT error in " .. tostring(name) .. ": " .. msg)
 end
 
 -- Wrap a callback so a throw is contained and logged instead of crashing the
@@ -228,6 +250,9 @@ local pose_interp = nil  -- Bridges low-rate tracker samples to render rate
 
 -- Debug frame counter for init.lua
 local init_debug_frame = 0
+-- The full init diagnostic repeats on the console but reaches HeadTracking.log
+-- exactly once per session; see the emit site.
+local init_diag_logged = false
 local INIT_DEBUG_INTERVAL = 120
 
 -- Periodic diagnostic state. Lines are gated behind DebugLog (off by
@@ -303,7 +328,7 @@ local function runInitStep(name, fn)
     if not ok then
         init_failure_step = name
         init_failure_error = tostring(err)
-        print("[HeadTracking:INIT] FAILED at step '" .. name .. "': " .. init_failure_error)
+        mlog("[HeadTracking:INIT] FAILED at step '" .. name .. "': " .. init_failure_error)
     end
 end
 
@@ -311,22 +336,23 @@ registerForEvent("onInit", function()
     if DebugLog and DebugLog.init then pcall(DebugLog.init) end
     _truncateCrashTrace()
     _truncateYawDiag()
-    dlog("[HeadTracking] Initializing...")
+    _truncateSmartProbe()
+    mlog("[HeadTracking] Initializing...")
 
     if #require_errors > 0 then
         for _, e in ipairs(require_errors) do
-            print("[HeadTracking:INIT] " .. e)
+            mlog("[HeadTracking:INIT] " .. e)
         end
         init_failure_step = "module-load"
         init_failure_error = require_errors[1]
-        print("[HeadTracking:INIT] Aborting init - fix the module load errors above.")
+        mlog("[HeadTracking:INIT] Aborting init - fix the module load errors above.")
         return
     end
 
     runInitStep("settings", function()
         settings = Settings.new()
         local loaded = settings:load()
-        print(loaded and "[HeadTracking] Settings loaded from config.json"
+        mlog(loaded and "[HeadTracking] Settings loaded from config.json"
                       or "[HeadTracking] Created default config.json")
         -- The few things a session starts in regardless of how the last one
         -- ended. Everything else, yaw_mode and ads_mode included, is persisted.
@@ -343,7 +369,7 @@ registerForEvent("onInit", function()
     if Hotkeys and Hotkeys.ensure then
         local ok, err = pcall(Hotkeys.ensure)
         if not ok then
-            print("[HeadTracking:Hotkeys] sanity check errored (non-fatal): " .. tostring(err))
+            mlog("[HeadTracking:Hotkeys] sanity check errored (non-fatal): " .. tostring(err))
         end
     end
 
@@ -354,19 +380,19 @@ registerForEvent("onInit", function()
 
     runInitStep("camera", function()
         camera = Camera.new(settings)
-        print("[HeadTracking] Camera controller initialized")
+        mlog("[HeadTracking] Camera controller initialized")
     end)
 
     runInitStep("state", function()
         state = State.new()
         state:init(camera, settings)
-        print("[HeadTracking] State tracker initialized")
+        mlog("[HeadTracking] State tracker initialized")
     end)
 
     runInitStep("ui", function()
         ui = UI.new()
         ui:setState(state)
-        print("[HeadTracking] UI initialized")
+        mlog("[HeadTracking] UI initialized")
     end)
 
     runInitStep("aim", function()
@@ -379,14 +405,14 @@ registerForEvent("onInit", function()
         -- is pre-init because the observer fires later.
         if udp and aim.setUdp then
             aim:setUdp(udp)
-            print("[HeadTracking] Aim->UDP bridge wired")
+            mlog("[HeadTracking] Aim->UDP bridge wired")
         end
-        print("[HeadTracking] Aim compensation initialized")
+        mlog("[HeadTracking] Aim compensation initialized")
     end)
 
     runInitStep("perf", function()
         perf = Perf.new()
-        print("[HeadTracking] Performance monitor initialized")
+        mlog("[HeadTracking] Performance monitor initialized")
     end)
 
     runInitStep("pose_interp", function()
@@ -394,7 +420,7 @@ registerForEvent("onInit", function()
             error("PoseInterpolator module failed to load")
         end
         pose_interp = PoseInterpolator.new()
-        print("[HeadTracking] Pose interpolator initialized")
+        mlog("[HeadTracking] Pose interpolator initialized")
     end)
 
     runInitStep("ads_pose", function()
@@ -409,7 +435,7 @@ registerForEvent("onInit", function()
         nativeUI:setCamera(camera)
         nativeUI:setUI(ui)
         if nativeUI:init() then
-            print("[HeadTracking] Native Settings UI integration enabled")
+            mlog("[HeadTracking] Native Settings UI integration enabled")
         end
     end)
 
@@ -420,10 +446,10 @@ registerForEvent("onInit", function()
             crosshair = BuiltinCrosshair.new(settings, camera)
         end)
         if ok then
-            print("[HeadTracking] Built-in crosshair driver initialized")
+            mlog("[HeadTracking] Built-in crosshair driver initialized")
         else
             crosshair = nil
-            print("[HeadTracking] Built-in crosshair driver FAILED (non-fatal): " .. tostring(err))
+            mlog("[HeadTracking] Built-in crosshair driver FAILED (non-fatal): " .. tostring(err))
         end
     end
 
@@ -435,15 +461,15 @@ registerForEvent("onInit", function()
             ads_reticle = AdsReticle.new(crosshair)
         end)
         if ok then
-            print("[HeadTracking] ADS aim marker initialized")
+            mlog("[HeadTracking] ADS aim marker initialized")
         else
             ads_reticle = nil
-            print("[HeadTracking] ADS aim marker FAILED (non-fatal): " .. tostring(err))
+            mlog("[HeadTracking] ADS aim marker FAILED (non-fatal): " .. tostring(err))
         end
     end
 
     if init_failure_error then
-        print("[HeadTracking] Initialization ABORTED - see step '" .. tostring(init_failure_step) .. "' error above")
+        mlog("[HeadTracking] Initialization ABORTED - see step '" .. tostring(init_failure_step) .. "' error above")
         return
     end
 
@@ -453,7 +479,7 @@ registerForEvent("onInit", function()
         ui:showSuccess("Head Tracking: Ready", 3.0)
     end
 
-    print("[HeadTracking] Initialization complete")
+    mlog("[HeadTracking] Initialization complete")
 end)
 
 -- Lifecycle: Called every frame
@@ -479,19 +505,26 @@ local function onUpdateImpl(deltaTime)
 
     if not state or not udp or not camera or not aim or not pose_interp or not ads_pose then
         if (init_debug_frame % INIT_DEBUG_INTERVAL) == 1 then
-            dlog("[HeadTracking:INIT] ===== init not complete; full diagnostic =====")
+            -- This block is the answer to most "no head tracking" reports, so
+            -- the first pass goes to HeadTracking.log. It repeats on an
+            -- interval for the console (where it scrolls away); repeating it
+            -- into the file would be the same paragraph every few seconds for
+            -- as long as the session lasts.
+            local out = init_diag_logged and dlog or mlog
+            init_diag_logged = true
+            out("[HeadTracking:INIT] ===== init not complete; full diagnostic =====")
             for i = 1, #require_errors do
-                dlog("[HeadTracking:INIT]   require_err[" .. i .. "]: " .. tostring(require_errors[i]))
+                out("[HeadTracking:INIT]   require_err[" .. i .. "]: " .. tostring(require_errors[i]))
             end
             if init_failure_error then
-                dlog("[HeadTracking:INIT]   init failed at step '" .. tostring(init_failure_step) ..
-                      "': " .. tostring(init_failure_error))
+                out("[HeadTracking:INIT]   init failed at step '" .. tostring(init_failure_step) ..
+                    "': " .. tostring(init_failure_error))
             end
-            dlog("[HeadTracking:INIT]   modules: state=" .. tostring(state ~= nil) ..
-                 " udp=" .. tostring(udp ~= nil) ..
-                 " camera=" .. tostring(camera ~= nil) ..
-                 " aim=" .. tostring(aim ~= nil))
-            dlog("[HeadTracking:INIT] =================================================")
+            out("[HeadTracking:INIT]   modules: state=" .. tostring(state ~= nil) ..
+                " udp=" .. tostring(udp ~= nil) ..
+                " camera=" .. tostring(camera ~= nil) ..
+                " aim=" .. tostring(aim ~= nil))
+            out("[HeadTracking:INIT] =================================================")
         end
         return
     end
@@ -694,7 +727,7 @@ registerForEvent("onDraw", guarded("onDraw", onDrawImpl))
 
 -- Lifecycle: Called on shutdown
 registerForEvent("onShutdown", function()
-    print("[HeadTracking] Shutting down...")
+    mlog("[HeadTracking] Shutting down...")
 
     -- Shutdown Native Settings integration (unsubscribes from observers)
     if nativeUI then
@@ -709,7 +742,7 @@ registerForEvent("onShutdown", function()
         settings:save()
     end
 
-    print("[HeadTracking] Shutdown complete")
+    mlog("[HeadTracking] Shutdown complete")
 end)
 
 -- Resolve a tri-state console-toggle argument: nil flips the current value,
@@ -768,11 +801,11 @@ function handleToggleTracking()
 
     if enabled then
         ui:showSuccess("Head Tracking: ENABLED", 2.0)
-        dlog("[HeadTracking] Enabled")
+        mlog("[HeadTracking] Enabled")
     else
         if camera then camera:reset() end
         ui:showWarning("Head Tracking: DISABLED", 2.0)
-        dlog("[HeadTracking] Disabled")
+        mlog("[HeadTracking] Disabled")
     end
 end
 -- End / Ctrl+Shift+Y are polled natively in ScriptChannel.cpp. CET registerHotkey
@@ -811,7 +844,7 @@ function handleCycleMode()
     end
 
     ui:showSuccess(label, 2.0)
-    print("[HeadTracking] tracking mode -> rot=" .. tostring(next_rot) .. " pos=" .. tostring(next_pos))
+    mlog("[HeadTracking] tracking mode -> rot=" .. tostring(next_rot) .. " pos=" .. tostring(next_pos))
 end
 -- PageUp / Ctrl+Shift+G are polled natively in ScriptChannel.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build, so do not bind
@@ -835,7 +868,7 @@ function handleToggleYawMode()
         and "Yaw Mode: WORLD (horizon-locked)"
         or  "Yaw Mode: LOCAL (camera-relative)"
     ui:showSuccess(label, 2.0)
-    print("[HeadTracking] yaw_mode -> " .. next_mode)
+    mlog("[HeadTracking] yaw_mode -> " .. next_mode)
 end
 -- PageDown / Ctrl+Shift+H are polled natively in ScriptChannel.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build, so do not bind
@@ -872,7 +905,7 @@ function handleCycleAdsMode()
     if state then state:refresh() end
 
     ui:showSuccess(ADS_MODE_LABELS[next_mode], 2.5)
-    print("[HeadTracking] ads_mode -> " .. next_mode)
+    mlog("[HeadTracking] ads_mode -> " .. next_mode)
 end
 -- Insert / Ctrl+Shift+U are polled natively in ScriptChannel.cpp, same as the
 -- other three.

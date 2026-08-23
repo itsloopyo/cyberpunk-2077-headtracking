@@ -133,8 +133,10 @@ local SMART_CHANNEL_MOVE_PX = 1.0
 -- console dump can sit unwritten for minutes while the game is up; this writes
 -- through open/append/close instead, which lands on disk immediately. It stops
 -- itself after SMART_PROBE_MAX_SNAPSHOTS so it can never grow without bound.
+-- Exported so init.lua truncates the same file it appends to.
 local SMART_PROBE_PATH = "HeadTracking-smart.log"
-local SMART_PROBE_MAX_SNAPSHOTS = 60
+BuiltinCrosshair.SMART_PROBE_PATH = SMART_PROBE_PATH
+local SMART_PROBE_MAX_SNAPSHOTS = 240
 local SMART_PROBE_INTERVAL_FRAMES = 30
 
 local function slog(msg)
@@ -1864,15 +1866,30 @@ function BuiltinCrosshair:_writeSmartTargets(dx, dy)
         if self._smart_probe_tick <= 0 then
             self._smart_probe_tick = SMART_PROBE_INTERVAL_FRAMES
             self._smart_probe_left = self._smart_probe_left - 1
+            local visible_count, placed_count = 0, 0
+            for i = 1, #list do
+                local vis = false
+                pcall(function() vis = list[i]:IsVisible() and true or false end)
+                if vis then visible_count = visible_count + 1 end
+                local l, t = 0, 0
+                pcall(function() local m = list[i]:GetMargin(); l, t = m.left or 0, m.top or 0 end)
+                if math_abs(l) > 1.0 or math_abs(t) > 1.0 then placed_count = placed_count + 1 end
+            end
             slog(string.format(
-                "brackets=%d roots=%d find_mode=%s chan=%s inherited=%s shove=(%.1f,%.1f)",
-                #list, #self:_entries(), tostring(self._smart_find_mode),
+                "brackets=%d visible=%d placed=%d roots=%d chan=%s inherited=%s shove=(%.1f,%.1f)",
+                #list, visible_count, placed_count, #self:_entries(),
                 tostring(self._smart_chan), tostring(self._smart_inherited), dx, dy))
             local logged = 0
             for i = 1, #list do
                 local vis = false
                 pcall(function() vis = list[i]:IsVisible() and true or false end)
-                if vis and logged < 4 then
+                local l, t = 0, 0
+                pcall(function() local m = list[i]:GetMargin(); l, t = m.left or 0, m.top or 0 end)
+                -- Log anything the engine has PLACED, visible or not: a bracket
+                -- that keeps its projected margin while turning invisible is the
+                -- engine hiding it (lock dropped or state changed); one that
+                -- stays visible while its margin runs far off is ours drifting.
+                if (vis or math_abs(l) > 1.0 or math_abs(t) > 1.0) and logged < 4 then
                     logged = logged + 1
                     slog(_smartWidgetLine(i, list[i]))
                 end

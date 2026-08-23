@@ -133,8 +133,8 @@ void Hook_Propagator(void* self, bool markDirty) {
     // repeats a line that says nothing: propagator injection is off in the
     // shipped config, which pins `injected` at 0 and leaves the cam pointer and
     // offset stable for the whole session. That was 30% of the log. Report a
-    // change the moment it happens, and otherwise keep a slow liveness line so
-    // a quiet log still proves the hook is firing.
+    // change the moment it happens, and otherwise keep a 5-minute liveness line
+    // so a quiet log still proves the hook is firing.
     const uint64_t now = GetTickCount64();
     const uint32_t injected = s_injected.load(std::memory_order_relaxed);
     const bool first = !s_haveLogged.load(std::memory_order_relaxed);
@@ -144,7 +144,7 @@ void Hook_Propagator(void* self, bool markDirty) {
                          g_camOrientationOffset != s_loggedOff.load(std::memory_order_relaxed);
     uint64_t last = s_lastLogMs.load(std::memory_order_relaxed);
     const uint64_t sinceLog = now - last;
-    if ((first || (changed && sinceLog >= 3000) || sinceLog >= 30000) &&
+    if ((first || (changed && sinceLog >= 3000) || sinceLog >= 300000) &&
         s_lastLogMs.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
         s_haveLogged.store(true, std::memory_order_relaxed);
         s_loggedInjected.store(injected, std::memory_order_relaxed);

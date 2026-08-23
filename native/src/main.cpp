@@ -23,6 +23,11 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
                                          const RED4ext::v1::Sdk* aSdk) {
     switch (aReason) {
     case RED4ext::v1::EMainReason::Load:
+        // First statement in the plugin: everything below logs, and the log has
+        // to be open (and the previous session rotated away) before it does.
+        Log_Open();
+        LogInfo("[HeadTrackingAim] plugin loading (RED4ext), log opened beside the game EXE");
+
         if (!g_sharedState.Init()) {
             LogError("[HeadTrackingAim] Failed to initialize shared memory");
             return false;
@@ -102,6 +107,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         g_sharedState.Shutdown();
         LogInfo("[HeadTrackingAim] Shared memory shutdown");
+        Log_Close();
         break;
     }
 
