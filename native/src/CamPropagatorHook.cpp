@@ -28,7 +28,15 @@ std::atomic<bool> s_hooked{false};
 std::atomic<uint32_t> s_calls{0};
 std::atomic<uint32_t> s_injected{0};
 std::atomic<uint32_t> s_skipped{0};
-uint64_t s_lastHeartbeatMs = 0;
+// The hook runs on several game threads at once, so the log gate has to be
+// claimed atomically. A plain timestamp updated after LogInfo lets every
+// thread pass the same check while the first one is still inside the file
+// write, and the identical line comes out once per thread.
+std::atomic<uint64_t> s_lastLogMs{0};
+std::atomic<bool>     s_haveLogged{false};
+std::atomic<uint32_t> s_loggedInjected{0};
+std::atomic<void*>    s_loggedCam{nullptr};
+std::atomic<int>      s_loggedOff{0};
 thread_local uint32_t t_depth = 0;
 
 inline bool IsValidUnitish(float x, float y, float z, float w) {
@@ -121,12 +129,30 @@ void Hook_Propagator(void* self, bool markDirty) {
         }
     }
 
+    // `calls` and `skipped` climb on every invocation, so a plain 3s heartbeat
+    // repeats a line that says nothing: propagator injection is off in the
+    // shipped config, which pins `injected` at 0 and leaves the cam pointer and
+    // offset stable for the whole session. That was 30% of the log. Report a
+    // change the moment it happens, and otherwise keep a slow liveness line so
+    // a quiet log still proves the hook is firing.
     const uint64_t now = GetTickCount64();
-    if (s_lastHeartbeatMs == 0 || now - s_lastHeartbeatMs > 3000) {
-        s_lastHeartbeatMs = now;
+    const uint32_t injected = s_injected.load(std::memory_order_relaxed);
+    const bool first = !s_haveLogged.load(std::memory_order_relaxed);
+    const bool changed = first ||
+                         injected != s_loggedInjected.load(std::memory_order_relaxed) ||
+                         g_camInstance != s_loggedCam.load(std::memory_order_relaxed) ||
+                         g_camOrientationOffset != s_loggedOff.load(std::memory_order_relaxed);
+    uint64_t last = s_lastLogMs.load(std::memory_order_relaxed);
+    const uint64_t sinceLog = now - last;
+    if ((first || (changed && sinceLog >= 3000) || sinceLog >= 30000) &&
+        s_lastLogMs.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
+        s_haveLogged.store(true, std::memory_order_relaxed);
+        s_loggedInjected.store(injected, std::memory_order_relaxed);
+        s_loggedCam.store(g_camInstance, std::memory_order_relaxed);
+        s_loggedOff.store(g_camOrientationOffset, std::memory_order_relaxed);
         LogInfo("[CamPropagator] heartbeat: calls=%u injected=%u skipped=%u cam=%p off=%d",
                 s_calls.load(std::memory_order_relaxed),
-                s_injected.load(std::memory_order_relaxed),
+                injected,
                 s_skipped.load(std::memory_order_relaxed),
                 g_camInstance,
                 g_camOrientationOffset);

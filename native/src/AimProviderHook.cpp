@@ -129,6 +129,14 @@ std::atomic<uint32_t> s_rejectedNoMatch{0};
 std::atomic<uint32_t> s_rejectedIdentity{0};
 uint32_t              s_logged = 0;
 uint64_t              s_lastHeartbeatMs = 0;
+uint64_t              s_lastLogMs = 0;
+bool                  s_haveLogged = false;
+uint32_t              s_loggedMode = 0;
+uint32_t              s_loggedAimCalls = 0;
+uint32_t              s_loggedOverrides = 0;
+uint32_t              s_loggedNoMatch = 0;
+uint32_t              s_loggedIdentity = 0;
+int                   s_loggedTop[3] = {-1, -1, -1};
 
 using quatmath::QuatMul;
 
@@ -456,13 +464,39 @@ void Heartbeat() {
         written += static_cast<size_t>(n);
     }
 
+    // Until the player fires, every counter here sits still and the busiest
+    // slots do not move, so a plain 5s heartbeat repeated one dead line for the
+    // whole session - 21% of the log. Log a change immediately, and otherwise
+    // keep a slow liveness line. The comparison uses the top slot INDICES, not
+    // their hit counts: the indices are what re-identifies the aim slot after a
+    // patch, while the counts tick constantly and would defeat the gate.
+    const uint32_t mode      = s_mode.load(std::memory_order_relaxed);
+    const uint32_t aimCalls  = s_aimCalls.load(std::memory_order_relaxed);
+    const uint32_t overrides = s_overrides.load(std::memory_order_relaxed);
+    const uint32_t noMatch   = s_rejectedNoMatch.load(std::memory_order_relaxed);
+    const uint32_t identity  = s_rejectedIdentity.load(std::memory_order_relaxed);
+    const bool changed = !s_haveLogged ||
+                         mode != s_loggedMode || aimCalls != s_loggedAimCalls ||
+                         overrides != s_loggedOverrides || noMatch != s_loggedNoMatch ||
+                         identity != s_loggedIdentity ||
+                         topIdx[0] != s_loggedTop[0] ||
+                         topIdx[1] != s_loggedTop[1] ||
+                         topIdx[2] != s_loggedTop[2];
+    if (!changed && now - s_lastLogMs < 30000) return;
+
     LogInfo("[AimProvider] heartbeat: mode=%u aimCalls=%u overrides=%u noMatch=%u identity=%u slots[%s]",
-            s_mode.load(std::memory_order_relaxed),
-            s_aimCalls.load(std::memory_order_relaxed),
-            s_overrides.load(std::memory_order_relaxed),
-            s_rejectedNoMatch.load(std::memory_order_relaxed),
-            s_rejectedIdentity.load(std::memory_order_relaxed),
-            slots);
+            mode, aimCalls, overrides, noMatch, identity, slots);
+
+    s_lastLogMs = now;
+    s_haveLogged = true;
+    s_loggedMode = mode;
+    s_loggedAimCalls = aimCalls;
+    s_loggedOverrides = overrides;
+    s_loggedNoMatch = noMatch;
+    s_loggedIdentity = identity;
+    s_loggedTop[0] = topIdx[0];
+    s_loggedTop[1] = topIdx[1];
+    s_loggedTop[2] = topIdx[2];
 }
 
 }  // namespace
