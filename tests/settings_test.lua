@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 itsloopyo
 -- Settings module self-test. Runnable under stock lua5.4 (no CET sandbox)
 -- so it can be wired into CI alongside the existing syntax check.
 --
