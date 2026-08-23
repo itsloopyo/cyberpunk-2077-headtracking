@@ -30,6 +30,8 @@ local function _readCamFov(cam) return cam.fov end
 local function _getRootWidget(ctrl) return ctrl:GetRootWidget() end
 local function _getRootCompoundWidget(ctrl) return ctrl:GetRootCompoundWidget() end
 local function _rootSetMargin(root, m) root:SetMargin(m) end
+local function _widgetSetTranslation(w, x, y) w:SetTranslation(x, y) end
+local function _widgetGetController(w) return w:GetController() end
 local function _getNumChildren(root) return root:GetNumChildren() end
 local function _getWidgetByIndex(root, index) return root:GetWidgetByIndex(index) end
 local function _getCrosshairData(targeting, player)
@@ -106,6 +108,42 @@ local HIT_MARKER_CLASSES = {
     'TargetHitIndicatorGameController',
 }
 
+-- Smart weapons draw one target bracket per tracked enemy. The smart crosshair
+-- controller (CrosshairGameController_Smart_Rifl, and the Jailbreak variant)
+-- pools those bracket widgets - library item "bucket", logic controller
+-- Crosshair_Smart_Rifl_Bucket - inside the crosshair tree we shove to
+-- body-forward, and positions each one on its own target, projected through the
+-- head-rotated camera. So the engine already lands them on the enemy, and our
+-- shove then slides every one of them off by exactly the reticle offset: yaw
+-- left, the brackets swing right. Cancelling our offset on the bracket itself
+-- keeps the reticle at body-forward AND the brackets on their targets.
+--
+-- WALK_DEPTH: how deep under a shoved root the bracket pool is looked for.
+-- RESCAN_FRAMES: brackets are spawned and returned to the pool as targets come
+--   and go, so the list is rebuilt periodically rather than per frame.
+-- CHANNEL_MOVE_PX: how far a bracket's margin (or translation) must travel
+--   before that channel counts as the one the engine positions it with.
+local SMART_BUCKET_WIDGET_NAME = 'bucket'
+local SMART_BUCKET_CONTROLLER = 'Crosshair_Smart_Rifl_Bucket'
+local SMART_WALK_DEPTH = 10
+local SMART_RESCAN_FRAMES = 30
+local SMART_CHANNEL_MOVE_PX = 1.0
+
+-- Bounded self-probe for the bracket work. The CET console log buffers, so a
+-- console dump can sit unwritten for minutes while the game is up; this writes
+-- through open/append/close instead, which lands on disk immediately. It stops
+-- itself after SMART_PROBE_MAX_SNAPSHOTS so it can never grow without bound.
+local SMART_PROBE_PATH = "HeadTracking-smart.log"
+local SMART_PROBE_MAX_SNAPSHOTS = 60
+local SMART_PROBE_INTERVAL_FRAMES = 30
+
+local function slog(msg)
+    local f = io.open(SMART_PROBE_PATH, "a")
+    if not f then return end
+    f:write(string.format("[%s] %s\n", os.date("%H:%M:%S"), msg))
+    f:close()
+end
+
 -- DebugLog is required lazily on first use so this module's file-scope is
 -- side-effect free and cannot fail at require-time inside CET's sandbox.
 local _debug_log_resolved = false
@@ -162,6 +200,11 @@ function BuiltinCrosshair.new(settings, camera)
     --                       root_ok = bool, set_translation_ok = bool,
     --                       set_margin_ok = bool, parent_ok = bool }
     self.controllers = {}
+    -- One entry per class for a controller adopted while already live (see
+    -- _adopt), plus the cached union of both sets used by the write path.
+    self._adopted = {}
+    self._entries_cache = nil
+    self._entries_dirty = true
 
     -- Captured gameuiNpcNameplateGameController instances (the in-combat
     -- lock-on box). Read-only probe target: prior work proved writing their
@@ -217,6 +260,17 @@ function BuiltinCrosshair.new(settings, camera)
     -- 1:1; the tuner stays exposed in case a different UI scale needs it.
     self.bracket_scale = 2.0
 
+    -- Smart-weapon target brackets: the pooled widgets we cancel our shove on,
+    -- how they were identified, and which position channel we took. All three
+    -- are resolved live (see _writeSmartTargets) and cleared with the gate
+    -- state, so a HUD teardown cannot strand a stale widget list.
+    self._smart_buckets = nil
+    self._smart_find_mode = nil
+    self._smart_chan = nil
+    self._smart_probe = nil
+    self._smart_rescan = 0
+    self.smart_scale = 1.0
+
     -- Counters for the status dump
     self._stat = {
         observe_fired = 0,
@@ -263,6 +317,7 @@ function BuiltinCrosshair:_track(class, this, source)
         parent_ok = nil,
     }
     self.controllers[#self.controllers + 1] = entry
+    self._entries_dirty = true
     dlog(string.format(
         "[HeadTracking:Reticle] captured (%s via %s); live count=%d",
         class, source, #self.controllers))
@@ -287,12 +342,48 @@ function BuiltinCrosshair:_track(class, this, source)
     end
 end
 
+--- Adopt the crosshair controller that is already live - the case a mod reload
+--- or a late start leaves us in, where OnInitialize has long since fired and
+--- nothing would ever be captured. Exactly one entry per class, its handle
+--- swapped in place on every callback, so the list cannot grow and the entry's
+--- gate store survives.
+function BuiltinCrosshair:_adopt(class, this)
+    local entry = self._adopted[class]
+    if entry ~= nil then
+        entry.ctrl = this
+        return
+    end
+    self._adopted[class] = {
+        ctrl = this,
+        class = class,
+        source = 'adopted',
+        _lw = {},
+    }
+    self._entries_dirty = true
+    dlog(string.format("[HeadTracking:Reticle] adopted live controller (%s)", class))
+end
+
+--- Every controller entry we write to: the ones captured at OnInitialize plus
+--- the adopted live one per class. Cached, rebuilt only when the set changes,
+--- so the per-frame write path does not allocate.
+function BuiltinCrosshair:_entries()
+    if self._entries_cache == nil or self._entries_dirty then
+        local out = {}
+        for i = 1, #self.controllers do out[#out + 1] = self.controllers[i] end
+        for _, entry in pairs(self._adopted) do out[#out + 1] = entry end
+        self._entries_cache = out
+        self._entries_dirty = false
+    end
+    return self._entries_cache
+end
+
 function BuiltinCrosshair:_untrack(this)
     for i = #self.controllers, 1, -1 do
         if self.controllers[i].ctrl == this then
             dlog(string.format("[HeadTracking:Reticle] released (%s)",
                 self.controllers[i].class))
             table.remove(self.controllers, i)
+            self._entries_dirty = true
             return
         end
     end
@@ -357,10 +448,17 @@ end
 -- working. Symptom: drive a vehicle for a while, dismount, reticle stays dead
 -- centre while the head still moves the view.
 function BuiltinCrosshair:_resetGateState()
-    for i = 1, #self.controllers do
-        self.controllers[i]._lw = nil
+    local entries = self:_entries()
+    for i = 1, #entries do
+        entries[i]._lw = nil
     end
     self._bracket_lw = nil
+    -- Pooled smart brackets are torn down with the HUD, so the cached widget
+    -- list goes stale on the same transitions the gate stores do. The channel
+    -- decision survives - it is a property of the widget, not the instance.
+    self._smart_buckets = nil
+    self._smart_probe = nil
+    self._smart_rescan = 0
     self._last_dx = 0
     self._last_dy = 0
 end
@@ -1120,6 +1218,32 @@ function BuiltinCrosshair:_installObservers()
         this_self:_writeHitMarkersAtAim()
     end)
 
+    -- Crosshair controllers are captured at OnInitialize, which only fires when
+    -- the HUD spawns. Reload the mod mid-session (or start it late) and those
+    -- controllers are already live, so nothing is ever captured and the module
+    -- silently does nothing until the next load screen. These three run on a
+    -- live controller during ordinary play - a raycast target changing, weapon
+    -- spread changing, the crosshair state changing - so an already-running
+    -- HUD is adopted within a second of moving or looking around. _track
+    -- de-duplicates by handle, so the repeat calls cost one list scan.
+    -- These fire many times a second, and the handle they hand us does NOT
+    -- compare equal to a previously captured one, so _track's de-duplication
+    -- cannot see it is the same controller: routing them through _track grew
+    -- the list without bound (3 roots to 204 in six seconds) and stuttered the
+    -- game. _adopt keeps ONE entry per class and swaps the handle in place.
+    local RECAPTURE_METHODS = {
+        'OnCurrentRaycastTarget',
+        'OnBulletSpreadChanged',
+        'UpdateCrosshairState',
+    }
+    for _, cls in ipairs(classes) do
+        for _, method in ipairs(RECAPTURE_METHODS) do
+            tryBind('Observe', cls, method, function(this)
+                this_self:_adopt(cls, this)
+            end)
+        end
+    end
+
     for _, cls in ipairs(classes) do
         tryBind('Observe', cls, 'OnInitialize', function(this)
             this_self._stat.observe_fired = this_self._stat.observe_fired + 1
@@ -1459,11 +1583,12 @@ function BuiltinCrosshair:_writeOffset(dx, dy)
     -- game placed them. Lets us SEE which controller's shove drags the
     -- world-projected lock-on box off the enemy. nil = normal (shove all).
     local only = self._shove_only_idx
-    for i = 1, #self.controllers do
+    local entries = self:_entries()
+    for i = 1, #entries do
         if only == nil or i == only then
-            self:_writeOne(self.controllers[i], dx, dy)
+            self:_writeOne(entries[i], dx, dy)
         else
-            self:_writeOne(self.controllers[i], 0, 0)
+            self:_writeOne(entries[i], 0, 0)
         end
     end
 end
@@ -1473,9 +1598,10 @@ end
 --- one makes the lock-on box leave the enemy. idx 0/nil restores normal.
 ---   GetMod("HeadTracking").DiagShoveOnly(4)
 function BuiltinCrosshair:setShoveOnly(idx)
-    if type(idx) == "number" and idx >= 1 and idx <= #self.controllers then
+    local entries = self:_entries()
+    if type(idx) == "number" and idx >= 1 and idx <= #entries then
         self._shove_only_idx = idx
-        local entry = self.controllers[idx]
+        local entry = entries[idx]
         local names = {}
         local ok_root, root
         if entry.using_compound then
@@ -1554,6 +1680,272 @@ function BuiltinCrosshair:_writeBrackets(dx, dy)
             end
         end
     end
+end
+
+local function _widgetName(w)
+    local name = nil
+    pcall(function()
+        local n = w:GetName()
+        name = (Game and Game.NameToString and Game.NameToString(n)) or tostring(n)
+    end)
+    return name
+end
+
+-- A smart-weapon target bracket, identified by the pooled widget's library
+-- name first (cheap) and by its logic controller class second. Which one hits
+-- is latched per session in _smart_find_mode so the steady-state rescan only
+-- pays for the check that actually works.
+local function _isSmartBucket(w, by_controller)
+    if not by_controller then
+        return _widgetName(w) == SMART_BUCKET_WIDGET_NAME
+    end
+    local matched = false
+    pcall(function()
+        local c = _widgetGetController(w)
+        matched = c ~= nil and c:IsA(SMART_BUCKET_CONTROLLER)
+    end)
+    return matched
+end
+
+local function _collectSmartBuckets(widget, depth, by_controller, out)
+    if widget == nil or depth > SMART_WALK_DEPTH then return end
+    -- depth 0 is a root we shove, never a bracket. A bracket's own children
+    -- ride with it, so the walk stops there.
+    if depth > 0 and _isSmartBucket(widget, by_controller) then
+        out[#out + 1] = widget
+        return
+    end
+    local ok_n, n = pcall(_getNumChildren, widget)
+    if not ok_n or type(n) ~= "number" then return end
+    for i = 0, n - 1 do
+        local ok_c, child = pcall(_getWidgetByIndex, widget, i)
+        if ok_c and child ~= nil then
+            _collectSmartBuckets(child, depth + 1, by_controller, out)
+        end
+    end
+end
+
+--- Rebuild the list of smart-weapon target brackets living under the roots we
+--- shove. Walking from those roots (rather than from a separately captured
+--- smart controller) is what guarantees the list is exactly the set of
+--- brackets our offset reaches, whichever root carries the shove.
+function BuiltinCrosshair:_refreshSmartBuckets()
+    local out = {}
+    local entries = self:_entries()
+    for i = 1, #entries do
+        local root = self:_resolveRoot(entries[i])
+        if root ~= nil then
+            _collectSmartBuckets(root, 0, self._smart_find_mode == 'controller', out)
+        end
+    end
+    -- Nothing by name: retry once by logic-controller class and latch whichever
+    -- identifies the pool, so a renamed library item still resolves.
+    if #out == 0 and self._smart_find_mode == nil then
+        for i = 1, #entries do
+            local root = self:_resolveRoot(entries[i])
+            if root ~= nil then _collectSmartBuckets(root, 0, true, out) end
+        end
+        if #out > 0 then
+            self._smart_find_mode = 'controller'
+            dlog("[HeadTracking:Reticle] smart target brackets found by controller class")
+            slog(string.format("discovery: %d bracket(s) by controller class", #out))
+        end
+    elseif #out > 0 and self._smart_find_mode == nil then
+        self._smart_find_mode = 'name'
+        dlog("[HeadTracking:Reticle] smart target brackets found by widget name")
+        slog(string.format("discovery: %d bracket(s) by widget name", #out))
+    end
+    self._smart_buckets = out
+end
+
+--- Which of the bracket's two position channels the engine drives. Whichever
+--- one MOVES while we are not writing it is the engine's; we take the other, so
+--- our cancellation and the engine's projection never fight over one value.
+--- Returns 'margin' or 'translation' (the channel WE take), or nil while the
+--- brackets have not moved far enough yet to tell.
+function BuiltinCrosshair:_detectSmartChannel(list)
+    local first = self._smart_probe
+    if first == nil then first = {}; self._smart_probe = first end
+    for i = 1, #list do
+        local w = list[i]
+        local l, t = 0, 0
+        pcall(function() local m = w:GetMargin(); l, t = m.left or 0, m.top or 0 end)
+        local tx, ty = 0, 0
+        pcall(function() local v = w:GetTranslation(); tx, ty = v.X or v.x or 0, v.Y or v.y or 0 end)
+        local seen = first[i]
+        if seen == nil then
+            first[i] = { l = l, t = t, tx = tx, ty = ty }
+        else
+            if math_abs(l - seen.l) > SMART_CHANNEL_MOVE_PX or
+               math_abs(t - seen.t) > SMART_CHANNEL_MOVE_PX then
+                return 'translation'
+            end
+            if math_abs(tx - seen.tx) > SMART_CHANNEL_MOVE_PX or
+               math_abs(ty - seen.ty) > SMART_CHANNEL_MOVE_PX then
+                return 'margin'
+            end
+        end
+    end
+    return nil
+end
+
+--- One line describing a bracket as the engine currently has it: what it is,
+--- and where each of its two position channels sits.
+local function _smartWidgetLine(i, w)
+    local ctrl_class = "?"
+    pcall(function()
+        local c = _widgetGetController(w)
+        if c ~= nil then ctrl_class = tostring(c:GetClassName()) end
+    end)
+    local l, t = 0, 0
+    pcall(function() local m = w:GetMargin(); l, t = m.left or 0, m.top or 0 end)
+    local tx, ty = 0, 0
+    pcall(function() local v = w:GetTranslation(); tx, ty = v.X or v.x or 0, v.Y or v.y or 0 end)
+    local vis = false
+    pcall(function() vis = w:IsVisible() and true or false end)
+    local kids = 0
+    pcall(function() kids = w:GetNumChildren() or 0 end)
+    -- Where the match sits in the tree. A match that is an ANCESTOR of the
+    -- reticle cancels the shove for the whole crosshair, which is the reticle
+    -- sitting at screen centre.
+    local chain, node = {}, w
+    for _ = 1, 6 do
+        local parent = nil
+        pcall(function() parent = node:GetParentWidget() end)
+        if parent == nil then break end
+        chain[#chain + 1] = tostring(_widgetName(parent))
+        node = parent
+    end
+    return string.format(
+        "  bracket[%d] name=%s ctrl=%s visible=%s children=%d margin=(%.1f,%.1f) translation=(%.1f,%.1f) parents=[%s]",
+        i, tostring(_widgetName(w)), ctrl_class, tostring(vis), kids, l, t, tx, ty,
+        table.concat(chain, "<"))
+end
+
+--- How many of OUR shoves a bracket actually inherits. The crosshair roots we
+--- write are nested (the container root is an ancestor of the crosshair
+--- controller's own root), so a bracket can sit under one, two, or none of
+--- them, and cancelling a flat 1x leaves the rest of the drift in place. An
+--- ancestor counts when its margin is the exact value we wrote this frame.
+--- All brackets share the chain above smartGun, so this is computed once per
+--- frame from the first one.
+local function _inheritedShoveCount(w, dx, dy)
+    local n, node = 0, w
+    for _ = 1, SMART_WALK_DEPTH do
+        local parent = nil
+        pcall(function() parent = node:GetParentWidget() end)
+        if parent == nil then break end
+        local l, t = 0, 0
+        pcall(function() local m = parent:GetMargin(); l, t = m.left or 0, m.top or 0 end)
+        if math_abs(l - dx) < GATE_MATCH_EPS and math_abs(t - dy) < GATE_MATCH_EPS then
+            n = n + 1
+        end
+        node = parent
+    end
+    return n
+end
+
+--- Cancel our body-forward shove on every smart-weapon target bracket, so each
+--- one stays where the engine projected it: on its target.
+function BuiltinCrosshair:_writeSmartTargets(dx, dy)
+    self._smart_rescan = (self._smart_rescan or 0) - 1
+    if self._smart_rescan <= 0 then
+        self._smart_rescan = SMART_RESCAN_FRAMES
+        self:_refreshSmartBuckets()
+    end
+
+    local list = self._smart_buckets or {}
+
+    -- Probe before the empty-list return, so a scan that finds nothing is
+    -- distinguishable in the log from the scan never running at all.
+    self._smart_probe_left = self._smart_probe_left or SMART_PROBE_MAX_SNAPSHOTS
+    if self._smart_probe_left > 0 then
+        self._smart_probe_tick = (self._smart_probe_tick or 0) - 1
+        if self._smart_probe_tick <= 0 then
+            self._smart_probe_tick = SMART_PROBE_INTERVAL_FRAMES
+            self._smart_probe_left = self._smart_probe_left - 1
+            slog(string.format(
+                "brackets=%d roots=%d find_mode=%s chan=%s inherited=%s shove=(%.1f,%.1f)",
+                #list, #self:_entries(), tostring(self._smart_find_mode),
+                tostring(self._smart_chan), tostring(self._smart_inherited), dx, dy))
+            local logged = 0
+            for i = 1, #list do
+                local vis = false
+                pcall(function() vis = list[i]:IsVisible() and true or false end)
+                if vis and logged < 4 then
+                    logged = logged + 1
+                    slog(_smartWidgetLine(i, list[i]))
+                end
+            end
+        end
+    end
+
+    if #list == 0 then return end
+
+    if self._smart_chan == nil then
+        self._smart_chan = self:_detectSmartChannel(list)
+        if self._smart_chan == nil then return end
+        self._smart_probe = nil
+        dlog(string.format(
+            "[HeadTracking:Reticle] smart target brackets: cancelling shove via %s",
+            self._smart_chan))
+        slog("channel decided: cancelling our shove via " .. self._smart_chan)
+    end
+
+    -- Zero shove reaching the brackets means nothing to cancel; writing -0
+    -- would still be correct, but skipping keeps the idle path free.
+    local inherited = _inheritedShoveCount(list[1], dx, dy)
+    self._smart_inherited = inherited
+    if inherited == 0 then return end
+
+    local sx = -dx * inherited * self.smart_scale
+    local sy = -dy * inherited * self.smart_scale
+    for i = 1, #list do
+        if self._smart_chan == 'translation' then
+            pcall(_widgetSetTranslation, list[i], sx, sy)
+        else
+            pcall(_rootSetMargin, list[i],
+                inkMargin.new({ left = sx, top = sy, right = 0, bottom = 0 }))
+        end
+    end
+end
+
+--- Scale applied to the smart-bracket cancellation. 1.0 cancels our shove
+--- exactly, which is right when the bracket sits in the same coordinate space
+--- as the root we shove. A scaled canvas in between would need the same kind of
+--- factor the in-car brackets need (see bracket_scale).
+---   GetMod("HeadTracking").DiagSmartScale(2.0)
+function BuiltinCrosshair:setSmartScale(s)
+    if type(s) == "number" and s == s then
+        self.smart_scale = s
+        dlog("[HeadTracking:Reticle] smart_scale = " .. tostring(s))
+    end
+    return self.smart_scale
+end
+
+--- One-shot dump of the smart-weapon bracket state: how many brackets are
+--- live, which channel each one carries, and which channel we took. Run it with
+--- a smart weapon up and a target locked.
+---   GetMod("HeadTracking").DiagSmartTargets()
+function BuiltinCrosshair:dumpSmartTargets()
+    self:_refreshSmartBuckets()
+    local list = self._smart_buckets or {}
+    dlog(string.format(
+        "==== [HeadTracking:Reticle] smart targets: %d bracket(s) find_mode=%s chan=%s scale=%.2f dx=%.1f dy=%.1f",
+        #list, tostring(self._smart_find_mode), tostring(self._smart_chan),
+        self.smart_scale, self._last_dx, self._last_dy))
+    for i = 1, #list do
+        local w = list[i]
+        local l, t = 0, 0
+        pcall(function() local m = w:GetMargin(); l, t = m.left or 0, m.top or 0 end)
+        local tx, ty = 0, 0
+        pcall(function() local v = w:GetTranslation(); tx, ty = v.X or v.x or 0, v.Y or v.y or 0 end)
+        local vis = false
+        pcall(function() vis = w:IsVisible() and true or false end)
+        dlog(string.format("  bracket[%d] name=%s visible=%s margin=(%.1f,%.1f) translation=(%.1f,%.1f)",
+            i, tostring(_widgetName(w)), tostring(vis), l, t, tx, ty))
+    end
+    dlog("============================================")
 end
 
 -- TEST: shove the captured nameplate roots by the dot offset, to confirm the
@@ -1641,6 +2033,7 @@ function BuiltinCrosshair:_resetAll()
     self._last_dy = 0
     self:_writeOffset(0, 0)
     self:_writeBrackets(0, 0)
+    self:_writeSmartTargets(0, 0)
     self:_writeHitMarkers(0, 0)
     if self._shove_nameplate then self:_writeNameplates(0, 0) end
 end
@@ -1702,7 +2095,7 @@ function BuiltinCrosshair:tick(tracking_allowed)
         return
     end
     self:_writeHitMarkersAtAim()
-    if #self.controllers == 0 then
+    if #self:_entries() == 0 then
         self._stat.ticks_with_zero_ctrls = self._stat.ticks_with_zero_ctrls + 1
         return
     end
@@ -1727,6 +2120,10 @@ function BuiltinCrosshair:tick(tracking_allowed)
     -- body-forward. No global nameplate-count proxy - a stray pedestrian's
     -- nameplate no longer suppresses the free-aim compensation.
     self:_writeBrackets(dx, dy)
+    -- Smart-weapon target brackets ride under a root we just shoved, and the
+    -- engine has already projected each one onto its own target. Take our
+    -- offset back off them.
+    self:_writeSmartTargets(dx, dy)
     if self._shove_nameplate then self:_writeNameplates(dx, dy) end
 end
 

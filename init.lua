@@ -970,6 +970,9 @@ return {
     DiagHitMarker         = delegate("crosshair", "probeHitMarker"),
     DiagBracketScale      = delegate("crosshair", "setBracketScale",
                                      { announce = "in-car bracket_scale = " }),
+    DiagSmartTargets      = delegate("crosshair", "dumpSmartTargets", { noargs = true }),
+    DiagSmartScale        = delegate("crosshair", "setSmartScale",
+                                     { announce = "smart bracket smart_scale = " }),
 
     DiagYawMode  = delegate("camera", "probeYawMode"),
     DiagYawBasis = delegate("camera", "diagYawBasis", { noargs = true }),
