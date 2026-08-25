@@ -337,11 +337,17 @@ bool OnUpdate(RED4ext::CGameApplication*) {
             g_headQuat[1] = w->quat_j;
             g_headQuat[2] = w->quat_k;
             g_headQuat[3] = w->quat_r;
+            g_headPos[0] = w->position_x;
+            g_headPos[1] = w->position_y;
+            g_headPos[2] = w->position_z;
         } else {
             g_headQuat[0] = 0.0f;
             g_headQuat[1] = 0.0f;
             g_headQuat[2] = 0.0f;
             g_headQuat[3] = 1.0f;
+            g_headPos[0] = 0.0f;
+            g_headPos[1] = 0.0f;
+            g_headPos[2] = 0.0f;
         }
 
         // Resolve the cam instance pointer periodically even without a
@@ -518,3 +524,4 @@ static bool SehWriteQuat(void* dst, float qi, float qj, float qk, float qr) {
 // writer, single reader, and the pre-render hook is allowed to see a
 // one-tick stale value without consequence).
 float                 g_headQuat[4] = {0, 0, 0, 1};
+float                 g_headPos[3] = {0, 0, 0};

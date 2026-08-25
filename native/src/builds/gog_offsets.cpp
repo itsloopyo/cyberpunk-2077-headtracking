@@ -24,6 +24,7 @@ extern const BuildProfile kGogProfile_20250827 = {
         0x84E376,  // PhysicalRayNormaliseCall
         0x4E8AC7,  // SmartGunCameraCallA
         0x4E8B6F,  // SmartGunCameraCallB
+        0x127404,  // CameraPublishFn
     },
 };
 

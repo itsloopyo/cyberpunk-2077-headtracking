@@ -429,6 +429,56 @@ local function getActiveCameraWorldOrientation()
     return nil
 end
 
+--- Signs, clamps and smooths the tracker pose into self.smooth_yaw/pitch/roll.
+--- Steps 1-3 of apply(), split out because the chase-camera path needs exactly
+--- these and none of the camera-component work that follows them - and needs
+--- them to be the same arithmetic, so switching camera between first and third
+--- person cannot change how the pose feels.
+--- @param yaw number
+--- @param pitch number
+--- @param roll number
+--- @param deltaTime number
+function Camera:_smoothPose(yaw, pitch, roll, deltaTime)
+    -- Step 1: Take the tracker's pose as absolute. The tracker owns the centre;
+    -- the mod keeps none of its own, so there is nothing to subtract.
+    -- Invert yaw so looking left turns camera left (natural mapping)
+    -- Invert roll so tilting head left tilts camera left
+    local adj_yaw = -yaw
+    local adj_pitch = pitch
+    local adj_roll = -roll
+
+    local cache = self.cached_settings
+
+    -- Step 2: Clamp to the user-configured per-axis limits.
+    --
+    -- Historically this step also applied "Soft Look" - tighter clamps and
+    -- a 20% scale-down when a weapon was drawn or ADS - to stop head rotation
+    -- from dragging the aim around. Now that aim is decoupled from view via
+    -- the TargetingSystem Override, there's nothing to fight; head yaw/pitch
+    -- no longer influence where bullets go, so the combat-based clamps just
+    -- feel like an arbitrary leash. Dropped entirely.
+    adj_yaw   = clamp(adj_yaw,   -cache.clamp_yaw,   cache.clamp_yaw)
+    adj_pitch = clamp(adj_pitch, -cache.clamp_pitch, cache.clamp_pitch)
+    adj_roll  = clamp(adj_roll,  -cache.clamp_roll,  cache.clamp_roll)
+
+    -- Step 3: Apply smoothing (exponential moving average)
+    -- 0.0 = no smoothing (instant), 1.0 = maximum smoothing (slow). Which of
+    -- the two parameters applies is decided by the packet source address.
+    local smoothing = getEffectiveSmoothing(
+        cache.local_smoothing, cache.remote_smoothing, self.is_remote_connection)
+    local factor = calculateSmoothingFactor(smoothing, deltaTime)
+
+    -- Apply exponential moving average
+    self.smooth_yaw = self.smooth_yaw + (adj_yaw - self.smooth_yaw) * factor
+    self.smooth_pitch = self.smooth_pitch + (adj_pitch - self.smooth_pitch) * factor
+    self.smooth_roll = self.smooth_roll + (adj_roll - self.smooth_roll) * factor
+
+    -- Validate smoothed values
+    if not isValidNumber(self.smooth_yaw) then self.smooth_yaw = 0 end
+    if not isValidNumber(self.smooth_pitch) then self.smooth_pitch = 0 end
+    if not isValidNumber(self.smooth_roll) then self.smooth_roll = 0 end
+end
+
 --- Apply head tracking rotation to the camera.
 --- Processes raw tracker data through: coordinate conversion -> clamp -> smooth -> apply.
 ---
@@ -472,44 +522,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         consecutive_null_camera_frames = 0
     end
 
-    -- Step 1: Take the tracker's pose as absolute. The tracker owns the centre;
-    -- the mod keeps none of its own, so there is nothing to subtract.
-    -- Invert yaw so looking left turns camera left (natural mapping)
-    -- Invert roll so tilting head left tilts camera left
-    local adj_yaw = -yaw
-    local adj_pitch = pitch
-    local adj_roll = -roll
-
-    local cache = self.cached_settings
-
-    -- Step 2: Clamp to the user-configured per-axis limits.
-    --
-    -- Historically this step also applied "Soft Look" - tighter clamps and
-    -- a 20% scale-down when a weapon was drawn or ADS - to stop head rotation
-    -- from dragging the aim around. Now that aim is decoupled from view via
-    -- the TargetingSystem Override, there's nothing to fight; head yaw/pitch
-    -- no longer influence where bullets go, so the combat-based clamps just
-    -- feel like an arbitrary leash. Dropped entirely.
-    adj_yaw   = clamp(adj_yaw,   -cache.clamp_yaw,   cache.clamp_yaw)
-    adj_pitch = clamp(adj_pitch, -cache.clamp_pitch, cache.clamp_pitch)
-    adj_roll  = clamp(adj_roll,  -cache.clamp_roll,  cache.clamp_roll)
-
-    -- Step 3: Apply smoothing (exponential moving average)
-    -- 0.0 = no smoothing (instant), 1.0 = maximum smoothing (slow). Which of
-    -- the two parameters applies is decided by the packet source address.
-    local smoothing = getEffectiveSmoothing(
-        cache.local_smoothing, cache.remote_smoothing, self.is_remote_connection)
-    local factor = calculateSmoothingFactor(smoothing, deltaTime)
-
-    -- Apply exponential moving average
-    self.smooth_yaw = self.smooth_yaw + (adj_yaw - self.smooth_yaw) * factor
-    self.smooth_pitch = self.smooth_pitch + (adj_pitch - self.smooth_pitch) * factor
-    self.smooth_roll = self.smooth_roll + (adj_roll - self.smooth_roll) * factor
-
-    -- Validate smoothed values
-    if not isValidNumber(self.smooth_yaw) then self.smooth_yaw = 0 end
-    if not isValidNumber(self.smooth_pitch) then self.smooth_pitch = 0 end
-    if not isValidNumber(self.smooth_roll) then self.smooth_roll = 0 end
+    self:_smoothPose(yaw, pitch, roll, deltaTime)
 
     -- Read the clean (mouse-only) base orientation. World-mode re-bases the
     -- head-yaw axis onto this orientation (see composeWorldModeQuat).
@@ -876,6 +889,52 @@ function Camera:tryInitialReset()
     print("[HeadTracking] Initial reset applied (cam.localOrientation -> identity)")
 end
 
+--- Chase-camera pose update: smooth the tracker pose and publish the head
+--- quaternion, writing nothing to any camera.
+---
+--- In the vehicle chase camera there is nothing for Lua to write to. The
+--- camera renders from its own component, whose localOrientation is dormant
+--- (kept 100%, read by nobody), and the player's FPP camera component - the
+--- one apply() drives - is not what is on screen. The head rotation reaches
+--- the frame through the native ViewBuilder hook instead, which reads exactly
+--- the quaternion this stores.
+---
+--- Yaw is composed camera-local here whatever the yaw-mode setting says. World
+--- mode needs the clean view orientation as a reference, and the only readings
+--- of it available to us describe the FPP camera; using them against the chase
+--- camera would re-base the yaw axis onto an orientation that is not the one
+--- being rendered. Camera-local is a pan and tilt of the chase view about its
+--- own axes, which is the behaviour being asked for anyway.
+--- @param yaw number Tracker yaw in degrees
+--- @param pitch number Tracker pitch in degrees
+--- @param roll number Tracker roll in degrees
+--- @param deltaTime number Seconds since the previous frame
+function Camera:applyChaseCam(yaw, pitch, roll, deltaTime)
+    if not isValidNumber(yaw) or not isValidNumber(pitch) or not isValidNumber(roll) then
+        return
+    end
+
+    self.last_raw_yaw = yaw
+    self.last_raw_pitch = pitch
+    self.last_raw_roll = roll
+
+    self:_smoothPose(yaw, pitch, roll, deltaTime)
+
+    local head_quat = quatNormalize(
+        EulerAngles.new(self.smooth_roll, self.smooth_pitch, self.smooth_yaw):ToQuat())
+    local hi, hj, hk, hr = head_quat.i, head_quat.j, head_quat.k, head_quat.r
+    local h_mag2 = hi*hi + hj*hj + hk*hk + hr*hr
+    if not (isValidNumber(hi) and isValidNumber(hj) and
+            isValidNumber(hk) and isValidNumber(hr) and
+            h_mag2 > 0.25 and h_mag2 < 4.0) then
+        return
+    end
+
+    self._prev_head_quat = self._computed_head_quat
+    self._computed_head_quat = head_quat
+
+end
+
 --- Stop influencing the camera, leaving calibration alone.
 ---
 --- Peels our baked head rotation back out of cam.localOrientation and returns
@@ -1014,6 +1073,59 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
     self.pos_local.y = cam_y
     self.pos_local.z = cam_z
     self.pos_applied = true
+end
+
+--- Chase-camera translation: the same processing as applyPosition, published
+--- rather than written.
+---
+--- applyPosition drives the FPP camera's localPosition, which the chase camera
+--- ignores exactly as it ignores localOrientation. The native hook translates
+--- the camera's own world position instead, and reads the offset out of the
+--- shared state that getAppliedPosition() feeds - so this only has to compute
+--- and store it.
+--- @param rx number Tracker lateral in cm
+--- @param ry number Tracker vertical in cm
+--- @param rz number Tracker longitudinal in cm
+--- @param deltaTime number Seconds since the previous frame
+function Camera:applyChaseCamPosition(rx, ry, rz, deltaTime)
+    local c = self.cached_settings
+    if not c.position_enabled then
+        self.pos_local.x = 0
+        self.pos_local.y = 0
+        self.pos_local.z = 0
+        return
+    end
+    if not isValidNumber(rx) or not isValidNumber(ry) or not isValidNumber(rz) then
+        return
+    end
+
+    local dx, dy, dz = rx * 0.01, ry * 0.01, rz * 0.01
+
+    local s = getEffectiveSmoothing(
+        c.local_smoothing, c.remote_smoothing, self.is_remote_connection)
+    local alpha = calculateSmoothingFactor(s, deltaTime)
+    self.pos_smooth.x = self.pos_smooth.x + (dx - self.pos_smooth.x) * alpha
+    self.pos_smooth.y = self.pos_smooth.y + (dy - self.pos_smooth.y) * alpha
+    self.pos_smooth.z = self.pos_smooth.z + (dz - self.pos_smooth.z) * alpha
+
+    local cam_x = -self.pos_smooth.x
+    local cam_y = -self.pos_smooth.z
+    local cam_z =  self.pos_smooth.y
+
+    local lx = c.position_limit_x
+    local ly_up, ly_dn = c.position_limit_y_up, c.position_limit_y_down
+    local lz_fwd, lz_back = c.position_limit_z_fwd, c.position_limit_z_back
+    if cam_x >  lx then cam_x =  lx elseif cam_x < -lx then cam_x = -lx end
+    if cam_z >  ly_up then cam_z =  ly_up elseif cam_z < -ly_dn then cam_z = -ly_dn end
+    if cam_y >  lz_fwd then cam_y =  lz_fwd elseif cam_y < -lz_back then cam_y = -lz_back end
+
+    if not (isValidNumber(cam_x) and isValidNumber(cam_y) and isValidNumber(cam_z)) then
+        return
+    end
+
+    self.pos_local.x = cam_x
+    self.pos_local.y = cam_y
+    self.pos_local.z = cam_z
 end
 
 function Camera:getAppliedPosition()

@@ -2,6 +2,8 @@
 // Copyright (c) 2026 itsloopyo
 #include "ScriptChannel.hpp"
 
+#include "ChaseCameraHook.hpp"
+
 #include <RED4ext/RED4ext.hpp>
 #include <RED4ext/CString.hpp>
 #include <RED4ext/RTTISystem.hpp>
@@ -32,6 +34,7 @@ std::atomic<uint64_t> s_lastPushMs{0};
 std::atomic<bool> s_lastPushEnabled{false};
 std::atomic<bool> s_lastPushIsAds{false};
 std::atomic<float> s_lastPushHeadDegrees{0.0f};
+std::atomic<bool> s_chaseCameraActive{false};
 std::atomic<bool> s_loggedFirstPush{false};
 
 bool s_toggleTrackingChordWasDown = false;
@@ -154,6 +157,7 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     bool enabled = false, isAds = false, propagatorInject = false;
     float qi = 0.0f, qj = 0.0f, qk = 0.0f, qr = 1.0f;
     float positionX = 0.0f, positionY = 0.0f, positionZ = 0.0f, aimDistance = 0.0f;
+    bool chaseCamera = false;
     RED4ext::GetParameter(aFrame, &yaw);
     RED4ext::GetParameter(aFrame, &pitch);
     RED4ext::GetParameter(aFrame, &roll);
@@ -168,6 +172,7 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     RED4ext::GetParameter(aFrame, &positionY);
     RED4ext::GetParameter(aFrame, &positionZ);
     RED4ext::GetParameter(aFrame, &aimDistance);
+    RED4ext::GetParameter(aFrame, &chaseCamera);
     ++aFrame->code; // ParamEnd
 
     s_lastPushMs.store(GetTickCount64(), std::memory_order_relaxed);
@@ -178,12 +183,14 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
         !std::isfinite(qi) || !std::isfinite(qj) || !std::isfinite(qk) || !std::isfinite(qr) ||
         !std::isfinite(positionX) || !std::isfinite(positionY) ||
         !std::isfinite(positionZ) || !std::isfinite(aimDistance)) {
+        s_chaseCameraActive.store(false, std::memory_order_relaxed);
         if (aOut) *aOut = false;
         return;
     }
     const float magSq = qi * qi + qj * qj + qk * qk + qr * qr;
     if (std::abs(yaw) > 720.0f || std::abs(pitch) > 720.0f || std::abs(roll) > 720.0f ||
         magSq < 0.5f || magSq > 2.0f) {
+        s_chaseCameraActive.store(false, std::memory_order_relaxed);
         if (aOut) *aOut = false;
         return;
     }
@@ -211,6 +218,17 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     w->applied_frame = w->applied_frame + 1;
     w->frame = w->frame + 1;
 
+    // The two readers (render injection, aim peel) both key off the gameplay
+    // gate as well, so fold it in here rather than making each of them repeat
+    // the same `enabled &&`.
+    const bool chaseActive = enabled && chaseCamera;
+    s_chaseCameraActive.store(chaseActive, std::memory_order_relaxed);
+    if (chaseActive) {
+        // Detour the camera publish on the first frame the player is actually
+        // in the chase camera, so a session that never drives in third person
+        // never gets it.
+        ChaseCameraHook_EnsureInstalled();
+    }
     s_lastPushEnabled.store(enabled, std::memory_order_relaxed);
     s_lastPushIsAds.store(isAds, std::memory_order_relaxed);
     const float absR = std::abs(qr) > 1.0f ? 1.0f : std::abs(qr);
@@ -218,8 +236,8 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
         static_cast<float>(2.0 * std::acos(absR) * 57.2957795), std::memory_order_relaxed);
 
     if (!s_loggedFirstPush.exchange(true)) {
-        LogInfo("[ScriptChannel] first state push from the CET mod: enabled=%d propInject=%d yaw=%.2f pitch=%.2f roll=%.2f",
-                enabled ? 1 : 0, propagatorInject ? 1 : 0, yaw, pitch, roll);
+        LogInfo("[ScriptChannel] first state push from the CET mod: enabled=%d propInject=%d chaseCam=%d yaw=%.2f pitch=%.2f roll=%.2f",
+                enabled ? 1 : 0, propagatorInject ? 1 : 0, chaseCamera ? 1 : 0, yaw, pitch, roll);
     }
     if (aOut) *aOut = true;
 }
@@ -322,6 +340,7 @@ void RegisterFunctions() {
     push->AddParam("Float", "positionY");
     push->AddParam("Float", "positionZ");
     push->AddParam("Float", "aimDistance");
+    push->AddParam("Bool", "chaseCamera");
     push->SetReturnType("Bool");
     rtti->RegisterFunction(push);
 
@@ -397,4 +416,8 @@ bool ScriptChannel_LastPushIsAds() {
 
 float ScriptChannel_LastPushHeadDegrees() {
     return s_lastPushHeadDegrees.load(std::memory_order_relaxed);
+}
+
+bool ScriptChannel_ChaseCameraActive() {
+    return s_chaseCameraActive.load(std::memory_order_relaxed);
 }

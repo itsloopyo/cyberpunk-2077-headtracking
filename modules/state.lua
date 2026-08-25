@@ -117,6 +117,10 @@ function State.new()
     -- Cached rather than latched: the walk recomputes it from isAdsLive().
     self.ads_active = false
 
+    -- Whether the last verdict walk found the player looking through the
+    -- vehicle chase camera. Same deal as ads_active: recomputed, not latched.
+    self.chase_camera = false
+
     -- Warmup deadline (os.clock()); tracking suppressed until this passes.
     -- nil means "no warmup active". Armed on loading-finish and session-start.
     self.warmup_deadline = nil
@@ -269,6 +273,33 @@ function State:isAdsActive()
     return self.ads_active and true or false
 end
 
+-- The PlayerStateMachine blackboard entry the game sets while the vehicle
+-- chase camera is what the player is looking through. Resolved once and
+-- remembered, including the "this build does not have it" answer.
+--
+-- The lookup is isolated from the probe that uses it on purpose. A missing
+-- entry read straight off the defs table throws, and this probe is also what
+-- answers "is a menu open" - losing menu detection to a field that only the
+-- chase camera needs would be a bad trade. Absent, the feature is off and
+-- says so once.
+local chase_camera_field = nil       -- resolved id
+local chase_camera_field_checked = false
+
+local function readChaseCamera(defs, psmBB)
+    if not chase_camera_field_checked then
+        chase_camera_field_checked = true
+        local ok, id = pcall(function() return defs.PlayerStateMachine.IsVehicleInTPP end)
+        if ok and id ~= nil then
+            chase_camera_field = id
+        else
+            print("[HeadTracking:State] PlayerStateMachine.IsVehicleInTPP unavailable - " ..
+                  "head tracking in the vehicle chase camera is off on this build")
+        end
+    end
+    if not chase_camera_field then return false end
+    return psmBB:GetBool(chase_camera_field) and true or false
+end
+
 --- Probe live UI state from the blackboards. This is the CURRENT state, not a
 --- transition event, so unlike the GameUI latches it cannot stick after a
 --- missed close event. Returns nil when the game is not up far enough to
@@ -294,6 +325,7 @@ function State:probeLiveUi()
         return {
             in_menu = in_menu,
             plain_gameplay = (not in_menu) and tier <= SCENE_TIER_LIMITED_GAMEPLAY,
+            chase_camera = readChaseCamera(defs, psmBB),
         }
     end)
     if ok then return res end
@@ -362,6 +394,7 @@ function State:isTrackingAllowed()
     -- callers want: those block tracking outright, so there is no frozen ADS
     -- pose to hold.
     self.ads_active = false
+    self.chase_camera = false
 
     -- Check if tracking is manually disabled via settings. Gate is open if
     -- EITHER rotation or position tracking is on - the position-only mode
@@ -436,6 +469,15 @@ function State:isTrackingAllowed()
         return self:setVerdict(false, latched_reason)
     end
 
+    -- Recorded here rather than at the live probe above so that every early
+    -- return in this walk leaves it false. It says where the head rotation
+    -- should be applied, and while tracking is suppressed the answer is
+    -- nowhere - a flag left true through a menu would keep the native
+    -- render-side injection running.
+    if live then
+        self.chase_camera = live.chase_camera
+    end
+
     -- Aiming down sights: the game pulls the camera onto the weapon's sight
     -- line, and that sight picture IS the aim. What that should do to head
     -- tracking is the user's call, toggled with Insert / Ctrl+Shift+U:
@@ -456,6 +498,20 @@ function State:isTrackingAllowed()
     end
 
     return self:setVerdict(true, State.REASON.ALLOWED)
+end
+
+--- Is the player looking through the vehicle chase camera (third-person
+--- driving) rather than a first-person one? Rides the same cache as the
+--- verdict, so asking costs nothing on a frame that has already asked.
+---
+--- This decides WHERE the head rotation is applied, not whether it is applied:
+--- the chase camera renders from its own component and ignores every write to
+--- the player's FPP camera, so in it the Lua camera path stands down and the
+--- native ViewBuilder hook injects into the render params instead.
+--- @return boolean
+function State:isChaseCameraActive()
+    self:isTrackingAllowed()
+    return self.chase_camera and true or false
 end
 
 --- Get the reason why tracking is currently allowed or denied

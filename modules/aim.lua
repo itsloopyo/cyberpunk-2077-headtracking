@@ -453,9 +453,16 @@ local AIM_COMPENSATION_MIN_DEGREES = 0.1
 --- Remove head rotation and translation from an engine-supplied forward vector,
 --- so targeting previews and raycasts agree with the projectile aim point.
 ---
---- Returns the input UNCHANGED (same object) when tracking is off, the vector
---- is missing, or both rotation and translation are centred - callers rely on
---- that to hand the engine its original vector back untouched.
+--- Returns the input UNCHANGED (same object) when tracking is off, the player
+--- is in the vehicle chase camera, the vector is missing, or both rotation and
+--- translation are centred - callers rely on that to hand the engine its
+--- original vector back untouched.
+---
+--- The chase camera has nothing to compensate for. Head rotation reaches that
+--- view through the native render-side injection and never enters camera
+--- state, so the vector the engine just handed us already points where the
+--- player is aiming; rotating it would be the error this function exists to
+--- undo, applied backwards.
 --- @param fwd table|nil Vector4 forward direction from the engine.
 --- @return table|nil Compensated direction, or `fwd` as-is.
 local function compensateForward(fwd)

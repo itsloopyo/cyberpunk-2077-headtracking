@@ -284,6 +284,10 @@ local hotkey_last_fire = {}
 -- (view ends up rolled and off-forward). Resetting on the per-frame edge catches
 -- every cause uniformly, while last_head_quat is still validly baked.
 local was_tracking_allowed = true
+-- Which camera the head rotation went to last frame. The transition between
+-- them is what needs handling: the FPP path leaves a rotation baked into
+-- cam.localOrientation and has to peel it back out before standing down.
+local was_chase_camera = false
 
 -- Maps the absolute tracker pose to one relative to the pose the sights came up
 -- on, for the ads_modes that keep tracking live through the aim. See
@@ -579,6 +583,23 @@ local function onUpdateImpl(deltaTime)
         ads_marker_active = ads_reticle ~= nil
     end
 
+    -- Third-person driving renders from the vehicle chase camera, which ignores
+    -- everything written to the player's FPP camera. So the head rotation goes
+    -- out through the native ViewBuilder hook instead, and the Lua camera path
+    -- stands down for as long as that camera is up.
+    local chase_camera = tracking_allowed and state:isChaseCameraActive()
+        and settings:get("chase_camera_tracking") == true
+    udp:setChaseCamera(chase_camera)
+    if chase_camera ~= was_chase_camera then
+        if chase_camera then
+            -- Leaving the FPP path with a rotation still baked into
+            -- cam.localOrientation would strand it there for the whole drive,
+            -- and it would still be there on dismount.
+            camera:suspend()
+        end
+        was_chase_camera = chase_camera
+    end
+
     if not tracking_allowed then
         if should_diag then
             dlog(string.format(
@@ -651,10 +672,22 @@ local function onUpdateImpl(deltaTime)
         local skip_cam_write = clean_cam_decouple
         local rot_on = settings:get("enabled") and true or false
         if rot_on then
-            camera:apply(pose_yaw, pose_pitch, pose_roll, deltaTime, nil, skip_cam_write)
+            if chase_camera then
+                camera:applyChaseCam(pose_yaw, pose_pitch, pose_roll, deltaTime)
+            else
+                camera:apply(pose_yaw, pose_pitch, pose_roll, deltaTime, nil, skip_cam_write)
+            end
         end
+        -- Both cameras get 6DOF, by different routes: the FPP camera takes a
+        -- localPosition write, the chase camera ignores that the same way it
+        -- ignores localOrientation, so there the offset is published and the
+        -- native hook translates the camera's own world position with it.
         if pose_x ~= nil then
-            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime)
+            if chase_camera then
+                camera:applyChaseCamPosition(pose_x, pose_y, pose_z, deltaTime)
+            else
+                camera:applyPosition(pose_x, pose_y, pose_z, deltaTime)
+            end
         end
         perf:recordCameraUpdate()
     end
@@ -698,14 +731,15 @@ local function onUpdateImpl(deltaTime)
         local stats = udp:getStats()
         local native_frame = aim.nativeRunningFrame and aim:nativeRunningFrame() or 0
         dlog(string.format(
-            "[HeadTracking:DIAG] tracking ON | enabled=%s | shm=%s | fresh=%s | packets=%d | last=%.1fs ago | smoothed yaw=%.1f pitch=%.1f | native_frame=%d",
+            "[HeadTracking:DIAG] tracking ON | enabled=%s | shm=%s | fresh=%s | packets=%d | last=%.1fs ago | smoothed yaw=%.1f pitch=%.1f | native_frame=%d | camera=%s",
             tostring(settings:get("enabled")),
             tostring(udp:isReady()),
             tostring(udp:isDataFresh()),
             stats.packet_count,
             udp:secondsSinceLastPacket(),
             rotation.yaw, rotation.pitch,
-            native_frame
+            native_frame,
+            chase_camera and "chase" or "fpp"
         ))
         diag_last_log_time = now
     end

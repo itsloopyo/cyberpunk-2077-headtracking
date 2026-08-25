@@ -42,6 +42,8 @@
 #include "ModuleGuard.hpp"
 #include "NativeRunningHook.hpp"
 #include "QuatMath.hpp"
+#include "ChaseCameraHook.hpp"
+#include "ScriptChannel.hpp"
 #include "SharedState.hpp"
 #include "builds/build_registry.hpp"
 
@@ -274,6 +276,12 @@ bool ReadHead(float* head) {
 }
 
 bool ReadCamWorld(float* out) {
+    // The chase camera renders from its own object, so the first-person camera
+    // read below is clean there and every comparison against it fails by the
+    // head angle.
+    if (ScriptChannel_ChaseCameraActive() && ChaseCameraHook_WorldOrientation(out)) {
+        return true;
+    }
     void* cam = g_camInstance;
     const int camOff = g_camOrientationOffset;
     if (!cam || camOff < 0) return false;
@@ -468,6 +476,8 @@ void* Hook_GetWorldOrientation(void* rcx, void* rdx) {
     if (mode == kModeOff) return ret;
 
     s_callsA.fetch_add(1, std::memory_order_relaxed);
+    // Every peel here exists to undo the head rotation composed into camera
+    // state - by Lua in first person, by RenderNodeInject in the chase camera.
     // Not gated on the fire window: target selection runs every frame, and a
     // cone that only stops following the head while the trigger is down would
     // drop the locks the moment the player stops firing.

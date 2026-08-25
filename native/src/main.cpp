@@ -11,6 +11,7 @@
 #include "AimProviderHook.hpp"
 #include "RicochetPreviewHook.hpp"
 #include "AimGetterHook.hpp"
+#include "ChaseCameraHook.hpp"
 #include "builds/build_registry.hpp"
 
 // Standard OpenTrack UDP port. If you change this, also change the OpenTrack
@@ -63,6 +64,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         NativeRunningHook_Start(aSdk, aHandle);
         CamPropagatorHook_Start(aSdk, aHandle);
+        ChaseCameraHook_Start(aSdk, aHandle);
 
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
             w->camera_hook_active = CamPropagatorHook_IsActive();
@@ -100,6 +102,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         AimProviderHook_Stop();
         UdpReceiver_Stop();
 
+        ChaseCameraHook_Stop(aSdk, aHandle);
         CamPropagatorHook_Stop(aSdk, aHandle);
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
             w->camera_hook_active = false;

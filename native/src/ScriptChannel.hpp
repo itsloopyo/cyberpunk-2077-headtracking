@@ -16,7 +16,7 @@
 //                              Float qi, Float qj, Float qk, Float qr,
 //                              Bool propagatorInject,
 //                              Float positionX, Float positionY, Float positionZ,
-//                              Float aimDistance)
+//                              Float aimDistance, Bool chaseCamera)
 //   Bool HeadTrackingPushRicochetState(Bool valid,
 //                                      Float hitX, Float hitY, Float hitZ,
 //                                      Float normalX, Float normalY, Float normalZ,
@@ -42,5 +42,16 @@ bool ScriptChannel_HasEverPushed();
 // send us has to pick one.
 bool ScriptChannel_LastPushEnabled();
 bool ScriptChannel_LastPushIsAds();
+
 // Rotation magnitude of the last pushed head quaternion, in degrees.
 float ScriptChannel_LastPushHeadDegrees();
+
+// True while the player is looking through the vehicle chase camera and the
+// gameplay gate is open.
+//
+// ChaseCameraHook injects ONLY while it is true: the chase camera renders from
+// its own component, so the Lua camera write - the whole FPP path - reaches
+// nothing there. The aim peels read it to pick which camera to compare an aim
+// quaternion against, since the first-person camera stays clean in the chase
+// camera and every comparison against it would fail by the head angle.
+bool ScriptChannel_ChaseCameraActive();

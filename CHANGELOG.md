@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- experimental head tracking in the vehicle chase camera, off by default (`chase_camera_tracking`, or the switch in the settings panel). Driving in third person used to leave the view frozen because that camera ignores every write to the player's first-person camera. It is incomplete: the near scene follows your head, the distant scene stays fixed on screen, and the game's camera motion blur smears the world unless you turn Motion Blur off
+
 ### Fixed
 
 - ADS no longer levels your head tilt: roll stays as-is through the aim in both head-tracked modes

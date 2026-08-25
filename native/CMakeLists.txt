@@ -35,6 +35,7 @@ add_library(HeadTrackingAim SHARED
     src/AimProviderHook.cpp
     src/RicochetPreviewHook.cpp
     src/AimGetterHook.cpp
+    src/ChaseCameraHook.cpp
     src/UdpReceiver.cpp
     src/ScriptChannel.cpp
     src/builds/build_registry.cpp

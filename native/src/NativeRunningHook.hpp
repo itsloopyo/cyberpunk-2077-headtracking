@@ -54,6 +54,12 @@ void NativeRunningHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHand
 // by AimProviderHook, AimGetterHook and CamPropagatorHook.
 extern float                  g_headQuat[4];
 
+// Processed head translation in camera-local metres (x right, y forward,
+// z up), mirrored beside g_headQuat and gated the same way. The chase-camera
+// injection needs it on the render thread, where touching shared memory has
+// crashed the game.
+extern float                  g_headPos[3];
+
 // Diagnostic capture: on first restore the pre-render hook stores the
 // camState pointer (4th arg to the hooked function) so OnUpdate can
 // later log it - LogInfo cannot be called from inside the hook body

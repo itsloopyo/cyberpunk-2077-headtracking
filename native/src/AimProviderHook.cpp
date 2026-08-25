@@ -39,6 +39,8 @@
 
 #include "NativeRunningHook.hpp"
 #include "QuatMath.hpp"
+#include "ChaseCameraHook.hpp"
+#include "ScriptChannel.hpp"
 #include "SharedState.hpp"
 
 extern SharedState g_sharedState;
@@ -232,15 +234,32 @@ bool ApplyPeel(uintptr_t outp, uint32_t mode, PeelTrace& t) {
             }
         }
 
-        // Is this the player's own aim? Compare against the FPP camera world
+        // Is this the player's own aim? Compare against the camera's world
         // orientation both before and after the peel: whether the engine has
         // already folded our head rotation into the camera's world transform
         // this frame decides which of the two lines up.
-        void* cam = g_camInstance;
-        const int camOff = g_camOrientationOffset;
-        if (cam && camOff >= 0) {
-            const float* c = reinterpret_cast<const float*>(
-                reinterpret_cast<uint8_t*>(cam) + camOff + kWorldOrientationDelta);
+        //
+        // Which camera matters. In the vehicle chase camera the first-person
+        // camera is not what is on screen and stays clean, so an aim quat
+        // carrying the head rotation drifts away from it as the head moves,
+        // the dot falls under the gate, and the peel switches itself off for
+        // exactly the frames it is needed.
+        float c[4];
+        bool haveC = false;
+        if (ScriptChannel_ChaseCameraActive()) {
+            haveC = ChaseCameraHook_WorldOrientation(c);
+        }
+        if (!haveC) {
+            void* cam = g_camInstance;
+            const int camOff = g_camOrientationOffset;
+            if (cam && camOff >= 0) {
+                const float* src = reinterpret_cast<const float*>(
+                    reinterpret_cast<uint8_t*>(cam) + camOff + kWorldOrientationDelta);
+                c[0] = src[0]; c[1] = src[1]; c[2] = src[2]; c[3] = src[3];
+                haveC = true;
+            }
+        }
+        if (haveC) {
             const float cLenSq = c[0]*c[0] + c[1]*c[1] + c[2]*c[2] + c[3]*c[3];
             if (std::isfinite(cLenSq) && cLenSq > 0.9f && cLenSq < 1.1f) {
                 t.camWorld[0] = c[0]; t.camWorld[1] = c[1];

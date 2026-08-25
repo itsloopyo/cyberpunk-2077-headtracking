@@ -63,6 +63,7 @@ local VALIDATION_RULES = {
     -- cam+0xD0 for their "where is the camera pointing" answer. See
     -- modules/camera.lua and Camera:apply().
     decouple_diag_clean_cam = { type = "boolean" },
+    chase_camera_tracking = { type = "boolean" },
 }
 
 -- Keys that used to hold the single smoothing value, in the order they are
@@ -240,6 +241,15 @@ function Settings.new()
         -- Clean-camera diagnostic path. Lua keeps cam.localOrientation
         -- mouse-only while native experiments try to inject head rotation.
         decouple_diag_clean_cam = false,
+        -- Head tracking in the vehicle chase camera. Off by default because it
+        -- is incomplete: the head rotation is injected into the render params
+        -- of one render stage, which turns the near scene and leaves the
+        -- distant scene - drawn by another stage, from a camera not yet found -
+        -- nailed to the screen, and leaves the engine's camera motion blur
+        -- reconstructing static-geometry velocity from an un-rotated camera, so
+        -- it smears the whole world. Turn it on to use it anyway; turn Motion
+        -- Blur off in the game's graphics settings if you do.
+        chase_camera_tracking = false,
     }
 
     -- Current values (populated by load())

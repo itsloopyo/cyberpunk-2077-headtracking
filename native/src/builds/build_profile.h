@@ -63,6 +63,14 @@ struct OffsetTable {
     // histogram - they appear only while a smart weapon is equipped.
     uintptr_t SmartGunCameraCallA;
     uintptr_t SmartGunCameraCallB;
+    // The camera publish, +0x127404. Its `this` carries the camera's OWN pose at
+    // this+0x4C0 - fixed-point world position at +0x00, orientation quaternion
+    // at +0x10 - which the pose builder at +0x4E9398 reads and every copy the
+    // engine hands out is made from. ChaseCameraHook composes the head rotation
+    // in there, which is the only route to the vehicle chase camera: that
+    // camera renders from its own component and ignores every write to the
+    // player's FPP camera.
+    uintptr_t CameraPublishFn;
 };
 
 struct BuildProfile {

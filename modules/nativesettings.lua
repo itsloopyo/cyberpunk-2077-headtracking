@@ -222,6 +222,19 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
+    -- Chase-camera tracking. Ships off: it is incomplete, and the two ways it
+    -- shows are ugly enough that finding it switched on by surprise would read
+    -- as a broken game rather than an experiment.
+    self.widgetRefs["chase_camera_tracking"] = ns.addSwitch(
+        "/HeadTracking",
+        "Chase Camera Tracking (experimental)",
+        "Head tracking while driving in third person. Incomplete: the near scene follows your head, the distant scene stays fixed on screen, and the game's camera motion blur smears the world - turn Motion Blur off in Graphics if you use this. First-person driving is unaffected either way.",
+        self.settings:get("chase_camera_tracking"),
+        self.settings:getDefaults().chase_camera_tracking,
+        function(state)
+            self.settings:set("chase_camera_tracking", state)
+        end
+    )
     -- Aim-down-sights behaviour. Same three modes the Insert hotkey cycles.
     do
         local spec = ENUM_SETTINGS.ads_mode

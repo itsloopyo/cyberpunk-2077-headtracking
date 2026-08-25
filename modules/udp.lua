@@ -9,7 +9,8 @@
 --   Game.HeadTrackingPollPose()  -> ok, yaw, pitch, roll, x, y, z, flags
 --   Game.HeadTrackingPushState(yaw, pitch, roll, enabled, isAds,
 --                              qi, qj, qk, qr, propagatorInject,
---                              positionX, positionY, positionZ, aimDistance) -> ok
+--                              positionX, positionY, positionZ, aimDistance,
+--                              chaseCamera) -> ok
 --   Game.HeadTrackingPushRicochetState(valid, hit, normal, forward) -> ok
 --
 -- This used to be a TCP socket served by the plugin and driven from Lua by
@@ -46,6 +47,12 @@ local total_packets = 0
 local poll_count = 0
 local native_flags = 0
 local last_successful_parse_time = nil
+-- Whether the vehicle chase camera is what the player is looking through.
+-- Kept beside native_state rather than in it: the suppressed path pushes
+-- through poll() without ever calling setNativeState, and the native side has
+-- to hear "not the chase camera" on those frames too or it keeps injecting
+-- into the render params off a stale flag.
+local chase_camera_active = false
 local native_toggle_tracking_requested = false
 local native_cycle_mode_requested = false
 local native_toggle_yaw_requested = false
@@ -55,13 +62,14 @@ local native_cycle_ads_mode_requested = false
 -- closure per invocation and both of these run every frame, so the arguments
 -- ride in upvalues instead. Neither is reentrant, which is what makes the
 -- upvalue reuse safe (same reasoning as guardedVar in init.lua).
-local push_args = { 0, 0, 0, false, false, 0, 0, 0, 1, false, 0, 0, 0, 0 }
+local push_args = { 0, 0, 0, false, false, 0, 0, 0, 1, false, 0, 0, 0, 0, false }
 local ricochet_args = { false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 local function _callPush()
     return Game.HeadTrackingPushState(
         push_args[1], push_args[2], push_args[3], push_args[4], push_args[5],
         push_args[6], push_args[7], push_args[8], push_args[9], push_args[10],
-        push_args[11], push_args[12], push_args[13], push_args[14])
+        push_args[11], push_args[12], push_args[13], push_args[14],
+        push_args[15])
 end
 local function _callPushRicochet()
     return Game.HeadTrackingPushRicochetState(
@@ -155,6 +163,15 @@ function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat,
     st.ricochet_end_z = ricochet_end_z or 0
 end
 
+--- Tell the native side which camera the head rotation has to reach this
+--- frame. True hands it to the ViewBuilder hook (the chase camera's only
+--- route) and stands the aim peels down, because in that camera no head
+--- rotation was ever written into camera state for them to peel.
+--- @param active boolean
+function TrackingInput:setChaseCamera(active)
+    chase_camera_active = active and true or false
+end
+
 function TrackingInput:isNativeCameraHookActive()
     return hasFlag(native_flags, FLAG_CAMERA_ACTIVE)
 end
@@ -230,6 +247,7 @@ function TrackingInput:poll()
         push_args[12] = st.position_y
         push_args[13] = st.position_z
         push_args[14] = st.aim_distance
+        push_args[15] = chase_camera_active
         ricochet_args[1] = st.ricochet_hit_valid
         ricochet_args[2] = st.ricochet_hit_x
         ricochet_args[3] = st.ricochet_hit_y

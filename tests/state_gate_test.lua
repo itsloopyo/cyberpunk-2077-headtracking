@@ -28,7 +28,8 @@ end
 local PSM_UPPERBODY_AIM = 6
 
 -- Live game state the blackboard stubs read. Tests mutate this directly.
-local live = { has_player = true, in_menu = false, scene_tier = 1, upper_body = 0 }
+local live = { has_player = true, in_menu = false, scene_tier = 1, upper_body = 0,
+               chase_camera = false }
 
 local observers = {}
 local cet_events = {}
@@ -39,13 +40,19 @@ ObserveAfter = Observe
 
 local blackboard_defs = {
     UI_System = { IsInMenu = "IsInMenu" },
-    PlayerStateMachine = { UpperBody = "UpperBody", SceneTier = "SceneTier" },
+    PlayerStateMachine = { UpperBody = "UpperBody", SceneTier = "SceneTier",
+                           IsVehicleInTPP = "IsVehicleInTPP" },
 }
 function GetAllBlackboardDefs() return blackboard_defs end
 
 local ui_blackboard = { GetBool = function(_, _) return live.in_menu end }
 local psm_blackboard = {
-    GetBool = function(_, _) return false end,
+    GetBool = function(_, key)
+        if key == blackboard_defs.PlayerStateMachine.IsVehicleInTPP then
+            return live.chase_camera
+        end
+        return false
+    end,
     GetInt  = function(_, key)
         if key == blackboard_defs.PlayerStateMachine.SceneTier then return live.scene_tier end
         if key == blackboard_defs.PlayerStateMachine.UpperBody then return live.upper_body end
@@ -243,5 +250,25 @@ assert_false(st:isTrackingAllowed(), "menu blocks while ADS in tracked mode")
 assert_false(st:isAdsActive(), "menu clears the ADS flag")
 live.in_menu = false
 live.upper_body = 0
+
+-- The chase-camera flag decides WHERE the head rotation goes, so it has to be
+-- false whenever tracking is suppressed as well: init.lua reads it to hand the
+-- pose to the native render-side injection, and a stale true would keep that
+-- injecting through a menu.
+live.chase_camera = true
+spinPastCacheTtl()
+assert_true(st:isTrackingAllowed(), "driving in third person does not block tracking")
+assert_true(st:isChaseCameraActive(), "chase camera reported while driving in third person")
+
+live.in_menu = true
+spinPastCacheTtl()
+assert_false(st:isTrackingAllowed(), "menu blocks while in the chase camera")
+assert_false(st:isChaseCameraActive(), "menu clears the chase-camera flag")
+
+live.in_menu = false
+live.chase_camera = false
+spinPastCacheTtl()
+assert_true(st:isTrackingAllowed(), "back to gameplay after the menu")
+assert_false(st:isChaseCameraActive(), "first-person driving is not the chase camera")
 
 print("== State gate OK ==")
