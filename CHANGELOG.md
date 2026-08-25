@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0] - 2026-08-25
+
+### Added
+
+- put both halves of the mod in one log beside the game EXE
+- add experimental head tracking in the vehicle chase camera
+
+### Changed
+
+- stop the CamPropagator and AimProvider heartbeats repeating a dead line
+
+### Fixed
+
+- keep head roll absolute through aim down sights
+- publish rotation when the tracker sends no position, and name the CET gate in the log
+- keep smart weapon lock brackets on their targets
+
 ## Unreleased
 
 ### Added
