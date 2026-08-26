@@ -213,14 +213,14 @@ function State:init(camera, settings)
     Observe("ReadyEvents", "OnEnter", function(_, stateContext, scriptInterface)
         this.has_weapon = true
         this:invalidateCache()
-        slog("[HeadTracking:State] Weapon readied")
+        print("[HeadTracking:State] Weapon readied")
     end)
 
     -- Observe when weapon is unreadied (holstered)
     Observe("ReadyEvents", "OnExit", function(_, stateContext, scriptInterface)
         this.has_weapon = false
         this:invalidateCache()
-        slog("[HeadTracking:State] Weapon holstered")
+        print("[HeadTracking:State] Weapon holstered")
     end)
 end
 
@@ -357,10 +357,19 @@ end
 --- @return boolean the verdict, so callers can `return self:setVerdict(...)`
 function State:setVerdict(allowed, reason)
     if allowed ~= self.cached_allowed or reason ~= self.cached_reason then
+        -- Aiming down sights blocks and resumes on every single aim, which in a
+        -- firefight is hundreds of transitions. It is designed behaviour, not a
+        -- fault, so it goes to the console only. HeadTracking.log is the one
+        -- file a "no head tracking" report is answered from, and burying the
+        -- menu/loading/scene verdicts under ADS churn is how that file stops
+        -- being readable. Everything that can actually explain a dead mod still
+        -- reaches it.
+        local ads_churn = reason == State.REASON.ADS or self.cached_reason == State.REASON.ADS
+        local out = ads_churn and print or slog
         if allowed then
-            slog("[HeadTracking:State] tracking RESUMED")
+            out("[HeadTracking:State] tracking RESUMED")
         else
-            slog("[HeadTracking:State] tracking BLOCKED: " .. tostring(reason))
+            out("[HeadTracking:State] tracking BLOCKED: " .. tostring(reason))
         end
     end
     self.cached_allowed = allowed
@@ -468,7 +477,7 @@ function State:isTrackingAllowed()
             self.latch_disagree_since = nil
             local cleared = GameUI.ResyncStaleUiLatches()
             if cleared then
-                print("[HeadTracking:State] cleared stale GameUI latch(es): " .. cleared ..
+                slog("[HeadTracking:State] cleared stale GameUI latch(es): " .. cleared ..
                       " (live state says gameplay)")
                 latched_reason = nil
                 -- Clearing a stale loading latch fires LoadingFinish, which

@@ -335,7 +335,10 @@ local function initializeObservers()
             end
         end)
 
-        Observe("VehicleComponent", "OnVehicleStartedUnmounting", function()
+        -- The real method is OnVehicleStartedUnmountingEvent. CET reported
+        -- "Function OnVehicleStartedUnmounting in class VehicleComponent does
+        -- not exist", so this bound to nothing and VehicleExit never fired.
+        Observe("VehicleComponent", "OnVehicleStartedUnmountingEvent", function()
             updateVehicleState(false, false)
         end)
 

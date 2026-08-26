@@ -20,10 +20,9 @@
 --
 -- Racing it does not work. CET calls mod update handlers in load order, which
 -- is the mod folder name alphabetically, and "HeadTracking" sorts before
--- "Shift". Re-stamping the slot from the native plugin's per-frame tick was
--- measured landing after our own Lua but still before Shift's handler
--- (stamps=2332 intact=1617 in a live session), so it wrote first and Shift
--- still overwrote it.
+-- "Shift". Re-stamping the slot from the native plugin's per-frame tick did not
+-- restore head tracking with Shift configured, so that tick does not land late
+-- enough to be the answer.
 --
 -- So ask instead of fight. Shift's init.lua returns `{ api = ShiftAPI.API }`,
 -- which CET hands to other mods through GetMod("Shift"). Its Suppress* calls
@@ -42,6 +41,9 @@ local looked_up = false
 -- first call always talks to Shift rather than assuming a default.
 local applied = nil
 
+-- One-shot latch for the "present but unreachable" line below.
+local unusable_logged = false
+
 -- Frames between GetMod attempts while Shift has not been found. Both mods
 -- come up within a second or so of each other; this only exists so the lookup
 -- is not run every frame for the whole session on the many installs with no
@@ -51,7 +53,7 @@ local frames_until_lookup = 0
 
 --- Resolve Shift's API table, or nil when Shift is not installed.
 --- @return table|nil
-local function resolve()
+local function resolve(log)
     if api then return api end
     if looked_up and frames_until_lookup > 0 then
         frames_until_lookup = frames_until_lookup - 1
@@ -66,8 +68,21 @@ local function resolve()
     if type(GetMod) ~= "function" then return nil end
     local ok, mod = pcall(GetMod, "Shift")
     if not ok or type(mod) ~= "table" then return nil end
-    if type(mod.api) ~= "table" then return nil end
-    if type(mod.api.SuppressWeaponPreset) ~= "function" then return nil end
+
+    -- Shift present but unreachable is a different support case from Shift not
+    -- installed, and it looks identical from the outside: head tracking dies
+    -- and nothing says why. Say it once. Absent Shift stays silent, which is
+    -- almost every install.
+    if type(mod.api) ~= "table" or type(mod.api.SuppressWeaponPreset) ~= "function" then
+        if not unusable_logged then
+            unusable_logged = true
+            local out = log or print
+            out("[HeadTracking] Shift is installed but did not expose the API this mod " ..
+                "uses to stand its camera down. Both write the same camera slot, so head " ..
+                "tracking may stop while Shift has a camera offset configured.")
+        end
+        return nil
+    end
 
     api = mod.api
     return api
@@ -86,7 +101,7 @@ end
 --- @param log function|nil Called with a one-line message on a state change
 --- @return boolean true when Shift is present and now in the requested state
 function ShiftCompat.apply(suppress, log)
-    local a = resolve()
+    local a = resolve(log)
     if not a then return false end
 
     suppress = suppress and true or false

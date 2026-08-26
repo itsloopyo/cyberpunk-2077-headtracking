@@ -20,6 +20,7 @@ local math_rad = math.rad
 local math_tan = math.tan
 local math_abs = math.abs
 local math_exp = math.exp
+local math_sqrt = math.sqrt
 
 -- Hoisted pcall trampolines. The per-frame tick path calls
 -- GetRootWidget/GetRootCompoundWidget and SetMargin under pcall. A
@@ -89,7 +90,14 @@ local GATE_WALK_DEPTH = 6
 -- we take it back. Seconds, NOT frames: a frame count means one thing at 30fps
 -- and a different thing at 240, and this mod's users run high-refresh displays.
 -- See the staleness note in _engineDriving.
-local GATE_STALE_SECONDS = 0.5
+local GATE_STALE_SECONDS = 0.15
+-- A widget the gate stands down on for this long, while the offset we WANT is
+-- meanwhile sweeping, is a widget stuck to the player's head. That is the
+-- "reticle unlocks and drifts" report, and it has cost several rounds of
+-- guessing for want of the numbers at the moment it happens. Report it once,
+-- unprompted, with the values that identify which threshold is holding it.
+local GATE_STUCK_SECONDS = 1.0
+local GATE_STUCK_INTENDED_PX = 40.0
 local AIM_RAY_LENGTH_M = 1000.0
 local RICOCHET_PREVIEW_LENGTH_M = 20.0
 local AIM_DISTANCE_SMOOTH_SPEED = 18.0
@@ -155,6 +163,16 @@ end
 -- side-effect free and cannot fail at require-time inside CET's sandbox.
 local _debug_log_resolved = false
 local _debug_log_write = nil
+-- Reaches HeadTracking.log beside the game EXE, which is the file a "reticle is
+-- stuck" report has to be answerable from. pcall because it crosses into the
+-- native RTTI dispatcher and a raise there escapes to CET's panic path.
+local function htlog(msg)
+    print(msg)
+    if type(Game.HeadTrackingLog) == "function" then
+        pcall(Game.HeadTrackingLog, msg)
+    end
+end
+
 local function dlog(msg)
     print(msg)
     if not _debug_log_resolved then
@@ -170,6 +188,41 @@ end
 -- Wrapped Observe / ObserveAfter helpers. CET's mod sandbox exposes these
 -- as direct globals (Observe / ObserveAfter), not necessarily through _G,
 -- so we reference them by name and pcall the lookup itself.
+-- Class/method pairs the game does NOT declare, so we must not try to bind
+-- them.
+--
+-- CET's Observe does not raise on a missing method: it logs "Function X in
+-- class Y does not exist" to CET's own scripting.log and returns normally, so
+-- a pcall around it succeeds and the binding is a silent no-op. That is why
+-- tryBind used to report "bound OK" for hooks that never attached, and why a
+-- whole day went into explaining behaviour produced by code that never ran.
+--
+-- Querying the RTTI registry from Lua would be better than a list, but this
+-- CET build exposes no working Reflection.GetClass (an attempt returned no
+-- usable answer and every probe fell through to "assume present"), so the
+-- authoritative source is what CET itself reported. Every entry below was
+-- copied from a "does not exist" line in scripting.log.
+--
+-- If a game patch adds one of these, the only cost is that we keep skipping a
+-- hook that would now work. If a patch REMOVES a method not listed here, CET
+-- starts logging it again and the name belongs in this table.
+local KNOWN_ABSENT = {
+    gameuiCrosshairContainerController = {
+        OnBulletSpreadChanged = true, OnCurrentRaycastTarget = true,
+        UpdateCrosshairState = true,
+    },
+    -- Neither spelling of the driver-combat HUD controller declares a
+    -- teardown method. The gate reset it used to carry now rides the
+    -- VehicleComponent unmount observer below, which does exist.
+    DriverCombatHUDGameController = { OnUninitialize = true },
+    gameuiDriverCombatHUDGameController = { OnUninitialize = true },
+}
+
+local function methodAbsent(class, method)
+    local t = KNOWN_ABSENT[class]
+    return t ~= nil and t[method] == true
+end
+
 local function tryBind(api_name, class, method, fn)
     local ok_lookup, api = pcall(function()
         if api_name == 'Observe' then return Observe end
@@ -178,6 +231,11 @@ local function tryBind(api_name, class, method, fn)
     end)
     if not ok_lookup or api == nil then
         dlog(string.format("[HeadTracking:Reticle] %s global unavailable", api_name))
+        return false
+    end
+    if methodAbsent(class, method) then
+        dlog(string.format("[HeadTracking:Reticle] %s(%s,%s) SKIPPED: the game does not declare it",
+            api_name, class, method))
         return false
     end
     local ok, err = pcall(api, class, method, fn)
@@ -438,6 +496,8 @@ function BuiltinCrosshair:_writeHitMarkersAtAim()
     if not self._shove_hitmarker or not self._hit_marker_tracking_allowed then return end
     local screen_w, screen_h = GetDisplayResolution()
     if not screen_w or screen_w <= 0 then return end
+    self._stat_screen_w, self._stat_screen_h = screen_w, screen_h
+
     local dx, dy, valid = self:_computeOffset(screen_w, screen_h)
     if valid then self:_writeHitMarkers(dx, dy) end
 end
@@ -516,7 +576,7 @@ local function _clearHold(store)
     if store then store.anchor_l, store.anchor_t, store.static_since = nil, nil, nil end
 end
 
-local function _engineDriving(root, store, compute_child)
+local function _engineDriving(root, store, compute_child, want_l, want_t)
     local l, t = 0, 0
     pcall(function() local m = root:GetMargin(); l, t = m.left or 0, m.top or 0 end)
 
@@ -530,6 +590,56 @@ local function _engineDriving(root, store, compute_child)
     local is_ours = store.l ~= nil and math_abs(l - store.l) < GATE_MATCH_EPS
                                    and math_abs(t - store.t) < GATE_MATCH_EPS
 
+    -- Or it already holds the offset we are about to write, which means this
+    -- mod put it there even though THIS entry did not.
+    --
+    -- `store` is per ENTRY, but the margin is per WIDGET, and several entries
+    -- point at the same root: the tree rediscovers during play and the same
+    -- controller comes back with a handle that does not compare equal, so it is
+    -- tracked again. Only one of those entries can ever have store.l matching
+    -- the actual margin. Every other one sees "not mine" and, because a sibling
+    -- is rewriting that margin every frame to follow the head, also sees it
+    -- moving, so it holds forever. Two captures show exactly that, the second
+    -- with a populated store:
+    --   margin=(163.2,9.0)  lastWrote=(nil,nil)      intended=(163.2,9.0)
+    --   margin=(384.3,31.2) lastWrote=(-101.3,53.1)  intended=(384.3,31.2)
+    -- In both, the margin is precisely what we wanted, so nothing was wrong
+    -- with the widget: the gate was refusing to recognise our own work.
+    if not is_ours and want_l ~= nil
+            and math_abs(l - want_l) < GATE_MATCH_EPS
+            and math_abs(t - want_t) < GATE_MATCH_EPS then
+        is_ours = true
+        store.l, store.t = l, t
+    end
+
+    -- A widget we have never written is not evidence of anything. `is_ours`
+    -- requires a previous write to compare against, so on a brand new entry it
+    -- is false by construction, and if that entry is adopted at a moment the
+    -- margin is already off centre the gate calls it engine-owned. It then
+    -- never writes, so the store never gains a value, so `is_ours` is false
+    -- again next frame: a permanent hold, entered on nothing more than when the
+    -- entry happened to be created.
+    --
+    -- Worse, the hold cannot even time out. The margin it is watching is being
+    -- moved every frame by ANOTHER entry pointing at the same root, so the
+    -- anchor never settles and static_since resets forever.
+    --
+    -- The crosshair tree is rediscovered during play (a capture went from
+    -- roots=1 to roots=9 mid-session, and found a 20-strong bracket pool at the
+    -- same moment), and whether a fresh entry is
+    -- born healthy or born stuck came down to how far off centre the reticle
+    -- was at that instant. Under GATE_RESTING_PX it claimed the widget and was
+    -- fine; over it, stuck for the session. That is the "unlocks once it gets
+    -- near the edge" report: not the edge, the offset size when the entry
+    -- appeared.
+    --
+    -- So claim an unseen widget. One write populates the store, and the frame
+    -- after that the comparison is real and the normal hold logic applies.
+    if store.l == nil then
+        store.anchor_l, store.anchor_t, store.static_since = nil, nil, nil
+        return nil, l, t, child_mag
+    end
+
     -- "The engine owns this widget" has to mean the engine is POSITIONING it,
     -- not that it once wrote a value here. Testing the value alone made the
     -- gate one-way: a single engine write leaves a margin that is not ours, we
@@ -540,7 +650,7 @@ local function _engineDriving(root, store, compute_child)
     -- lastWrote=(-5.9,6.8) for 79 straight frames while the intended offset
     -- swept 280px and every other controller tracked it perfectly.
     --
-    -- So hold off only while the margin is actually moving. Displacement is
+    -- So hold off only while the margin is actually MOVING. Displacement is
     -- measured from an ANCHOR - the value when the hold began - rather than
     -- frame to frame, which is what keeps this honest at any frame rate. A
     -- per-frame delta says "not moving" for any projection slower than
@@ -548,6 +658,21 @@ local function _engineDriving(root, store, compute_child)
     -- sliding at 240px/s clears 1px/frame at 60Hz and misses it at 240Hz. The
     -- anchor also absorbs sub-pixel jitter, which a per-frame delta would read
     -- as continuous motion and never release.
+    --
+    -- Keep the hold SHORT. Every frame of it is a frame the reticle is not
+    -- compensated, and the engine re-asserting its resting offset starts it
+    -- over, which is what made the shotgun drift in bursts rather than
+    -- constantly once the permanent latch was gone.
+    --
+    -- Do NOT try to adopt the resting value as a baseline and compose onto it.
+    -- That was tried and reverted: `is_ours` is the only thing separating the
+    -- engine's value from our own, it is an exact match within GATE_MATCH_EPS,
+    -- and any single frame where it fails (an engine write landing between our
+    -- read and our write, a skipped write, a float round-trip) means the value
+    -- adopted as "the game's placement" is our own last composed offset. The
+    -- next write adds the offset again, the frame after that adopts THAT, and
+    -- every reticle walks off screen in a straight diagonal line. Telling our
+    -- contribution from the engine's needs a signal this gate does not have.
     if margin_off and not is_ours then
         local anchored = store.anchor_l ~= nil
             and math_abs(l - store.anchor_l) < GATE_MATCH_EPS
@@ -558,7 +683,20 @@ local function _engineDriving(root, store, compute_child)
         if (os.clock() - store.static_since) < GATE_STALE_SECONDS then
             return "margin", l, t, child_mag
         end
-    else
+    elseif not margin_off then
+        -- Cleared only when the margin is genuinely back at rest near centre.
+        --
+        -- Clearing it whenever the value was OURS threw away the one fact worth
+        -- keeping: that this particular engine value has already been waited
+        -- out. A crosshair whose resting offset the engine re-asserts and we
+        -- overwrite alternates ours/engine's every frame or two, and clearing
+        -- on each of our frames restarted the hold on each of the engine's, so
+        -- the reticle spent most of its time inside a hold and never longer
+        -- than GATE_STALE_SECONDS outside one. Keeping the anchor means the
+        -- second and later re-assertions of the SAME value are recognised
+        -- immediately and reclaimed with no hold at all. A different value
+        -- still fails the anchor test and starts a fresh hold, which is the
+        -- behaviour that matters for a real projection.
         store.anchor_l, store.anchor_t, store.static_since = nil, nil, nil
     end
     return nil, l, t, child_mag
@@ -1181,16 +1319,63 @@ function BuiltinCrosshair:_installObservers()
     self._observed = true
 
     local this_self = self
+    -- The two base classes plus every CONCRETE per-weapon controller.
+    --
+    -- Binding only the bases was the bug behind "the shotgun reticle unsticks".
+    -- CET reports what actually happened:
+    --   Function OnUpdate in class gameuiCrosshairBaseGameController does not exist
+    --   Function OnUpdate in class gameuiCrosshairContainerController does not exist
+    --   Function OnBulletSpreadChanged in class gameuiCrosshairContainerController does not exist
+    --   Function OnCurrentRaycastTarget ... does not exist
+    --   Function UpdateCrosshairState ... does not exist
+    -- Those methods are declared on the concrete controllers, not on the bases,
+    -- so every per-frame and recapture observer silently bound to nothing. A
+    -- controller whose handle went stale was therefore never re-adopted, and we
+    -- kept writing a dead handle's root while the live reticle rode the head.
+    -- OnBulletSpreadChanged is the shotgun's own hook, which is why the shotgun
+    -- is the weapon that shows it.
+    --
+    -- Names taken from the game's script table; tryBind logs and skips any that
+    -- a future patch removes, so listing one that does not exist costs a line
+    -- in the diag log and nothing else.
+    -- CrosshairGameControllerPersistentDot is deliberately NOT here. It draws
+    -- the game's persistent dot, which is a separate always-on element rather
+    -- than the weapon reticle. Adding it made us shove that dot to the aim
+    -- offset, which showed up in play as a stray blue dot sitting where the
+    -- offset pointed. It was never tracked before and does not need to be.
     local classes = {
         'gameuiCrosshairBaseGameController',
         'gameuiCrosshairContainerController',
+        'CrosshairGameController',
+        'CrosshairGameController_Basic',
+        'CrosshairGameController_BlackwallForce',
+        'CrosshairGameController_Hercules',
+        'CrosshairGameController_Jailbreak_Power',
+        'CrosshairGameController_Jailbreak_Smart',
+        'CrosshairGameController_Jailbreak_Tech',
+        'CrosshairGameController_Launcher',
+        'CrosshairGameController_Mantis_Blade',
+        'CrosshairGameController_Melee',
+        'CrosshairGameController_NoWeapon',
+        'CrosshairGameController_Rasetsu',
+        'CrosshairGameController_Simple',
+        'CrosshairGameController_Smart_Rifl',
+        'CrosshairGameController_Tech_Hex',
+        'CrosshairGameController_Tech_Round',
     }
 
     -- Driver-combat HUD controller. Its crosshair_brackets_trail child draws
     -- the in-car bracket reticle and is not a standalone crosshair controller,
     -- so the main controller path never moves it. Resolve that child on
     -- capture and SetMargin it by the same offset as the dot each frame.
-    tryBind('ObserveAfter', 'gameuiDriverCombatHUDGameController', 'OnInitialize', function(this)
+    -- Both spellings. The game's script table calls it
+    -- DriverCombatHUDGameController with no gameui prefix, and CET reported
+    -- "Function OnUninitialize in class gameuiDriverCombatHUDGameController
+    -- does not exist" for the prefixed one. tryBind logs and skips whichever is
+    -- not present on this build, so trying both costs a diag line.
+    for _, dc_cls in ipairs({ 'DriverCombatHUDGameController',
+                              'gameuiDriverCombatHUDGameController' }) do
+    tryBind('ObserveAfter', dc_cls, 'OnInitialize', function(this)
         local ok_root, root = pcall(_getRootCompoundWidget, this)
         if not ok_root or root == nil then
             ok_root, root = pcall(_getRootWidget, this)
@@ -1206,19 +1391,22 @@ function BuiltinCrosshair:_installObservers()
         dlog(string.format("[HeadTracking:Reticle] driver-combat brackets acquired: %d/%d",
             #found, #DRIVER_COMBAT_BRACKETS_WIDGETS))
     end)
-    tryBind('Observe', 'gameuiDriverCombatHUDGameController', 'OnUninitialize', function()
+    tryBind('Observe', dc_cls, 'OnUninitialize', function()
         this_self.dc_brackets = nil
         -- Drop every per-widget gate latch on vehicle-HUD teardown. See
         -- _resetGateState for the failure mode this prevents (post-dismount
         -- "stuck-at-centre" reticle from a stale lock-child latch).
         this_self:_resetGateState()
     end)
+    end
 
-    -- Belt-and-suspenders: the engine fires OnVehicleStartedUnmounting on the
-    -- VehicleComponent before the DriverCombat HUD tears down. Resetting the
-    -- gate state here too means the very first on-foot frame after dismount
-    -- starts from a clean slate, even if the HUD-controller observer lags.
-    tryBind('Observe', 'VehicleComponent', 'OnVehicleStartedUnmounting', function()
+    -- Belt-and-suspenders: the engine fires this on the VehicleComponent before
+    -- the DriverCombat HUD tears down. Resetting the gate state here too means
+    -- the very first on-foot frame after dismount starts from a clean slate,
+    -- even if the HUD-controller observer lags. The method name carries the
+    -- Event suffix; without it CET reported "does not exist" and this bound to
+    -- nothing.
+    tryBind('Observe', 'VehicleComponent', 'OnVehicleStartedUnmountingEvent', function()
         this_self:_resetGateState()
     end)
 
@@ -1299,12 +1487,13 @@ function BuiltinCrosshair:_installObservers()
         tryBind('Observe', cls, 'OnUninitialize', function(this)
             this_self:_untrack(this)
         end)
-        tryBind('Observe', cls, 'OnUpdate', function(this, dt)
-            this_self._stat.on_update_fired = this_self._stat.on_update_fired + 1
-            -- Also ensure capture in case OnInitialize observer never fired
-            this_self:_track(cls, this, 'Observe/OnUpdate')
-            this_self:_writeOne(this_self:_findEntry(this), this_self._last_dx, this_self._last_dy)
-        end)
+        -- No OnUpdate observer. CET's scripting.log says the method exists on
+        -- none of these classes, base or concrete:
+        --   Function OnUpdate in class CrosshairGameController_Basic does not exist
+        --   ... and the same for all 17 of them plus both bases.
+        -- It never fired, so the per-frame write it appeared to provide was
+        -- always coming from tick() -> _writeOffset alone. Binding it only
+        -- produced a CET error per class per session.
     end
 
     dlog("[HeadTracking:Reticle] observer install pass complete")
@@ -1517,6 +1706,31 @@ function BuiltinCrosshair:getAimDistance()
 end
 
 
+-- Where to put the reticle on the frames _computeOffset calls invalid, which is
+-- when the aim direction has left the view entirely (its dot with camera
+-- forward goes non-positive, at full pitch or a hard turn).
+--
+-- Doing nothing on those frames is what made the reticle come unstuck: tick()
+-- returned before writing, every reticle kept its last margin, and a margin
+-- that stops being updated is a reticle glued to the screen and riding the
+-- head. AGENTS.md names this case and gives two acceptable answers, hide or
+-- clamp to the screen edge.
+--
+-- This hides, by sending it well off screen along the last valid direction.
+-- Clamping it to the edge instead was tried and reverted: an aim point that
+-- has left the view has no on-screen position, so parking a marker at the
+-- boundary pins it there while the world keeps moving underneath, which reads
+-- as the reticle coming unstuck the moment it touches the edge. Off screen is
+-- also continuous with the valid path, where a far-off-centre aim point is
+-- already heading out of frame under its own projection.
+local OFFSCREEN_REACH = 4.0
+local function _offscreenOffset(last_dx, last_dy, screen_w, screen_h)
+    local len = math_sqrt(last_dx * last_dx + last_dy * last_dy)
+    if len < 1e-3 then return nil, nil end
+    local reach = (screen_w > screen_h and screen_w or screen_h) * OFFSCREEN_REACH
+    return last_dx / len * reach, last_dy / len * reach
+end
+
 function BuiltinCrosshair:_computeOffset(screen_w, screen_h)
     local player = Game and Game.GetPlayer and Game.GetPlayer()
     local targeting = player and Game.GetTargetingSystem and Game.GetTargetingSystem()
@@ -1550,6 +1764,9 @@ function BuiltinCrosshair:_computeOffset(screen_w, screen_h)
         return 0, 0, false
     end
 
+    -- Returned unclamped. When the aim point is off screen the reticle belongs
+    -- off screen with it; holding it at the boundary would put a marker
+    -- somewhere the rounds are not going.
     return (projected.x + sway_x) * screen_w * 0.5,
         (-projected.y + sway_y) * screen_h * 0.5, true
 end
@@ -1559,7 +1776,35 @@ end
 --- motion). Gated by _engineDriving: if the engine is projecting this widget
 --- onto a locked target this frame, we leave it alone so the box stays on the
 --- enemy; otherwise we shove it by the head offset to mark body-forward.
-function BuiltinCrosshair:_writeOne(entry, dx, dy)
+-- One line, once per session, the first time a crosshair sits gated off long
+-- enough to be visibly stuck while the intended offset moves under it. Silent
+-- on a healthy install: a normal hold lasts GATE_STALE_SECONDS and resets.
+function BuiltinCrosshair:_reportStuckHold(entry, dx, dy, cur_l, cur_t)
+    local now = os.clock()
+    if not entry._stuck_since then
+        entry._stuck_since = now
+        entry._stuck_dx, entry._stuck_dy = dx, dy
+        return
+    end
+    if self._stuck_reported then return end
+    if (now - entry._stuck_since) < GATE_STUCK_SECONDS then return end
+    local moved = math_abs(dx - (entry._stuck_dx or dx))
+                + math_abs(dy - (entry._stuck_dy or dy))
+    if moved < GATE_STUCK_INTENDED_PX then return end
+
+    self._stuck_reported = true
+    htlog(string.format(
+        "[HeadTracking:Reticle] %s has been left to the engine for %.1fs while the aim " ..
+        "offset moved %.0fpx, so it is riding the head instead of the world. " ..
+        "margin=(%.1f,%.1f) lastWrote=(%s,%s) intended=(%.1f,%.1f) screen=%dx%d",
+        tostring(entry.class), now - entry._stuck_since, moved,
+        cur_l, cur_t,
+        entry._lw and entry._lw.l and string.format("%.1f", entry._lw.l) or "nil",
+        entry._lw and entry._lw.t and string.format("%.1f", entry._lw.t) or "nil",
+        dx, dy, self._stat_screen_w or 0, self._stat_screen_h or 0))
+end
+
+function BuiltinCrosshair:_writeOne(entry, dx, dy, seen)
     if not entry or not entry.ctrl then return end
     local ctrl = entry.ctrl
     self._stat.write_attempts = self._stat.write_attempts + 1
@@ -1575,9 +1820,18 @@ function BuiltinCrosshair:_writeOne(entry, dx, dy)
         return
     end
 
+    -- Already shoved this frame through another entry. tostring on the widget
+    -- userdata is address-based, so it identifies the widget itself rather than
+    -- the handle we happened to reach it through.
+    if seen then
+        local key = tostring(root)
+        if seen[key] then return end
+        seen[key] = true
+    end
+
     entry._lw = entry._lw or {}
     local log_armed = self._gate_log_frames and self._gate_log_frames > 0
-    local reason, cur_l, cur_t, child_mag = _engineDriving(root, entry._lw, log_armed)
+    local reason, cur_l, cur_t, child_mag = _engineDriving(root, entry._lw, log_armed, dx, dy)
     if USE_LOCK_CHILD_GATE then
         local locked, lock_mag = _lockStateFromVisibleChanges(root, entry._lw, cur_l, cur_t)
         if locked then
@@ -1605,21 +1859,59 @@ function BuiltinCrosshair:_writeOne(entry, dx, dy)
     -- Engine projects this widget via its own root margin: leave it entirely.
     if reason == "margin" then
         entry.set_margin_ok = true
+        self:_reportStuckHold(entry, dx, dy, cur_l, cur_t)
         return
     end
+    entry._stuck_since = nil
 
+    -- Position only. This module must never touch a crosshair's VISIBILITY.
+    --
+    -- An earlier attempt hid the root when the aim point projected off screen,
+    -- which looked reasonable and was not: visibility is the game's to manage,
+    -- and it hides the crosshair itself for aiming down sights among other
+    -- things. Once we had hidden a root we also had to un-hide it, and that
+    -- un-hide fired on a widget the game had meanwhile hidden for its own
+    -- reasons, forcing the dot back on screen during ADS. Writing the offset is
+    -- enough on its own: an off-screen aim point puts the widget off screen.
     local ok_m, err_m = pcall(_rootSetMargin, root,
         inkMargin.new({ left = dx, top = dy, right = 0, bottom = 0 }))
     if ok_m then
         self._stat.write_root_margin_ok = self._stat.write_root_margin_ok + 1
         entry.set_margin_ok = true
-        entry._lw.l, entry._lw.t = dx, dy
+        -- Record what LANDED, not what was asked for. The two differ once the
+        -- offset is large enough that the widget's layout bounds it, which is
+        -- exactly when the reticle reaches a screen edge. Storing the intended
+        -- value there makes the next frame's `is_ours` test compare our
+        -- unbounded request against the engine's bounded result, fail, and hand
+        -- the widget to the hold branch on every single frame. The widget is
+        -- then never written again and rides the head: a reticle that starts
+        -- drifting the moment it touches the edge and does not recover. Reading
+        -- back costs one GetMargin per write and makes the comparison honest.
+        local got_l, got_t = dx, dy
+        pcall(function()
+            local m = root:GetMargin()
+            got_l, got_t = m.left or dx, m.top or dy
+        end)
+        entry._lw.l, entry._lw.t = got_l, got_t
     else
         entry.set_margin_ok = false
         self._stat.last_error = "SetMargin: " .. tostring(err_m)
     end
 end
 
+-- One shove per ROOT WIDGET per frame.
+--
+-- Entries are per controller, and several controllers resolve to the same root:
+-- the tree is rediscovered during play and the same controller comes back with
+-- a handle that does not compare equal, so it is tracked again (a live capture
+-- showed roots=17 for a handful of real controllers). Shoving each entry
+-- separately then applies the offset to that widget more than once and it lands
+-- at a multiple of the intended position: further from centre than the reticle,
+-- along the same direction. That is what the stray persistent dot was doing,
+-- sitting out at the far offset instead of on the reticle.
+--
+-- This is the same footgun the bracket path and _writeOne already warn about
+-- ("translation + margin = 2x"), reached by a different route.
 function BuiltinCrosshair:_writeOffset(dx, dy)
     -- Isolation diagnostic: when _shove_only_idx is set, only that controller
     -- gets the offset; the rest are written with (0,0) so they sit where the
@@ -1627,11 +1919,12 @@ function BuiltinCrosshair:_writeOffset(dx, dy)
     -- world-projected lock-on box off the enemy. nil = normal (shove all).
     local only = self._shove_only_idx
     local entries = self:_entries()
+    local seen = {}
     for i = 1, #entries do
         if only == nil or i == only then
-            self:_writeOne(entries[i], dx, dy)
+            self:_writeOne(entries[i], dx, dy, seen)
         else
-            self:_writeOne(entries[i], 0, 0)
+            self:_writeOne(entries[i], 0, 0, seen)
         end
     end
 end
@@ -1692,7 +1985,7 @@ function BuiltinCrosshair:_writeBrackets(dx, dy)
         local store = self._bracket_lw[i]
         if store == nil then store = {}; self._bracket_lw[i] = store end
         local log_armed = self._gate_log_frames and self._gate_log_frames > 0
-        local reason, cur_l, cur_t, child_mag = _engineDriving(list[i], store, log_armed)
+        local reason, cur_l, cur_t, child_mag = _engineDriving(list[i], store, log_armed, mx, my)
         if USE_LOCK_CHILD_GATE then
             local locked, lock_mag = _lockStateFromVisibleChanges(list[i], store, cur_l, cur_t)
             if locked then
@@ -2184,7 +2477,10 @@ function BuiltinCrosshair:tick(tracking_allowed)
     end
 
     local dx, dy, valid = self:_computeOffset(screen_w, screen_h)
-    if not valid then return end
+    if not valid then
+        dx, dy = _offscreenOffset(self._last_dx, self._last_dy, screen_w, screen_h)
+        if not dx then return end
+    end
 
     self._last_dx = dx
     self._last_dy = dy

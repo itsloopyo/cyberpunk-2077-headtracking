@@ -149,10 +149,10 @@ The choice is saved, so it survives a restart. Pressing the key shows a toast na
 
 First-person driving tracks your head exactly like being on foot.
 
-The outside chase camera has experimental support, **off by default** - turn on "Chase Camera Tracking" in the settings panel, or set `chase_camera_tracking` in `config.json`. It is off because it is unfinished, in two visible ways:
+The outside chase camera tracks your head too. Turn it off with "Chase Camera Tracking" in the settings panel, or `chase_camera_tracking` in `config.json`. Two rough edges to know about:
 
 - The near scene follows your head; the distant scene stays fixed on the screen. Third-person driving renders through more than one view, and only one of them currently carries the head rotation.
-- The game's camera motion blur smears the whole world, because it works out how fast static geometry is moving from a camera that has not been rotated. **Turn Motion Blur off** in Graphics if you switch this on.
+- The game's camera motion blur smears the whole world, because it works out how fast static geometry is moving from a camera that has not been rotated. **Turn Motion Blur off** in Graphics.
 
 Rotation only, no leaning: 6DOF translation moves the first-person camera and the chase camera does not read it. Head yaw there pans and tilts about the camera's own axes, so it behaves like local yaw mode whichever yaw mode you have selected.
 

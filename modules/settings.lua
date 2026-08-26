@@ -249,7 +249,7 @@ function Settings.new()
         -- reconstructing static-geometry velocity from an un-rotated camera, so
         -- it smears the whole world. Turn it on to use it anyway; turn Motion
         -- Blur off in the game's graphics settings if you do.
-        chase_camera_tracking = false,
+        chase_camera_tracking = true,
     }
 
     -- Current values (populated by load())
