@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0] - 2026-08-26
+
+### Fixed
+
+- route state gate verdicts to HeadTracking.log
+- keep head tracking alive alongside Shift's camera writes
+- hold the crosshair gate by wall-clock, not frame count
+- keep the reticle on the aim point instead of riding the head
+
 ## [1.2.0] - 2026-08-25
 
 ### Added
