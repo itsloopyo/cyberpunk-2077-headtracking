@@ -85,6 +85,9 @@ end
 local GATE_RESTING_PX = 8.0
 local GATE_MATCH_EPS  = 1.0
 local GATE_WALK_DEPTH = 6
+-- How many consecutive frames a not-ours root margin must sit bit-identical
+-- before we take it back. See the staleness note in _engineDriving.
+local GATE_STALE_FRAMES = 30
 local AIM_RAY_LENGTH_M = 1000.0
 local RICOCHET_PREVIEW_LENGTH_M = 20.0
 local AIM_DISTANCE_SMOOTH_SPEED = 18.0
@@ -520,7 +523,29 @@ local function _engineDriving(root, store, compute_child)
     local margin_off = math_abs(l) >= GATE_RESTING_PX or math_abs(t) >= GATE_RESTING_PX
     local is_ours = store.l ~= nil and math_abs(l - store.l) < GATE_MATCH_EPS
                                    and math_abs(t - store.t) < GATE_MATCH_EPS
-    if margin_off and not is_ours then
+
+    -- How long this margin has sat unchanged. "The engine owns this widget" has
+    -- to mean the engine is POSITIONING it, not that it once wrote a value
+    -- here. Testing the value alone made the gate one-way: a single engine
+    -- write leaves a margin that is not ours, we skip the write, and because we
+    -- skip it `store` never catches up - so the comparison fails identically on
+    -- every subsequent frame and that controller is never compensated again for
+    -- the rest of the session. A gate probe caught exactly that: one crosshair
+    -- controller frozen at cur=(16.7,-6.6)/lastWrote=(-5.9,6.8) for 79
+    -- consecutive frames while the intended offset swept 280px and every other
+    -- controller tracked it perfectly.
+    --
+    -- A margin the engine is actively driving moves, and it moves especially
+    -- while the head does, since it is a projection of a world point through a
+    -- rotating camera. One that is bit-identical for GATE_STALE_FRAMES is
+    -- leftover state, so take it back.
+    local moved = store.prev_l == nil
+        or math_abs(l - store.prev_l) >= GATE_MATCH_EPS
+        or math_abs(t - store.prev_t) >= GATE_MATCH_EPS
+    store.prev_l, store.prev_t = l, t
+    store.static_frames = moved and 0 or ((store.static_frames or 0) + 1)
+
+    if margin_off and not is_ours and store.static_frames < GATE_STALE_FRAMES then
         return "margin", l, t, child_mag
     end
     return nil, l, t, child_mag
@@ -874,7 +899,9 @@ end
 function BuiltinCrosshair:_gateLog(label, cur_l, cur_t, child_mag, store, intended_x, intended_y, reason)
     if not self._gate_log_now then return end
     local verdict = "OURS (shove to body-fwd)"
-    if reason == "margin" then verdict = "ENGINE/margin (leave)" end
+    if reason == "margin" then
+        verdict = string.format("ENGINE/margin (leave, static=%d)", store.static_frames or 0)
+    end
     if reason == "lock-child" then verdict = "ENGINE/lock-child (leave)" end
     dlog(string.format(
         "[HeadTracking:Gate] %-28s cur=(%.1f,%.1f) childTrans=%.1f lastWrote=(%s,%s) intended=(%.1f,%.1f) -> %s",

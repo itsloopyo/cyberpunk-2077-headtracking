@@ -75,6 +75,7 @@ local Perf = safeRequire("modules/perf")
 local DebugLog = safeRequire("modules/debuglog")
 local Hotkeys = safeRequire("modules/hotkeys")
 local PoseInterpolator = safeRequire("modules/poseinterpolator")
+local ShiftCompat = safeRequire("modules/shift_compat")
 
 -- Mod log: the CET console plus the native plugin's HeadTracking.log, which
 -- sits next to the game EXE. A "no head tracking" report has to be answerable
@@ -541,6 +542,15 @@ local function onUpdateImpl(deltaTime)
     -- the first frame the FPP cam exists, even before the tracker connects.
     if camera and camera.tryInitialReset then camera:tryInitialReset() end
 
+    -- Shift writes the same camera slot we do and its handler runs after ours,
+    -- so while it has an offset configured it overwrites head tracking every
+    -- frame. Ask it to stand its camera sources down for as long as tracking is
+    -- on. Cheap: this is a no-op once the state matches, and Shift is looked up
+    -- at most every couple of seconds until found.
+    if ShiftCompat then
+        ShiftCompat.apply(settings:get("enabled") or settings:get("position_enabled"), mlog)
+    end
+
     local now = os.clock()
     local should_diag = (now - diag_last_log_time) >= DIAG_INTERVAL_S
 
@@ -762,6 +772,12 @@ registerForEvent("onDraw", guarded("onDraw", onDrawImpl))
 -- Lifecycle: Called on shutdown
 registerForEvent("onShutdown", function()
     mlog("[HeadTracking] Shutting down...")
+
+    -- Give Shift its camera back before we go, or a user who unloads this mod
+    -- is left with Shift permanently suppressed for the rest of the session.
+    if ShiftCompat then
+        ShiftCompat.release(mlog)
+    end
 
     -- Shutdown Native Settings integration (unsubscribes from observers)
     if nativeUI then

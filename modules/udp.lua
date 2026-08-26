@@ -11,6 +11,7 @@
 --                              qi, qj, qk, qr, propagatorInject,
 --                              positionX, positionY, positionZ, aimDistance,
 --                              chaseCamera) -> ok
+--   Game.HeadTrackingSetFppOrientation(qi, qj, qk, qr, active) -> ok
 --   Game.HeadTrackingPushRicochetState(valid, hit, normal, forward) -> ok
 --
 -- This used to be a TCP socket served by the plugin and driven from Lua by
@@ -97,6 +98,7 @@ function TrackingInput:init()
     -- missing rather than failing later with a nil call.
     if type(Game.HeadTrackingPollPose) ~= "function" or
        type(Game.HeadTrackingPushState) ~= "function" or
+       type(Game.HeadTrackingSetFppOrientation) ~= "function" or
        type(Game.HeadTrackingPushRicochetState) ~= "function" then
         error("[HeadTracking] FATAL: the native plugin's script functions are missing. " ..
               "Check that red4ext/plugins/HeadTrackingAim.dll is installed. If " ..

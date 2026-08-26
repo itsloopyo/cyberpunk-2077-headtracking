@@ -72,6 +72,20 @@ local function _callSetLocalPosition(cam, v)
     cam:SetLocalPosition(v)
 end
 
+-- Hand the native plugin the orientation we just put in the camera, so it can
+-- re-stamp the same value later in the frame. CET runs mod update handlers in
+-- load order and the slot holds one absolute quaternion, so a camera mod that
+-- sorts after "HeadTracking" - Shift (Nexus 22340) is the one users hit -
+-- overwrites us and head tracking silently stops. See
+-- native/src/FppCameraWrite.cpp; `active` false stands the re-stamp down.
+local function publishFppOrientation(q, active)
+    if active then
+        Game.HeadTrackingSetFppOrientation(q.i, q.j, q.k, q.r, true)
+    else
+        Game.HeadTrackingSetFppOrientation(0, 0, 0, 1, false)
+    end
+end
+
 -- Smoothing defaults, mirroring cameraunlock-core SmoothingUtils
 -- (DefaultLocalSmoothing / DefaultRemoteSmoothing). Local defaults to zero
 -- because a same-machine tracker is already stable and any smoothing there
@@ -815,6 +829,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
             self.last_head_quat = nil
             self.last_clean_local_quat = nil
         end
+        publishFppOrientation(nil, false)
         return
     end
 
@@ -846,6 +861,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
             dlog("[HeadTracking] SetLocalOrientation failed: " .. tostring(err))
             return
         end
+        publishFppOrientation(final_quat, true)
         -- Remember what we applied so next frame can undo it; and stash
         -- the clean base for aim decoupling to consult. In diag-clean-cam
         -- mode we wrote clean (no head rotation), so the "applied head
@@ -874,6 +890,7 @@ function Camera:tryInitialReset()
     local cam = getFPPCamera()
     if not cam then return end
     pcall(_callSetLocalOrientation, cam, Quaternion.new(0, 0, 0, 1))
+    publishFppOrientation(nil, false)
     self.last_head_quat = nil
     self.last_clean_local_quat = nil
     self._computed_head_quat = nil
@@ -951,6 +968,12 @@ end
 --- apply() uses for the same reason.
 function Camera:suspend()
     local cam = getFPPCamera()
+
+    -- Ahead of the peel, not after it: the native re-stamp runs once a frame
+    -- off whatever was published last, and leaving it armed through a
+    -- suppression would put the head rotation straight back into the camera
+    -- the peel below just cleaned out.
+    publishFppOrientation(nil, false)
 
     if self.last_head_quat then
         if cam then

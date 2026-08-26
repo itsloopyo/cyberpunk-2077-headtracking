@@ -90,7 +90,8 @@ $requiredModFiles = @(
     "modules\perf.lua",
     "modules\debuglog.lua",
     "modules\hotkeys.lua",
-    "modules\poseinterpolator.lua"
+    "modules\poseinterpolator.lua",
+    "modules\shift_compat.lua"
 )
 
 $docFiles = @(

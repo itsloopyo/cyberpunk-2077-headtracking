@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 itsloopyo
 #include "ScriptChannel.hpp"
+#include "FppCameraWrite.hpp"
 
 #include "ChaseCameraHook.hpp"
 
@@ -363,6 +364,8 @@ void RegisterFunctions() {
     pushRicochet->AddParam("Float", "endZ");
     pushRicochet->SetReturnType("Bool");
     rtti->RegisterFunction(pushRicochet);
+
+    FppCameraWrite_Register(rtti);
 
     LogInfo("[ScriptChannel] registered pose and ricochet state functions");
 }

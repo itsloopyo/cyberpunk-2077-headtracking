@@ -39,6 +39,7 @@
     { "source": "modules/perf.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/perf.lua" },
     { "source": "modules/poseinterpolator.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/poseinterpolator.lua" },
     { "source": "modules/settings.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/settings.lua" },
+    { "source": "modules/shift_compat.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/shift_compat.lua" },
     { "source": "modules/state.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/state.lua" },
     { "source": "modules/udp.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/udp.lua" },
     { "source": "modules/ui.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/ui.lua" },

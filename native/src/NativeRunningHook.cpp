@@ -6,6 +6,7 @@
 #include "AimProviderHook.hpp"
 #include "AimGetterHook.hpp"
 #include "ScriptChannel.hpp"
+#include "FppCameraWrite.hpp"
 
 #include <RED4ext/RED4ext.hpp>
 #include <RED4ext/GameStates.hpp>
@@ -314,6 +315,7 @@ bool OnUpdate(RED4ext::CGameApplication*) {
     // counters.
     AimProviderHook_Tick();
     AimGetterHook_Tick();
+    FppCameraWrite_Tick();
 
     if (HeadTrackingState* w = g_sharedState.GetWritable()) {
         w->native_running_frame++;

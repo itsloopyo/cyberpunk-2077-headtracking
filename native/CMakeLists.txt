@@ -38,6 +38,7 @@ add_library(HeadTrackingAim SHARED
     src/ChaseCameraHook.cpp
     src/UdpReceiver.cpp
     src/ScriptChannel.cpp
+    src/FppCameraWrite.cpp
     src/builds/build_registry.cpp
     src/builds/gog_offsets.cpp
 )
