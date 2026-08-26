@@ -16,6 +16,17 @@ local GameUI = require("modules/GameUI")
 local State = {}
 State.__index = State
 
+-- Gate verdicts are the first thing a "no head tracking" report needs, so they
+-- go to HeadTracking.log beside the game EXE rather than only to the CET
+-- console. pcall because the call crosses into the native RTTI dispatcher and
+-- an error raised there escapes to CET's panic path, which abort()s the game.
+local function slog(msg)
+    print(msg)
+    if type(Game.HeadTrackingLog) == "function" then
+        pcall(Game.HeadTrackingLog, msg)
+    end
+end
+
 -- State reasons for debugging and UI feedback
 State.REASON = {
     ALLOWED = "allowed",
@@ -196,14 +207,14 @@ function State:init(camera, settings)
     Observe("ReadyEvents", "OnEnter", function(_, stateContext, scriptInterface)
         this.has_weapon = true
         this:invalidateCache()
-        print("[HeadTracking:State] Weapon readied")
+        slog("[HeadTracking:State] Weapon readied")
     end)
 
     -- Observe when weapon is unreadied (holstered)
     Observe("ReadyEvents", "OnExit", function(_, stateContext, scriptInterface)
         this.has_weapon = false
         this:invalidateCache()
-        print("[HeadTracking:State] Weapon holstered")
+        slog("[HeadTracking:State] Weapon holstered")
     end)
 end
 
@@ -292,8 +303,8 @@ local function readChaseCamera(defs, psmBB)
         if ok and id ~= nil then
             chase_camera_field = id
         else
-            print("[HeadTracking:State] PlayerStateMachine.IsVehicleInTPP unavailable - " ..
-                  "head tracking in the vehicle chase camera is off on this build")
+            slog("[HeadTracking:State] PlayerStateMachine.IsVehicleInTPP unavailable - " ..
+                 "head tracking in the vehicle chase camera is off on this build")
         end
     end
     if not chase_camera_field then return false end
@@ -341,9 +352,9 @@ end
 function State:setVerdict(allowed, reason)
     if allowed ~= self.cached_allowed or reason ~= self.cached_reason then
         if allowed then
-            print("[HeadTracking:State] tracking RESUMED")
+            slog("[HeadTracking:State] tracking RESUMED")
         else
-            print("[HeadTracking:State] tracking BLOCKED: " .. tostring(reason))
+            slog("[HeadTracking:State] tracking BLOCKED: " .. tostring(reason))
         end
     end
     self.cached_allowed = allowed
@@ -475,6 +486,11 @@ function State:isTrackingAllowed()
     -- nowhere - a flag left true through a menu would keep the native
     -- render-side injection running.
     if live then
+        if live.chase_camera ~= self.chase_camera then
+            slog(string.format(
+                "[HeadTracking:State] chase camera -> %s (IsVehicleInTPP; upperBody=%s)",
+                tostring(live.chase_camera), tostring(self:probeUpperBodyState())))
+        end
         self.chase_camera = live.chase_camera
     end
 
