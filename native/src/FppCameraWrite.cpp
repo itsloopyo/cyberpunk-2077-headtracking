@@ -16,39 +16,37 @@
 
 void LogInfo(const char* fmt, ...);
 
-// Head tracking and another CET camera mod can both own the FPP camera's
-// orientation, because both reach it the same way: entIPlacedComponent's
-// SetLocalOrientation on the component GetFPPCameraComponent() returns. The
-// slot holds one absolute quaternion, so the last writer in the frame is the
-// only one the engine sees, and CET runs mod update handlers in load order -
-// which is the mod folder name, alphabetically. "HeadTracking" sorts before
-// most things, so we write first and lose.
+// Re-stamps the FPP camera's orientation from native, once per frame, after the
+// script tick.
 //
-// Shift (Nexus 22340) is the case that brought this in. It composites its own
-// pose and stamps it absolutely in CameraEngine.writeToHardware, standing off
-// only while its pose is exactly neutral - so whichever of its sources happens
-// to be active decides whether head tracking works at all. A user reported
-// tracking that only worked with a weapon drawn, which is that gate flipping
-// with the weapon preset.
+// WHAT THIS IS NOT: it is not the fix for the Shift (Nexus 22340) conflict. It
+// was written as one and measured not to be. Both mods write the same slot -
+// SetLocalOrientation on the component GetFPPCameraComponent() returns, which
+// holds one absolute quaternion - and CET runs mod update handlers in
+// folder-name order, so "Shift" lands after "HeadTracking" and wins. Adding
+// this tick did not restore head tracking with Shift configured, which is the
+// only thing that would have shown it lands late enough. What actually fixed
+// that conflict is modules/shift_compat.lua, which asks Shift through its own
+// published API to stand its camera sources down.
 //
-// The fix is to re-stamp the orientation from native, once per frame, after
-// the script tick has run. Lua still does its own write and still owns the
-// composition - this only repeats Lua's most recent result into the same slot
-// from a later point in the frame. That makes it safe whichever way the two
-// tick orders resolve:
+// WHAT IT IS: a defence for the window between our Lua write and this tick. A
+// write that lands in that window is undone on the frames this tick runs, which
+// is not all of them: it stands down without a fresh push from Lua, in the
+// chase camera, and with no resolved camera instance. It does nothing at all
+// about a writer that runs after this tick.
 //
-//   native after Lua  - the stamp is a no-op when nothing clobbered us, and
-//                       puts our rotation back when something did.
-//   native before Lua - the stamp writes the previous frame's value moments
-//                       before Lua writes the current one, and Lua wins as it
-//                       always did. No behaviour change.
+// Lua still owns the composition; this only repeats its most recent result. So
+// it is safe whichever way the two tick orders resolve:
 //
-// Which of the two we get is not asserted anywhere here, because nothing this
-// side can see separates them cleanly. What the log carries instead is a plain
-// count: how often the slot still held Lua's value when the tick arrived. All
-// of them means we run after Lua and nothing is fighting us; none of them means
-// either we run first or something overwrites Lua, and which of those it is
-// falls out of whether head tracking visibly works.
+//   native after Lua  - a no-op when nothing clobbered us, corrective when
+//                       something did.
+//   native before Lua - writes the previous frame's value moments before Lua
+//                       writes the current one, and Lua wins as it always did.
+//
+// Nothing on this side can separate "another mod wrote after Lua" from "the
+// engine's own camera update ran between Lua and us", so neither the heartbeat
+// nor the one-shot line may name a culprit, and neither is evidence for which
+// of the two orderings above is in effect.
 
 namespace {
 
@@ -69,6 +67,7 @@ bool s_conflictLogged = false;
 
 uint64_t s_lastLogMs = 0;
 uint32_t s_loggedStamps = 0;
+uint32_t s_loggedIntact = 0;
 
 // A quaternion that is neither finite nor roughly unit length has no business
 // reaching the camera. Same bound the other hooks use.
@@ -212,27 +211,36 @@ void FppCameraWrite_Tick() {
     } else if (!s_conflictLogged) {
         s_conflictLogged = true;
         LogInfo("[FppCameraWrite] the FPP camera orientation is not what the CET half last "
-                "wrote - re-stamping head tracking into it each frame. Another camera mod "
-                "writing the same slot after us looks like this; Shift (Nexus 22340) does. "
-                "The stamps/intact counts below say how often it happens.");
+                "wrote, so something writes it between the two. That is either another "
+                "camera mod or the engine's own camera update; this side cannot tell them "
+                "apart. Head tracking is re-stamped over it each frame either way.");
     }
 
     if (!SehWriteQuat(slot, quat)) return;
     s_stamps.fetch_add(1, std::memory_order_relaxed);
 
-    // A healthy install has intact == stamps and nothing to say, so this is a
-    // five-minute liveness line. It gets loud only while the two disagree.
+    // Rate is what matters, so gate on divergence SINCE THE LAST LINE rather
+    // than on the cumulative totals: comparing those would let one divergence
+    // early in a session pin this to the 30-second cadence for the rest of it.
+    // A quiet install gets the five-minute liveness line and nothing else.
     const uint64_t now = GetTickCount64();
     const uint32_t stamps = s_stamps.load(std::memory_order_relaxed);
     const uint32_t intact = s_intact.load(std::memory_order_relaxed);
     if (s_lastLogMs == 0) {
         s_lastLogMs = now;
         s_loggedStamps = stamps;
-    } else if ((intact != stamps && now - s_lastLogMs > 30000) ||
-               now - s_lastLogMs > 300000) {
-        LogInfo("[FppCameraWrite] heartbeat: stamps=%u intact=%u (+%u stamped since last line)",
-                stamps, intact, stamps - s_loggedStamps);
-        s_lastLogMs = now;
-        s_loggedStamps = stamps;
+        s_loggedIntact = intact;
+    } else {
+        const uint32_t dStamps = stamps - s_loggedStamps;
+        const uint32_t dIntact = intact - s_loggedIntact;
+        if ((dIntact != dStamps && now - s_lastLogMs > 30000) ||
+            now - s_lastLogMs > 300000) {
+            LogInfo("[FppCameraWrite] heartbeat: stamps=%u intact=%u "
+                    "(+%u stamped, +%u intact since last line)",
+                    stamps, intact, dStamps, dIntact);
+            s_lastLogMs = now;
+            s_loggedStamps = stamps;
+            s_loggedIntact = intact;
+        }
     }
 }

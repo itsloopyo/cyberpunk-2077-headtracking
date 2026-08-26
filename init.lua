@@ -508,7 +508,8 @@ local function onUpdateImpl(deltaTime)
         end
     end
 
-    if not state or not udp or not camera or not aim or not pose_interp or not ads_pose then
+    if not state or not udp or not camera or not aim or not pose_interp or not ads_pose
+            or not ShiftCompat then
         if (init_debug_frame % INIT_DEBUG_INTERVAL) == 1 then
             -- This block is the answer to most "no head tracking" reports, so
             -- the first pass goes to HeadTracking.log. It repeats on an
@@ -528,7 +529,10 @@ local function onUpdateImpl(deltaTime)
             out("[HeadTracking:INIT]   modules: state=" .. tostring(state ~= nil) ..
                 " udp=" .. tostring(udp ~= nil) ..
                 " camera=" .. tostring(camera ~= nil) ..
-                " aim=" .. tostring(aim ~= nil))
+                " aim=" .. tostring(aim ~= nil) ..
+                " pose_interp=" .. tostring(pose_interp ~= nil) ..
+                " ads_pose=" .. tostring(ads_pose ~= nil) ..
+                " shift_compat=" .. tostring(ShiftCompat ~= nil))
             out("[HeadTracking:INIT] =================================================")
         end
         return
@@ -547,9 +551,7 @@ local function onUpdateImpl(deltaTime)
     -- frame. Ask it to stand its camera sources down for as long as tracking is
     -- on. Cheap: this is a no-op once the state matches, and Shift is looked up
     -- at most every couple of seconds until found.
-    if ShiftCompat then
-        ShiftCompat.apply(settings:get("enabled") or settings:get("position_enabled"), mlog)
-    end
+    ShiftCompat.apply(settings:get("enabled") or settings:get("position_enabled"), mlog)
 
     local now = os.clock()
     local should_diag = (now - diag_last_log_time) >= DIAG_INTERVAL_S
@@ -775,6 +777,12 @@ registerForEvent("onShutdown", function()
 
     -- Give Shift its camera back before we go, or a user who unloads this mod
     -- is left with Shift permanently suppressed for the rest of the session.
+    --
+    -- Nil-checked where the onUpdate call site is not: this handler runs even
+    -- when onInit aborted on a module-load error, which is why every other line
+    -- below is guarded the same way. onUpdate needs no guard because the
+    -- module-completeness gate at the top of onUpdateImpl lists ShiftCompat and
+    -- returns before reaching it.
     if ShiftCompat then
         ShiftCompat.release(mlog)
     end

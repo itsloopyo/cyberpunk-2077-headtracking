@@ -132,6 +132,12 @@ function State.new()
     -- vehicle chase camera. Same deal as ads_active: recomputed, not latched.
     self.chase_camera = false
 
+    -- Separate baseline for the transition log, because chase_camera is reset
+    -- to false at the top of every cache-miss walk. Comparing against it would
+    -- make the log fire on every walk while the chase camera is up, and never
+    -- fire on the way out.
+    self.chase_camera_logged = false
+
     -- Warmup deadline (os.clock()); tracking suppressed until this passes.
     -- nil means "no warmup active". Armed on loading-finish and session-start.
     self.warmup_deadline = nil
@@ -480,16 +486,23 @@ function State:isTrackingAllowed()
         return self:setVerdict(false, latched_reason)
     end
 
-    -- Recorded here rather than at the live probe above so that every early
-    -- return in this walk leaves it false. It says where the head rotation
-    -- should be applied, and while tracking is suppressed the answer is
-    -- nowhere - a flag left true through a menu would keep the native
-    -- render-side injection running.
+    -- Recorded here rather than at the live probe above, so that the returns
+    -- ABOVE this point (menu, warmup, latched GameUI reason) leave it false. It
+    -- says where the head rotation should be applied, and through a menu the
+    -- answer is nowhere: a flag left true there would keep the native
+    -- render-side injection running. The ADS return below is past this point
+    -- and does leave it set, which is harmless because init.lua only consults
+    -- it as `tracking_allowed and state:isChaseCameraActive()`.
+    --
+    -- chase_camera_logged is deliberately NOT reset per walk. It is the
+    -- transition baseline for the log line, and comparing against a field that
+    -- is cleared every walk made the line fire on each cache miss while the
+    -- chase camera was up and never fire on the way out.
     if live then
-        if live.chase_camera ~= self.chase_camera then
-            slog(string.format(
-                "[HeadTracking:State] chase camera -> %s (IsVehicleInTPP; upperBody=%s)",
-                tostring(live.chase_camera), tostring(self:probeUpperBodyState())))
+        if live.chase_camera ~= self.chase_camera_logged then
+            self.chase_camera_logged = live.chase_camera
+            slog("[HeadTracking:State] chase camera (IsVehicleInTPP) -> " ..
+                 tostring(live.chase_camera))
         end
         self.chase_camera = live.chase_camera
     end

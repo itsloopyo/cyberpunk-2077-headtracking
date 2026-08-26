@@ -66,7 +66,7 @@ check-fingerprint = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/ch
 # described in cameraunlock-core/AGENTS.md (`package` -> `build`). The
 # vendored CET + RED4ext loaders are committed under vendor/ and bundled
 # into the ZIP by package-release.ps1.
-package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build", "test-manifest"] }
+package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build", "test"] }
 
 # Automated release workflow
 release = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/release.ps1" }
@@ -100,4 +100,8 @@ check-fingerprint = { cmd = "echo 'check-fingerprint requires Windows (reads the
 clean = { cmd = "rm -rf dist release native/build native/out && echo 'Build artifacts cleaned'" }
 
 [dependencies]
-# No pixi dependencies needed - Lua mod uses CET runtime
+# The Lua half runs on CET's own runtime, so nothing here is needed to BUILD or
+# RUN the mod. `lua` is here purely so the test suites are runnable everywhere,
+# including CI: `package` gates on them, and a gate that only fires on machines
+# that happen to have lua on PATH is not a gate.
+lua = ">=5.4,<5.5"

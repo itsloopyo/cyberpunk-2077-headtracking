@@ -85,9 +85,11 @@ end
 local GATE_RESTING_PX = 8.0
 local GATE_MATCH_EPS  = 1.0
 local GATE_WALK_DEPTH = 6
--- How many consecutive frames a not-ours root margin must sit bit-identical
--- before we take it back. See the staleness note in _engineDriving.
-local GATE_STALE_FRAMES = 30
+-- How long a not-ours root margin must stay inside a GATE_MATCH_EPS box before
+-- we take it back. Seconds, NOT frames: a frame count means one thing at 30fps
+-- and a different thing at 240, and this mod's users run high-refresh displays.
+-- See the staleness note in _engineDriving.
+local GATE_STALE_SECONDS = 0.5
 local AIM_RAY_LENGTH_M = 1000.0
 local RICOCHET_PREVIEW_LENGTH_M = 20.0
 local AIM_DISTANCE_SMOOTH_SPEED = 18.0
@@ -510,6 +512,10 @@ end
 -- signal (the lock-on rectangle appearing) is being discovered via
 -- probeLockSignal; child_mag is computed only when the gate log is armed.
 -- `store` is a per-widget table we own carrying {l,t} of our last margin write.
+local function _clearHold(store)
+    if store then store.anchor_l, store.anchor_t, store.static_since = nil, nil, nil end
+end
+
 local function _engineDriving(root, store, compute_child)
     local l, t = 0, 0
     pcall(function() local m = root:GetMargin(); l, t = m.left or 0, m.top or 0 end)
@@ -524,29 +530,36 @@ local function _engineDriving(root, store, compute_child)
     local is_ours = store.l ~= nil and math_abs(l - store.l) < GATE_MATCH_EPS
                                    and math_abs(t - store.t) < GATE_MATCH_EPS
 
-    -- How long this margin has sat unchanged. "The engine owns this widget" has
-    -- to mean the engine is POSITIONING it, not that it once wrote a value
-    -- here. Testing the value alone made the gate one-way: a single engine
-    -- write leaves a margin that is not ours, we skip the write, and because we
-    -- skip it `store` never catches up - so the comparison fails identically on
-    -- every subsequent frame and that controller is never compensated again for
-    -- the rest of the session. A gate probe caught exactly that: one crosshair
-    -- controller frozen at cur=(16.7,-6.6)/lastWrote=(-5.9,6.8) for 79
-    -- consecutive frames while the intended offset swept 280px and every other
-    -- controller tracked it perfectly.
+    -- "The engine owns this widget" has to mean the engine is POSITIONING it,
+    -- not that it once wrote a value here. Testing the value alone made the
+    -- gate one-way: a single engine write leaves a margin that is not ours, we
+    -- skip our write, and because we skip it `store` never catches up, so the
+    -- comparison fails identically forever and that controller is never
+    -- compensated again for the rest of the session. A gate probe caught
+    -- exactly that, one crosshair controller frozen at cur=(16.7,-6.6) /
+    -- lastWrote=(-5.9,6.8) for 79 straight frames while the intended offset
+    -- swept 280px and every other controller tracked it perfectly.
     --
-    -- A margin the engine is actively driving moves, and it moves especially
-    -- while the head does, since it is a projection of a world point through a
-    -- rotating camera. One that is bit-identical for GATE_STALE_FRAMES is
-    -- leftover state, so take it back.
-    local moved = store.prev_l == nil
-        or math_abs(l - store.prev_l) >= GATE_MATCH_EPS
-        or math_abs(t - store.prev_t) >= GATE_MATCH_EPS
-    store.prev_l, store.prev_t = l, t
-    store.static_frames = moved and 0 or ((store.static_frames or 0) + 1)
-
-    if margin_off and not is_ours and store.static_frames < GATE_STALE_FRAMES then
-        return "margin", l, t, child_mag
+    -- So hold off only while the margin is actually moving. Displacement is
+    -- measured from an ANCHOR - the value when the hold began - rather than
+    -- frame to frame, which is what keeps this honest at any frame rate. A
+    -- per-frame delta says "not moving" for any projection slower than
+    -- GATE_MATCH_EPS per frame, and that bar rises with refresh rate: a lock-on
+    -- sliding at 240px/s clears 1px/frame at 60Hz and misses it at 240Hz. The
+    -- anchor also absorbs sub-pixel jitter, which a per-frame delta would read
+    -- as continuous motion and never release.
+    if margin_off and not is_ours then
+        local anchored = store.anchor_l ~= nil
+            and math_abs(l - store.anchor_l) < GATE_MATCH_EPS
+            and math_abs(t - store.anchor_t) < GATE_MATCH_EPS
+        if not anchored then
+            store.anchor_l, store.anchor_t, store.static_since = l, t, os.clock()
+        end
+        if (os.clock() - store.static_since) < GATE_STALE_SECONDS then
+            return "margin", l, t, child_mag
+        end
+    else
+        store.anchor_l, store.anchor_t, store.static_since = nil, nil, nil
     end
     return nil, l, t, child_mag
 end
@@ -900,7 +913,8 @@ function BuiltinCrosshair:_gateLog(label, cur_l, cur_t, child_mag, store, intend
     if not self._gate_log_now then return end
     local verdict = "OURS (shove to body-fwd)"
     if reason == "margin" then
-        verdict = string.format("ENGINE/margin (leave, static=%d)", store.static_frames or 0)
+        verdict = string.format("ENGINE/margin (leave, static=%.2fs)",
+            store.static_since and (os.clock() - store.static_since) or 0)
     end
     if reason == "lock-child" then verdict = "ENGINE/lock-child (leave)" end
     dlog(string.format(
@@ -2072,6 +2086,24 @@ function BuiltinCrosshair:setShoveNameplate(on)
         self._shove_nameplate and "ON" or "OFF", #self.nameplates))
 end
 
+-- Drop every gate hold-timer. Called wherever the driver stands down, because
+-- the hold is measured in wall-clock seconds but _engineDriving only runs on
+-- frames we actually write. A menu, a pause or a loading screen advances
+-- os.clock without the gate observing anything, so a hold left running would
+-- come back from a five-second map screen already past GATE_STALE_SECONDS and
+-- take over an engine-owned margin it never watched.
+function BuiltinCrosshair:_clearGateHolds()
+    local entries = self:_entries()
+    for i = 1, #entries do
+        _clearHold(entries[i]._lw)
+    end
+    if self._bracket_lw then
+        for i = 1, #self._bracket_lw do
+            _clearHold(self._bracket_lw[i])
+        end
+    end
+end
+
 function BuiltinCrosshair:_resetAll()
     self._last_dx = 0
     self._last_dy = 0
@@ -2127,12 +2159,14 @@ function BuiltinCrosshair:tick(tracking_allowed)
         self._gate_log_now = false
     end
     if self._suppress_writes then
+        self:_clearGateHolds()
         if self._last_dx ~= 0 or self._last_dy ~= 0 then
             self:_resetAll()
         end
         return
     end
     if not self.enabled or not tracking_allowed then
+        self:_clearGateHolds()
         if self._last_dx ~= 0 or self._last_dy ~= 0 then
             self:_resetAll()
         end

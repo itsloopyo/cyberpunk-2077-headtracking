@@ -72,11 +72,10 @@ local function _callSetLocalPosition(cam, v)
     cam:SetLocalPosition(v)
 end
 
--- Hand the native plugin the orientation we just put in the camera, so it can
--- re-stamp the same value later in the frame. CET runs mod update handlers in
--- load order and the slot holds one absolute quaternion, so a camera mod that
--- sorts after "HeadTracking" - Shift (Nexus 22340) is the one users hit -
--- overwrites us and head tracking silently stops. See
+-- Hand the native plugin the orientation we just put in the camera so it can
+-- re-stamp the same value from its own per-frame tick, undoing anything that
+-- writes the slot in between. It does not reach a writer that runs after that
+-- tick; Shift is handled by modules/shift_compat.lua instead. See
 -- native/src/FppCameraWrite.cpp; `active` false stands the re-stamp down.
 local function publishFppOrientation(q, active)
     if active then
