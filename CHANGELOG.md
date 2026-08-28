@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.3] - 2026-08-28
+
+### Changed
+
+- Maintenance release (no user-facing changes).
+
 ## [1.3.2] - 2026-08-28
 
 ### Changed
