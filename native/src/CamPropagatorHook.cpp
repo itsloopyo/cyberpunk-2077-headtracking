@@ -32,12 +32,21 @@ std::atomic<uint32_t> s_skipped{0};
 // claimed atomically. A plain timestamp updated after LogInfo lets every
 // thread pass the same check while the first one is still inside the file
 // write, and the identical line comes out once per thread.
-std::atomic<uint64_t> s_lastLogMs{0};
-std::atomic<bool>     s_haveLogged{false};
-std::atomic<uint32_t> s_loggedInjected{0};
-std::atomic<void*>    s_loggedCam{nullptr};
-std::atomic<int>      s_loggedOff{0};
+uint64_t s_lastLogMs = 0;
+bool     s_haveLogged = false;
+uint32_t s_loggedInjected = 0;
+void*    s_loggedCam = nullptr;
+int      s_loggedOff = 0;
+uint32_t s_flushedCalls = 0;
 thread_local uint32_t t_depth = 0;
+
+// The injection gate, mirrored out of shared memory once per frame by
+// CamPropagatorHook_Tick. Reading it per call meant copying 208 bytes out of
+// the mapping and sanity-checking 30-odd floats to answer a question that only
+// changes at frame cadence, on a function the game calls up to half a million
+// times a second across several threads. Same pattern as g_headQuat in
+// NativeRunningHook.
+std::atomic<bool> s_gateOpen{false};
 
 inline bool IsValidUnitish(float x, float y, float z, float w) {
     const float lenSq = x*x + y*y + z*z + w*w;
@@ -49,27 +58,12 @@ using quatmath::QuatMul;
 void Hook_Propagator(void* self, bool markDirty) {
     s_calls.fetch_add(1, std::memory_order_relaxed);
 
-    if (HeadTrackingState* w = g_sharedState.GetWritable()) {
-        w->camera_hook_active = true;
-        w->camera_hook_fires++;
-        w->propagator_hook_fires++;
-    }
-
     bool wrote = false;
     float saved[4] = {0, 0, 0, 1};
     float* slot = nullptr;
 
     if (t_depth == 0) {
-        HeadTrackingState state{};
-        if (g_sharedState.IsAvailable()) {
-            state = g_sharedState.Read();
-        }
-
-        const bool gateOpen =
-            state.enabled &&
-            state.camera_hook_inject &&
-            state.propagator_inject_active != 0u &&
-            state.applied_frame > 0;
+        const bool gateOpen = s_gateOpen.load(std::memory_order_relaxed);
 
         void* cam = g_camInstance;
         const int camOff = g_camOrientationOffset;
@@ -128,6 +122,28 @@ void Hook_Propagator(void* self, bool markDirty) {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
+}
+
+}  // namespace
+
+void CamPropagatorHook_Tick(bool gateOpen) {
+    s_gateOpen.store(gateOpen, std::memory_order_relaxed);
+
+    const uint32_t calls = s_calls.load(std::memory_order_relaxed);
+    if (calls == s_flushedCalls) return;   // hook not firing; nothing to report
+
+    // camera_hook_fires and propagator_hook_fires are heartbeat counters read
+    // from outside the process, so they have to keep advancing without losing
+    // counts. They do not need per-call freshness, and writing them from every
+    // thread that entered the hook had one shared cache line bouncing between
+    // cores at the hook's full call rate.
+    if (HeadTrackingState* w = g_sharedState.GetWritable()) {
+        const uint32_t delta = calls - s_flushedCalls;
+        w->camera_hook_active = true;
+        w->camera_hook_fires += delta;
+        w->propagator_hook_fires += delta;
+    }
+    s_flushedCalls = calls;
 
     // `calls` and `skipped` climb on every invocation, so a plain 3s heartbeat
     // repeats a line that says nothing: propagator injection is off in the
@@ -137,29 +153,26 @@ void Hook_Propagator(void* self, bool markDirty) {
     // so a quiet log still proves the hook is firing.
     const uint64_t now = GetTickCount64();
     const uint32_t injected = s_injected.load(std::memory_order_relaxed);
-    const bool first = !s_haveLogged.load(std::memory_order_relaxed);
+    const bool first = !s_haveLogged;
     const bool changed = first ||
-                         injected != s_loggedInjected.load(std::memory_order_relaxed) ||
-                         g_camInstance != s_loggedCam.load(std::memory_order_relaxed) ||
-                         g_camOrientationOffset != s_loggedOff.load(std::memory_order_relaxed);
-    uint64_t last = s_lastLogMs.load(std::memory_order_relaxed);
-    const uint64_t sinceLog = now - last;
-    if ((first || (changed && sinceLog >= 3000) || sinceLog >= 300000) &&
-        s_lastLogMs.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
-        s_haveLogged.store(true, std::memory_order_relaxed);
-        s_loggedInjected.store(injected, std::memory_order_relaxed);
-        s_loggedCam.store(g_camInstance, std::memory_order_relaxed);
-        s_loggedOff.store(g_camOrientationOffset, std::memory_order_relaxed);
+                         injected != s_loggedInjected ||
+                         g_camInstance != s_loggedCam ||
+                         g_camOrientationOffset != s_loggedOff;
+    const uint64_t sinceLog = now - s_lastLogMs;
+    if (first || (changed && sinceLog >= 3000) || sinceLog >= 300000) {
+        s_lastLogMs = now;
+        s_haveLogged = true;
+        s_loggedInjected = injected;
+        s_loggedCam = g_camInstance;
+        s_loggedOff = g_camOrientationOffset;
         LogInfo("[CamPropagator] heartbeat: calls=%u injected=%u skipped=%u cam=%p off=%d",
-                s_calls.load(std::memory_order_relaxed),
+                calls,
                 injected,
                 s_skipped.load(std::memory_order_relaxed),
                 g_camInstance,
                 g_camOrientationOffset);
     }
 }
-
-}  // namespace
 
 bool CamPropagatorHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle) {
     if (s_hooked.load(std::memory_order_acquire)) return true;

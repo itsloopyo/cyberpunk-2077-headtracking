@@ -60,6 +60,12 @@ extern float                  g_headQuat[4];
 // crashed the game.
 extern float                  g_headPos[3];
 
+// Live clean-aim hit distance, mirrored beside g_headPos and gated the same
+// way. The shot path pairs it with g_headPos to converge rounds on the point
+// the position-compensated reticle marks; reading it from shared memory there
+// meant a whole-struct copy and its sanity walk per pellet.
+extern float                  g_aimDistance;
+
 // Diagnostic capture: on first restore the pre-render hook stores the
 // camState pointer (4th arg to the hooked function) so OnUpdate can
 // later log it - LogInfo cannot be called from inside the hook body

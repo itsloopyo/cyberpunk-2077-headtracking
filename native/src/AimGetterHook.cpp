@@ -355,10 +355,9 @@ bool PeelWorldDirection(float* d, const float* head, const float* camWorld) {
 
 bool ApplyPositionToWorldDirection(float* d, const float* head,
                                    const float* camWorld) {
-    const HeadTrackingState state = g_sharedState.Read();
-    if (state.aim_distance <= 0.001f ||
-        std::fabs(state.position_x) + std::fabs(state.position_y) +
-                std::fabs(state.position_z) <= 0.00001f) {
+    if (g_aimDistance <= 0.001f ||
+        std::fabs(g_headPos[0]) + std::fabs(g_headPos[1]) +
+                std::fabs(g_headPos[2]) <= 0.00001f) {
         return true;
     }
 
@@ -372,9 +371,9 @@ bool ApplyPositionToWorldDirection(float* d, const float* head,
     const float cleanInv = 1.0f / std::sqrt(cleanLenSq);
     for (float& component : clean) component *= cleanInv;
 
-    const float tx = -state.position_x;
-    const float ty = state.aim_distance + state.position_y;
-    const float tz = -state.position_z;
+    const float tx = -g_headPos[0];
+    const float ty = g_aimDistance + g_headPos[1];
+    const float tz = -g_headPos[2];
     const float targetLenSq = tx*tx + ty*ty + tz*tz;
     if (!std::isfinite(targetLenSq) || targetLenSq < 0.0001f) return false;
     const float targetInv = 1.0f / std::sqrt(targetLenSq);

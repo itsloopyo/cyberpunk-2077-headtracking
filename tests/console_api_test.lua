@@ -37,6 +37,7 @@ local EXPECTED = {
     DiagCrosshairSuppress = CROSSHAIR_MISSING,
     DiagCrosshairTree     = CROSSHAIR_MISSING,
     DiagGate              = CROSSHAIR_MISSING,
+    DiagSmartProbe        = CROSSHAIR_MISSING,
     DiagSmartScale        = CROSSHAIR_MISSING,
     DiagSmartTargets      = CROSSHAIR_MISSING,
     DiagHitMarker         = CROSSHAIR_MISSING,

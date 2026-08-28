@@ -133,19 +133,6 @@ local function ensureFfi()
                 float position_y;
                 float position_z;
                 float aim_distance;
-                uint32_t ricochet_hit_valid;
-                float ricochet_hit_x;
-                float ricochet_hit_y;
-                float ricochet_hit_z;
-                float ricochet_normal_x;
-                float ricochet_normal_y;
-                float ricochet_normal_z;
-                float ricochet_forward_x;
-                float ricochet_forward_y;
-                float ricochet_forward_z;
-                float ricochet_end_x;
-                float ricochet_end_y;
-                float ricochet_end_z;
             } HeadTrackingState;
 
             void* CreateFileMappingA(void* hFile, void* lpAttr,
@@ -260,7 +247,6 @@ local function initSharedMemory()
     shared_mem.state.position_y = 0
     shared_mem.state.position_z = 0
     shared_mem.state.aim_distance = 0
-    shared_mem.state.ricochet_hit_valid = 0
 
 
     shared_mem.state.propagator_inject_active = 0
@@ -322,19 +308,6 @@ local function updateSharedMemory(yaw, pitch, enabled, is_ads, ads_scale, roll, 
     shared_mem.state.position_y = aim_state.position_y
     shared_mem.state.position_z = aim_state.position_z
     shared_mem.state.aim_distance = aim_state.aim_distance
-    shared_mem.state.ricochet_hit_valid = aim_state.ricochet_hit_valid and 1 or 0
-    shared_mem.state.ricochet_hit_x = aim_state.ricochet_hit_x
-    shared_mem.state.ricochet_hit_y = aim_state.ricochet_hit_y
-    shared_mem.state.ricochet_hit_z = aim_state.ricochet_hit_z
-    shared_mem.state.ricochet_normal_x = aim_state.ricochet_normal_x
-    shared_mem.state.ricochet_normal_y = aim_state.ricochet_normal_y
-    shared_mem.state.ricochet_normal_z = aim_state.ricochet_normal_z
-    shared_mem.state.ricochet_forward_x = aim_state.ricochet_forward_x
-    shared_mem.state.ricochet_forward_y = aim_state.ricochet_forward_y
-    shared_mem.state.ricochet_forward_z = aim_state.ricochet_forward_z
-    shared_mem.state.ricochet_end_x = aim_state.ricochet_end_x
-    shared_mem.state.ricochet_end_y = aim_state.ricochet_end_y
-    shared_mem.state.ricochet_end_z = aim_state.ricochet_end_z
 
     if quat then
         shared_mem.state.quat_i = quat.i or 0
@@ -391,19 +364,6 @@ local aim_state = {
     position_y = 0,
     position_z = 0,
     aim_distance = 0,
-    ricochet_hit_valid = false,
-    ricochet_hit_x = 0,
-    ricochet_hit_y = 0,
-    ricochet_hit_z = 0,
-    ricochet_normal_x = 0,
-    ricochet_normal_y = 0,
-    ricochet_normal_z = 0,
-    ricochet_forward_x = 0,
-    ricochet_forward_y = 0,
-    ricochet_forward_z = 0,
-    ricochet_end_x = 0,
-    ricochet_end_y = 0,
-    ricochet_end_z = 0,
     head_quat = { i = 0, j = 0, k = 0, r = 1 },
     override_registered = false,
     shared_mem_initialized = false,
@@ -696,11 +656,7 @@ end
 --- @param position_y number|nil Applied camera-local longitudinal offset in metres
 --- @param position_z number|nil Applied camera-local vertical offset in metres
 --- @param aim_distance number|nil Distance to the clean aim hit in metres
-function Aim:update(yaw, pitch, roll, quat, position_x, position_y, position_z, aim_distance,
-                    ricochet_hit_valid, ricochet_hit_x, ricochet_hit_y, ricochet_hit_z,
-                    ricochet_normal_x, ricochet_normal_y, ricochet_normal_z,
-                    ricochet_forward_x, ricochet_forward_y, ricochet_forward_z,
-                    ricochet_end_x, ricochet_end_y, ricochet_end_z)
+function Aim:update(yaw, pitch, roll, quat, position_x, position_y, position_z, aim_distance)
     aim_state.smooth_yaw = yaw
     aim_state.smooth_pitch = pitch
     aim_state.smooth_roll = roll or 0
@@ -708,19 +664,6 @@ function Aim:update(yaw, pitch, roll, quat, position_x, position_y, position_z, 
     aim_state.position_y = position_y or 0
     aim_state.position_z = position_z or 0
     aim_state.aim_distance = aim_distance or 0
-    aim_state.ricochet_hit_valid = ricochet_hit_valid and true or false
-    aim_state.ricochet_hit_x = ricochet_hit_x or 0
-    aim_state.ricochet_hit_y = ricochet_hit_y or 0
-    aim_state.ricochet_hit_z = ricochet_hit_z or 0
-    aim_state.ricochet_normal_x = ricochet_normal_x or 0
-    aim_state.ricochet_normal_y = ricochet_normal_y or 0
-    aim_state.ricochet_normal_z = ricochet_normal_z or 0
-    aim_state.ricochet_forward_x = ricochet_forward_x or 0
-    aim_state.ricochet_forward_y = ricochet_forward_y or 0
-    aim_state.ricochet_forward_z = ricochet_forward_z or 0
-    aim_state.ricochet_end_x = ricochet_end_x or 0
-    aim_state.ricochet_end_y = ricochet_end_y or 0
-    aim_state.ricochet_end_z = ricochet_end_z or 0
     _disco_yaw = yaw
     _disco_pitch = pitch
     if quat then
@@ -742,14 +685,7 @@ function Aim:update(yaw, pitch, roll, quat, position_x, position_y, position_z, 
                                      aim_state.head_quat,
                                      propagator_inject,
                                      aim_state.position_x, aim_state.position_y,
-                                     aim_state.position_z, aim_state.aim_distance,
-                                     aim_state.ricochet_hit_valid,
-                                     aim_state.ricochet_hit_x, aim_state.ricochet_hit_y,
-                                     aim_state.ricochet_hit_z, aim_state.ricochet_normal_x,
-                                     aim_state.ricochet_normal_y, aim_state.ricochet_normal_z,
-                                     aim_state.ricochet_forward_x, aim_state.ricochet_forward_y,
-                                     aim_state.ricochet_forward_z, aim_state.ricochet_end_x,
-                                     aim_state.ricochet_end_y, aim_state.ricochet_end_z)
+                                     aim_state.position_z, aim_state.aim_distance)
     end
 
     aim_state.native_camera_hook_active = native_camera_ready

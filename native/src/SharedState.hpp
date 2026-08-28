@@ -135,27 +135,13 @@ struct HeadTrackingState {
     float position_y;
     float position_z;
     float aim_distance;
-
-    uint32_t ricochet_hit_valid;
-    float ricochet_hit_x;
-    float ricochet_hit_y;
-    float ricochet_hit_z;
-    float ricochet_normal_x;
-    float ricochet_normal_y;
-    float ricochet_normal_z;
-    float ricochet_forward_x;
-    float ricochet_forward_y;
-    float ricochet_forward_z;
-    float ricochet_end_x;
-    float ricochet_end_y;
-    float ricochet_end_z;
 };
 
 // Shared memory name - must match CET Lua code
 constexpr const char* SHARED_MEM_NAME = "HeadTrackingAimState";
 constexpr size_t SHARED_MEM_SIZE = sizeof(HeadTrackingState);
 
-static_assert(sizeof(HeadTrackingState) == 208,
+static_assert(sizeof(HeadTrackingState) == 152,
     "HeadTrackingState layout changed - update modules/aim.lua cdef to match");
 
 class SharedState {

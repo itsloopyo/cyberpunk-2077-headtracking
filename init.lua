@@ -138,8 +138,8 @@ local function _truncateYawDiag()
     if f then f:close() end
 end
 
--- The smart-weapon bracket probe appends and is armed from the console, so
--- without this its file was the one that carried over between sessions.
+-- The smart-weapon bracket probe appends and is armed from the console
+-- (DiagSmartProbe), so without this its file carries over between sessions.
 local function _truncateSmartProbe()
     if not BuiltinCrosshair or not BuiltinCrosshair.SMART_PROBE_PATH then return end
     local f = io.open(BuiltinCrosshair.SMART_PROBE_PATH, "w")
@@ -714,27 +714,11 @@ local function onUpdateImpl(deltaTime)
     aim:setEnabled(true)
     local rotation = camera:getSmoothedRotation()
     local position_x, position_y, position_z = camera:getAppliedPosition()
-    local aim_distance, ricochet_hit_valid,
-        ricochet_hit_x, ricochet_hit_y, ricochet_hit_z,
-        ricochet_normal_x, ricochet_normal_y, ricochet_normal_z,
-        ricochet_forward_x, ricochet_forward_y, ricochet_forward_z,
-        ricochet_end_x, ricochet_end_y, ricochet_end_z
-    if crosshair then
-        aim_distance, ricochet_hit_valid,
-            ricochet_hit_x, ricochet_hit_y, ricochet_hit_z,
-            ricochet_normal_x, ricochet_normal_y, ricochet_normal_z,
-            ricochet_forward_x, ricochet_forward_y, ricochet_forward_z,
-            ricochet_end_x, ricochet_end_y, ricochet_end_z =
-            crosshair:getAimDistance()
-    end
+    local aim_distance
+    if crosshair then aim_distance = crosshair:getAimDistance() end
     aim:update(rotation.yaw, rotation.pitch, rotation.roll,
                camera:getHeadQuat(),
-               position_x, position_y, position_z, aim_distance,
-               ricochet_hit_valid,
-               ricochet_hit_x, ricochet_hit_y, ricochet_hit_z,
-               ricochet_normal_x, ricochet_normal_y, ricochet_normal_z,
-               ricochet_forward_x, ricochet_forward_y, ricochet_forward_z,
-               ricochet_end_x, ricochet_end_y, ricochet_end_z)
+               position_x, position_y, position_z, aim_distance)
     if aim.summarizeDiscovery then aim:summarizeDiscovery() end
 
     -- The reticle offset is derived from the head rotation applied to the FPP
@@ -1069,6 +1053,7 @@ return {
     DiagBracketScale      = delegate("crosshair", "setBracketScale",
                                      { announce = "in-car bracket_scale = " }),
     DiagSmartTargets      = delegate("crosshair", "dumpSmartTargets", { noargs = true }),
+    DiagSmartProbe        = delegate("crosshair", "probeSmartTargets"),
     DiagSmartScale        = delegate("crosshair", "setSmartScale",
                                      { announce = "smart bracket smart_scale = " }),
 

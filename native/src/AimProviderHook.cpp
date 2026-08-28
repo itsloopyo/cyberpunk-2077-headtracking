@@ -169,10 +169,9 @@ bool ApplyPeel(uintptr_t outp, uint32_t mode, PeelTrace& t) {
     const float hLenSq = hx*hx + hy*hy + hz*hz + hw*hw;
     const float headDelta = std::fabs(hx) + std::fabs(hy) + std::fabs(hz) +
                             std::fabs(1.0f - std::fabs(hw));
-    const HeadTrackingState state = g_sharedState.Read();
-    const bool positionActive = state.aim_distance > 0.001f &&
-        (std::fabs(state.position_x) + std::fabs(state.position_y) +
-         std::fabs(state.position_z)) > 0.00001f;
+    const bool positionActive = g_aimDistance > 0.001f &&
+        (std::fabs(g_headPos[0]) + std::fabs(g_headPos[1]) +
+         std::fabs(g_headPos[2])) > 0.00001f;
     if (!std::isfinite(hLenSq) || hLenSq < 0.5f || hLenSq > 1.5f ||
         (headDelta < 0.005f && !positionActive)) {
         s_rejectedIdentity.fetch_add(1, std::memory_order_relaxed);
@@ -207,9 +206,9 @@ bool ApplyPeel(uintptr_t outp, uint32_t mode, PeelTrace& t) {
         nx *= invLen; ny *= invLen; nz *= invLen; nw *= invLen;
 
         if (positionActive) {
-            const float tx = -state.position_x;
-            const float ty = state.aim_distance + state.position_y;
-            const float tz = -state.position_z;
+            const float tx = -g_headPos[0];
+            const float ty = g_aimDistance + g_headPos[1];
+            const float tz = -g_headPos[2];
             const float targetLenSq = tx*tx + ty*ty + tz*tz;
             if (std::isfinite(targetLenSq) && targetLenSq > 0.0001f) {
                 const float targetInvLen = 1.0f / std::sqrt(targetLenSq);

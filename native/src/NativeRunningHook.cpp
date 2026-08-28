@@ -7,6 +7,7 @@
 #include "AimGetterHook.hpp"
 #include "ScriptChannel.hpp"
 #include "FppCameraWrite.hpp"
+#include "CamPropagatorHook.hpp"
 
 #include <RED4ext/RED4ext.hpp>
 #include <RED4ext/GameStates.hpp>
@@ -342,6 +343,7 @@ bool OnUpdate(RED4ext::CGameApplication*) {
             g_headPos[0] = w->position_x;
             g_headPos[1] = w->position_y;
             g_headPos[2] = w->position_z;
+            g_aimDistance = w->aim_distance;
         } else {
             g_headQuat[0] = 0.0f;
             g_headQuat[1] = 0.0f;
@@ -350,7 +352,17 @@ bool OnUpdate(RED4ext::CGameApplication*) {
             g_headPos[0] = 0.0f;
             g_headPos[1] = 0.0f;
             g_headPos[2] = 0.0f;
+            g_aimDistance = 0.0f;
         }
+
+        // The propagator hook sits on a function the game calls hundreds of
+        // thousands of times a second across several threads, so its gate is
+        // mirrored here at frame cadence rather than read from shared memory
+        // per call, the same way g_headQuat is above.
+        CamPropagatorHook_Tick(w->enabled &&
+                               w->camera_hook_inject &&
+                               w->propagator_inject_active != 0u &&
+                               w->applied_frame > 0);
 
         // Resolve the cam instance pointer periodically even without a
         // Needed so `g_camInstance` is populated as
@@ -527,3 +539,4 @@ static bool SehWriteQuat(void* dst, float qi, float qj, float qk, float qr) {
 // one-tick stale value without consequence).
 float                 g_headQuat[4] = {0, 0, 0, 1};
 float                 g_headPos[3] = {0, 0, 0};
+float                 g_aimDistance = 0.0f;

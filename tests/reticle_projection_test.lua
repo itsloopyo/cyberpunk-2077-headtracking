@@ -51,8 +51,7 @@ local spatial = {
         local dy = to.y - from.y
         local dz = to.z - from.z
         local length = math.sqrt(dx * dx + dy * dy + dz * dz)
-        assert_near(length, dy < 0 and 19.99 or 1000,
-            "ray length", 1e-3)
+        assert_near(length, 1000, "ray length", 1e-3)
         if next_distance == nil then return false, {} end
         return true, {
             position = {
@@ -131,8 +130,7 @@ local driver = setmetatable({
 
 local distance = driver:_getAimDistance({}, true)
 assert_near(distance, 2, "first raycast distance")
-assert_eq(raycasts, 2, "first sample raycast count")
-assert_near(driver._aim_hit_end_y, 1.99, "ricochet endpoint")
+assert_eq(raycasts, 1, "first sample raycast count")
 assert_eq(default_crosshair_calls, 1, "distance uses default crosshair axis")
 assert_eq(sampled_crosshair_calls, 0, "distance does not consume spread sample")
 
@@ -142,21 +140,19 @@ distance = driver:_getAimDistance({}, true)
 if distance <= 2 or distance >= 10 then
     error("FAIL changed hit distance was not smoothed", 2)
 end
-assert_eq(raycasts, 4, "second-frame sample raycast count")
+assert_eq(raycasts, 2, "second-frame sample raycast count")
 
 now = 1.04
 distance = driver:_getAimDistance({}, true)
 if distance <= 2 or distance >= 10 then
     error("FAIL changed hit distance was not smoothed", 2)
 end
-assert_eq(raycasts, 6, "third-frame sample raycast count")
+assert_eq(raycasts, 3, "third-frame sample raycast count")
 
 now = 1.06
 next_normal = nil
 distance = driver:_getAimDistance({}, true)
-assert_eq(driver._aim_hit_valid, true, "first impact remains valid without a surface normal")
-assert_near(driver._aim_hit_end_y, 12, "missing normal leaves endpoint at first impact")
-assert_eq(raycasts, 7, "missing normal skips reflected raycast")
+assert_eq(raycasts, 4, "a surface with no normal still samples once")
 
 now = 1.08
 next_distance = nil
@@ -166,7 +162,7 @@ assert_eq(driver._aim_distance, nil, "miss clears smoothed hit distance")
 
 now = 1.12
 driver:_getAimDistance({}, false)
-assert_eq(raycasts, 11, "ricochet impact sampled without positional tracking")
+assert_eq(raycasts, 8, "a miss falls back to the world-static preset once")
 
 local screen_dx, screen_dy, screen_valid = driver:_computeOffset(1000, 800)
 assert_eq(screen_valid, true, "engine projection is valid")
@@ -216,8 +212,7 @@ driver.hit_markers = {
 }
 driver._hit_marker_tracking_allowed = true
 driver._shove_hitmarker = true
-driver._computeOffset = function() return 125, 200, true end
-driver:_writeHitMarkersAtAim()
+driver:_writeHitMarkersAtAim(125, 200, true)
 assert_near(marker_margin.left, 100, "hit marker UI-scaled x")
 assert_near(marker_margin.top, 160, "hit marker UI-scaled y")
 assert_near(marker_root_margin.left, 0, "hit marker root reset x")

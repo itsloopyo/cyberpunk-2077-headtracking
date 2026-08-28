@@ -99,7 +99,6 @@ local GATE_STALE_SECONDS = 0.15
 local GATE_STUCK_SECONDS = 1.0
 local GATE_STUCK_INTENDED_PX = 40.0
 local AIM_RAY_LENGTH_M = 1000.0
-local RICOCHET_PREVIEW_LENGTH_M = 20.0
 local AIM_DISTANCE_SMOOTH_SPEED = 18.0
 local LOCK_CHILD_TRANSLATION_PX = 8.0
 -- The child-translation lock heuristic latches ANY visible descendant displaced
@@ -132,25 +131,30 @@ local HIT_MARKER_CLASSES = {
 -- keeps the reticle at body-forward AND the brackets on their targets.
 --
 -- WALK_DEPTH: how deep under a shoved root the bracket pool is looked for.
--- RESCAN_FRAMES: brackets are spawned and returned to the pool as targets come
---   and go, so the list is rebuilt periodically rather than per frame.
+-- RESCAN_SECONDS: brackets are spawned and returned to the pool as targets come
+--   and go, so the list is rebuilt periodically rather than per frame. Held by
+--   wall clock: a frame count makes the rescan four times more frequent on a
+--   240Hz display than on a 60Hz one, and this walk is the expensive part.
 -- CHANNEL_MOVE_PX: how far a bracket's margin (or translation) must travel
 --   before that channel counts as the one the engine positions it with.
 local SMART_BUCKET_WIDGET_NAME = 'bucket'
 local SMART_BUCKET_CONTROLLER = 'Crosshair_Smart_Rifl_Bucket'
 local SMART_WALK_DEPTH = 10
-local SMART_RESCAN_FRAMES = 30
+local SMART_RESCAN_SECONDS = 0.5
 local SMART_CHANNEL_MOVE_PX = 1.0
 
--- Bounded self-probe for the bracket work. The CET console log buffers, so a
+-- Self-probe for the bracket work, armed from the console with
+-- DiagSmartProbe(seconds) and off otherwise. The CET console log buffers, so a
 -- console dump can sit unwritten for minutes while the game is up; this writes
--- through open/append/close instead, which lands on disk immediately. It stops
--- itself after SMART_PROBE_MAX_SNAPSHOTS so it can never grow without bound.
--- Exported so init.lua truncates the same file it appends to.
+-- through open/append/close instead, which lands on disk immediately. That is
+-- the right trade for a probe someone is watching and the wrong one for every
+-- session: it used to self-arm for 240 snapshots, which put a burst of
+-- synchronous file writes on the render thread twice a second for the first
+-- couple of minutes of every launch, on installs with no smart weapon anywhere
+-- near them. Exported so init.lua truncates the same file it appends to.
 local SMART_PROBE_PATH = "HeadTracking-smart.log"
 BuiltinCrosshair.SMART_PROBE_PATH = SMART_PROBE_PATH
-local SMART_PROBE_MAX_SNAPSHOTS = 240
-local SMART_PROBE_INTERVAL_FRAMES = 30
+local SMART_PROBE_INTERVAL_SECONDS = 0.5
 
 local function slog(msg)
     local f = io.open(SMART_PROBE_PATH, "a")
@@ -295,16 +299,6 @@ function BuiltinCrosshair.new(settings, camera)
     self._aim_distance = nil
     self._aim_distance_sample_t = nil
     self._aim_distance_error_logged = false
-    self._aim_hit_valid = false
-    self._aim_hit_x = 0
-    self._aim_hit_y = 0
-    self._aim_hit_z = 0
-    self._aim_hit_normal_x = 0
-    self._aim_hit_normal_y = 0
-    self._aim_hit_normal_z = 0
-    self._aim_hit_forward_x = 0
-    self._aim_hit_forward_y = 0
-    self._aim_hit_forward_z = 0
     self._hit_marker_tracking_allowed = false
 
     -- Diagnostic: when true, tick() skips all crosshair/bracket writes so the
@@ -333,7 +327,7 @@ function BuiltinCrosshair.new(settings, camera)
     self._smart_find_mode = nil
     self._smart_chan = nil
     self._smart_probe = nil
-    self._smart_rescan = 0
+    self._smart_rescan_t = nil
     self.smart_scale = 1.0
 
     -- Counters for the status dump
@@ -492,13 +486,12 @@ function BuiltinCrosshair:_untrackHitMarker(this)
     end
 end
 
-function BuiltinCrosshair:_writeHitMarkersAtAim()
+-- Takes the offset tick already computed. Deriving its own cost a second
+-- _computeOffset every frame, and that is not a cheap call: GetCrosshairData
+-- alone re-enters Lua through our own TargetingSystem Override, which pulls
+-- three more camera-system reads behind it.
+function BuiltinCrosshair:_writeHitMarkersAtAim(dx, dy, valid)
     if not self._shove_hitmarker or not self._hit_marker_tracking_allowed then return end
-    local screen_w, screen_h = GetDisplayResolution()
-    if not screen_w or screen_w <= 0 then return end
-    self._stat_screen_w, self._stat_screen_h = screen_w, screen_h
-
-    local dx, dy, valid = self:_computeOffset(screen_w, screen_h)
     if valid then self:_writeHitMarkers(dx, dy) end
 end
 
@@ -525,7 +518,7 @@ function BuiltinCrosshair:_resetGateState()
     -- decision survives - it is a property of the widget, not the instance.
     self._smart_buckets = nil
     self._smart_probe = nil
-    self._smart_rescan = 0
+    self._smart_rescan_t = nil
     self._last_dx = 0
     self._last_dy = 0
 end
@@ -1515,7 +1508,6 @@ function BuiltinCrosshair:_getAimDistance(player)
     if not player or not targeting or not spatial then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
     end
 
@@ -1528,7 +1520,6 @@ function BuiltinCrosshair:_getAimDistance(player)
         end
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
     end
 
@@ -1537,7 +1528,6 @@ function BuiltinCrosshair:_getAimDistance(player)
     if not camera_system or not ok_sway or not sway then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
     end
     local projected = camera_system:ProjectPoint(Vector4.new(
@@ -1550,7 +1540,6 @@ function BuiltinCrosshair:_getAimDistance(player)
     if not projected or type(sway_x) ~= "number" or type(sway_y) ~= "number" then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
     end
     local aim_point = camera_system:UnprojectPoint(
@@ -1558,7 +1547,6 @@ function BuiltinCrosshair:_getAimDistance(player)
     if not aim_point then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
     end
     local aim_x = aim_point.x - from.x
@@ -1569,7 +1557,6 @@ function BuiltinCrosshair:_getAimDistance(player)
     if forward_length <= 0 or forward_length ~= forward_length then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
     end
     local ray_x = aim_x / forward_length
@@ -1592,16 +1579,13 @@ function BuiltinCrosshair:_getAimDistance(player)
         end
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
     end
 
     local hit_position = hit and result and result.position
-    local hit_normal = hit and result and result.normal
     if not hit_position then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
     end
 
@@ -1612,70 +1596,7 @@ function BuiltinCrosshair:_getAimDistance(player)
     if hit_distance <= 0 or hit_distance ~= hit_distance then
         self._aim_distance = nil
         self._aim_distance_sample_t = nil
-        self._aim_hit_valid = false
         return nil
-    end
-
-    self._aim_hit_x = hit_position.x
-    self._aim_hit_y = hit_position.y
-    self._aim_hit_z = hit_position.z
-    self._aim_hit_forward_x = ray_x
-    self._aim_hit_forward_y = ray_y
-    self._aim_hit_forward_z = ray_z
-    self._aim_hit_end_x = hit_position.x
-    self._aim_hit_end_y = hit_position.y
-    self._aim_hit_end_z = hit_position.z
-    self._aim_hit_normal_x = 0
-    self._aim_hit_normal_y = 0
-    self._aim_hit_normal_z = 0
-    self._aim_hit_valid = true
-    if hit_normal then
-        local dot = ray_x * hit_normal.x + ray_y * hit_normal.y +
-            ray_z * hit_normal.z
-        local reflected_x = ray_x - 2 * dot * hit_normal.x
-        local reflected_y = ray_y - 2 * dot * hit_normal.y
-        local reflected_z = ray_z - 2 * dot * hit_normal.z
-        local reflected_length = math.sqrt(
-            reflected_x * reflected_x + reflected_y * reflected_y +
-            reflected_z * reflected_z)
-        if reflected_length <= 0 or reflected_length ~= reflected_length then
-            return self._aim_distance
-        end
-        reflected_x = reflected_x / reflected_length
-        reflected_y = reflected_y / reflected_length
-        reflected_z = reflected_z / reflected_length
-        local ricochet_from = Vector4.new(
-            hit_position.x + reflected_x * 0.01,
-            hit_position.y + reflected_y * 0.01,
-            hit_position.z + reflected_z * 0.01,
-            hit_position.w)
-        local ricochet_to = Vector4.new(
-            hit_position.x + reflected_x * RICOCHET_PREVIEW_LENGTH_M,
-            hit_position.y + reflected_y * RICOCHET_PREVIEW_LENGTH_M,
-            hit_position.z + reflected_z * RICOCHET_PREVIEW_LENGTH_M,
-            hit_position.w)
-        local ok_ricochet, ricochet_hit, ricochet_result =
-            pcall(_raycastStatic, spatial, ricochet_from, ricochet_to)
-        if ok_ricochet and not ricochet_hit then
-            ok_ricochet, ricochet_hit, ricochet_result =
-                pcall(_raycastWorldStatic, spatial, ricochet_from, ricochet_to)
-        end
-        if not ok_ricochet then
-            if not self._aim_distance_error_logged then
-                self._aim_distance_error_logged = true
-                dlog("[HeadTracking:Reticle] ricochet raycast failed: " ..
-                    tostring(ricochet_hit))
-            end
-            return self._aim_distance
-        end
-        local ricochet_end = ricochet_hit and ricochet_result and
-            ricochet_result.position or ricochet_to
-        self._aim_hit_normal_x = hit_normal.x
-        self._aim_hit_normal_y = hit_normal.y
-        self._aim_hit_normal_z = hit_normal.z
-        self._aim_hit_end_x = ricochet_end.x
-        self._aim_hit_end_y = ricochet_end.y
-        self._aim_hit_end_z = ricochet_end.z
     end
 
     local previous = self._aim_distance
@@ -1692,17 +1613,13 @@ function BuiltinCrosshair:_getAimDistance(player)
     return self._aim_distance
 end
 
---- Return the live distance used for positional parallax, plus the surface hit
---- used by the ricochet preview. Nil means the aim ray missed.
+--- Return the live distance used for positional parallax. Nil means the aim ray
+--- missed.
 --- @return number|nil
 function BuiltinCrosshair:getAimDistance()
     local player = Game and Game.GetPlayer and Game.GetPlayer()
     local distance = self:_getAimDistance(player)
-    return distance, self._aim_hit_valid,
-        self._aim_hit_x, self._aim_hit_y, self._aim_hit_z,
-        self._aim_hit_normal_x, self._aim_hit_normal_y, self._aim_hit_normal_z,
-        self._aim_hit_forward_x, self._aim_hit_forward_y, self._aim_hit_forward_z,
-        self._aim_hit_end_x, self._aim_hit_end_y, self._aim_hit_end_z
+    return distance
 end
 
 
@@ -2184,9 +2101,9 @@ end
 --- Cancel our body-forward shove on every smart-weapon target bracket, so each
 --- one stays where the engine projected it: on its target.
 function BuiltinCrosshair:_writeSmartTargets(dx, dy)
-    self._smart_rescan = (self._smart_rescan or 0) - 1
-    if self._smart_rescan <= 0 then
-        self._smart_rescan = SMART_RESCAN_FRAMES
+    local now = os.clock()
+    if now - (self._smart_rescan_t or -1) >= SMART_RESCAN_SECONDS then
+        self._smart_rescan_t = now
         self:_refreshSmartBuckets()
     end
 
@@ -2194,11 +2111,9 @@ function BuiltinCrosshair:_writeSmartTargets(dx, dy)
 
     -- Probe before the empty-list return, so a scan that finds nothing is
     -- distinguishable in the log from the scan never running at all.
-    self._smart_probe_left = self._smart_probe_left or SMART_PROBE_MAX_SNAPSHOTS
-    if self._smart_probe_left > 0 then
-        self._smart_probe_tick = (self._smart_probe_tick or 0) - 1
-        if self._smart_probe_tick <= 0 then
-            self._smart_probe_tick = SMART_PROBE_INTERVAL_FRAMES
+    if (self._smart_probe_left or 0) > 0 then
+        if now - (self._smart_probe_t or -1) >= SMART_PROBE_INTERVAL_SECONDS then
+            self._smart_probe_t = now
             self._smart_probe_left = self._smart_probe_left - 1
             local visible_count, placed_count = 0, 0
             for i = 1, #list do
@@ -2465,18 +2380,20 @@ function BuiltinCrosshair:tick(tracking_allowed)
         end
         return
     end
-    self:_writeHitMarkersAtAim()
+    local screen_w, screen_h = GetDisplayResolution()
+    if not screen_w or screen_w <= 0 then
+        screen_w, screen_h = 1920, 1080
+    end
+    self._stat_screen_w, self._stat_screen_h = screen_w, screen_h
+
+    local dx, dy, valid = self:_computeOffset(screen_w, screen_h)
+
+    self:_writeHitMarkersAtAim(dx, dy, valid)
     if #self:_entries() == 0 then
         self._stat.ticks_with_zero_ctrls = self._stat.ticks_with_zero_ctrls + 1
         return
     end
 
-    local screen_w, screen_h = GetDisplayResolution()
-    if not screen_w or screen_w <= 0 then
-        screen_w, screen_h = 1920, 1080
-    end
-
-    local dx, dy, valid = self:_computeOffset(screen_w, screen_h)
     if not valid then
         dx, dy = _offscreenOffset(self._last_dx, self._last_dy, screen_w, screen_h)
         if not dx then return end
@@ -2499,6 +2416,16 @@ function BuiltinCrosshair:tick(tracking_allowed)
     -- offset back off them.
     self:_writeSmartTargets(dx, dy)
     if self._shove_nameplate then self:_writeNameplates(dx, dy) end
+end
+
+--- Arm the smart-bracket probe for `seconds` of gameplay. Off by default.
+---   GetMod("HeadTracking").DiagSmartProbe(20)
+function BuiltinCrosshair:probeSmartTargets(seconds)
+    local s = (type(seconds) == "number" and seconds > 0) and seconds or 20
+    self._smart_probe_left = math.floor(s / SMART_PROBE_INTERVAL_SECONDS)
+    self._smart_probe_t = nil
+    dlog(string.format("[HeadTracking:Reticle] smart bracket probe armed for ~%ds (%d snapshots)",
+        s, self._smart_probe_left))
 end
 
 function BuiltinCrosshair:setBracketScale(s)
