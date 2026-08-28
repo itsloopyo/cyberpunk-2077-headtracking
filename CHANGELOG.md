@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.2] - 2026-08-28
+
+### Changed
+
+- cut the dead ricochet channel and the per-call hot path work
+
 ## [1.3.1] - 2026-08-26
 
 ### Changed
