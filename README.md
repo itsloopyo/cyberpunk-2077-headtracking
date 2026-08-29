@@ -1,8 +1,8 @@
 # Cyberpunk 2077 Head Tracking
 
-![Mod GIF](https://raw.githubusercontent.com/itsloopyo/cyberpunk-2077-headtracking/main/assets/readme-clip.gif)
+![Cyberpunk 2077 running with this mod](https://raw.githubusercontent.com/itsloopyo/cyberpunk-2077-headtracking/main/assets/readme-clip.gif)
 
-Use a webcam, phone, or VR headset to drive Night City's first-person camera with your head while your mouse or controller still controls aim, so you can lean into corners, peek around cover, and glance at your passenger without losing your shot.
+An unofficial head tracking mod for Cyberpunk 2077 that moves the view with your head while your mouse or controller keeps aiming, driven by a webcam, phone, or any OpenTrack compatible tracker, with no VR headset required.
 
 ## Features
 
