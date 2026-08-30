@@ -32,7 +32,17 @@ test-ads      = { cmd = "lua tests/ads_pose_test.lua" }
 test-reticle  = { cmd = "lua tests/reticle_projection_test.lua" }
 test-settings-ui = { cmd = "lua tests/nativesettings_test.lua" }
 test-manifest = { cmd = "node tests/module_manifest_test.mjs" }
-test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-state", "test-ads", "test-reticle", "test-settings-ui", "test-manifest"] }
+test-camera   = { cmd = "lua tests/camera_position_test.lua" }
+# The shared pipeline conformance vectors, run against this port. The vectors,
+# the constants and every assertion live in cameraunlock-core; tests/
+# conformance_harness.lua is only the executor that drives our code through them,
+# and it answers `skip <reason>` for the parts this port does not have rather
+# than reporting a pass for a test that never ran. Most of what it skips is
+# skipped because this mod links cameraunlock in its native DLL: the packet layer
+# is the core's own code, not a port, so there is nothing here to check.
+# Where a local test and a vector disagree, the vector is right.
+test-vectors  = { cmd = "node cameraunlock-core/scripts/pipeline-vectors/run-vectors.mjs --vectors cameraunlock-core/data/pipeline-conformance.json --harness \"lua tests/conformance_harness.lua\"" }
+test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-state", "test-ads", "test-reticle", "test-settings-ui", "test-manifest", "test-camera", "test-vectors"] }
 
 [target.win-64.tasks]
 # Build native RED4ext C++ plugin

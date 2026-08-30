@@ -226,6 +226,9 @@ function Camera.new(settings)
     self.smooth_yaw = 0
     self.smooth_pitch = 0
     self.smooth_roll = 0
+    -- False until the first pose after a reset, so that pose is taken whole
+    -- rather than blended up from zero. See _smoothPose.
+    self.rot_has_value = false
 
 
     -- Last raw values from tracker (before any processing), exposed through
@@ -275,8 +278,11 @@ function Camera.new(settings)
     self.is_remote_connection = false
 
     -- Position pipeline state (shares the rotation smoothing parameters).
+    -- pos_smooth is in the CAMERA frame, after the axis remap, because the
+    -- limits are expressed there and a clamp has to run in the frame it clamps.
     self.pos_smooth = { x = 0, y = 0, z = 0 }
     self.pos_local = { x = 0, y = 0, z = 0 }
+    self.pos_has_value = false -- as rot_has_value, for the position smoother
     self.pos_applied = false   -- have we ever written a non-zero position?
 
     -- Initialize cache from settings
@@ -481,10 +487,22 @@ function Camera:_smoothPose(yaw, pitch, roll, deltaTime)
         cache.local_smoothing, cache.remote_smoothing, self.is_remote_connection)
     local factor = calculateSmoothingFactor(smoothing, deltaTime)
 
-    -- Apply exponential moving average
-    self.smooth_yaw = self.smooth_yaw + (adj_yaw - self.smooth_yaw) * factor
-    self.smooth_pitch = self.smooth_pitch + (adj_pitch - self.smooth_pitch) * factor
-    self.smooth_roll = self.smooth_roll + (adj_roll - self.smooth_roll) * factor
+    -- The first pose after a reset is taken whole. Without this the smoother
+    -- blends up from zero, and zero is not a pose the player's head is in: at
+    -- remote_smoothing = 0.15 the camera spends several frames somewhere between
+    -- straight ahead and where they are actually looking. reset() runs on every
+    -- menu exit, every load and every tracking toggle, so it is not a rare path.
+    -- Matches m_hasSmoothedValue in the core's TrackingProcessor.
+    if not self.rot_has_value then
+        self.smooth_yaw = adj_yaw
+        self.smooth_pitch = adj_pitch
+        self.smooth_roll = adj_roll
+        self.rot_has_value = true
+    else
+        self.smooth_yaw = self.smooth_yaw + (adj_yaw - self.smooth_yaw) * factor
+        self.smooth_pitch = self.smooth_pitch + (adj_pitch - self.smooth_pitch) * factor
+        self.smooth_roll = self.smooth_roll + (adj_roll - self.smooth_roll) * factor
+    end
 
     -- Validate smoothed values
     if not isValidNumber(self.smooth_yaw) then self.smooth_yaw = 0 end
@@ -897,6 +915,7 @@ function Camera:tryInitialReset()
     self.pos_smooth.x = 0
     self.pos_smooth.y = 0
     self.pos_smooth.z = 0
+    self.pos_has_value = false
     self.pos_local.x = 0
     self.pos_local.y = 0
     self.pos_local.z = 0
@@ -998,9 +1017,13 @@ function Camera:suspend()
     if self.pos_applied then
         if cam then pcall(_callSetLocalPosition, cam, Vector4.new(0, 0, 0, 1.0)) end
         self.pos_applied = false
-        self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
-        self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = 0, 0, 0
     end
+    -- Outside the pos_applied branch: that flag is only ever set by
+    -- applyPosition, so gating the state reset on it left the chase-camera path
+    -- resuming from a stale smoothed offset.
+    self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
+    self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = 0, 0, 0
+    self.pos_has_value = false
 end
 
 --- Full teardown: suspend, then discard the smoothed values and peel-state
@@ -1011,6 +1034,7 @@ function Camera:reset()
     self.smooth_yaw = 0
     self.smooth_pitch = 0
     self.smooth_roll = 0
+    self.rot_has_value = false
     self.last_clean_local_quat = nil
 
     self:suspend()
@@ -1027,6 +1051,79 @@ function Camera:prepareYawModeSwitch()
     self.last_clean_local_quat = nil
     self._computed_head_quat = nil
     self._prev_head_quat = nil
+end
+
+--- The asymmetric per-axis position limits, in the camera frame. Y (forward) and
+--- Z (vertical) are deliberately not symmetric: leaning forward gets a generous
+--- budget and leaning back a small one, and the same for up against down.
+--- @param cam_x number
+--- @param cam_y number
+--- @param cam_z number
+--- @return number cam_x, number cam_y, number cam_z
+function Camera:_clampPosition(cam_x, cam_y, cam_z)
+    local c = self.cached_settings
+    local lx = c.position_limit_x
+    local ly_up, ly_dn = c.position_limit_y_up, c.position_limit_y_down
+    local lz_fwd, lz_back = c.position_limit_z_fwd, c.position_limit_z_back
+    if cam_x >  lx then cam_x =  lx elseif cam_x < -lx then cam_x = -lx end
+    if cam_z >  ly_up then cam_z =  ly_up elseif cam_z < -ly_dn then cam_z = -ly_dn end
+    if cam_y >  lz_fwd then cam_y =  lz_fwd elseif cam_y < -lz_back then cam_y = -lz_back end
+    return cam_x, cam_y, cam_z
+end
+
+--- Converts, remaps, clamps and smooths a tracker translation into the camera
+--- frame. Steps 1-4 of applyPosition, split out because the chase-camera path
+--- needs exactly these - and needs them to be the same arithmetic, so switching
+--- between first and third person cannot change how the offset feels. They were
+--- two byte-identical copies, which is why the same defects were in both.
+---
+--- The clamp runs BEFORE the smoother as well as after. Clamping only the output
+--- lets the smoothing state itself wind up outside the limits, and the output
+--- then sits pinned at a limit for hundreds of milliseconds after the head has
+--- come back. The receiver publishes its raw position with no bound of its own
+--- (native/src/UdpReceiver.cpp), so the input here really is unbounded. Clamping
+--- an already-bounded value is a no-op, so ordinary movement is unchanged.
+--- Matches ClampToLimits' two call sites in the core's position_processor.h.
+--- @param rx number Tracker lateral in cm
+--- @param ry number Tracker vertical in cm
+--- @param rz number Tracker longitudinal in cm
+--- @param deltaTime number Seconds since the previous frame
+--- @return number cam_x, number cam_y, number cam_z Camera-frame offset in m
+function Camera:_smoothPosition(rx, ry, rz, deltaTime)
+    local c = self.cached_settings
+
+    -- 1) cm -> m
+    local dx, dy, dz = rx * 0.01, ry * 0.01, rz * 0.01
+
+    -- 2) axis remap (OT -> Cyberpunk local cam). X and Y (cam-frame
+    --    lateral/longitudinal) are inverted so the camera tracks head
+    --    motion in the expected direction (leaning right moves view
+    --    right; leaning forward moves view forward).
+    local cam_x = -dx  -- lateral (inverted)
+    local cam_y = -dz  -- forward (inverted)
+    local cam_z =  dy  -- vertical
+
+    -- 3) asymmetric clamp, on the way in
+    cam_x, cam_y, cam_z = self:_clampPosition(cam_x, cam_y, cam_z)
+
+    -- 4) exponential smoothing, frame-rate independent. Position uses the
+    --    same connection-selected value as rotation; there is no separate
+    --    position smoothing setting. The first sample after a reset is taken
+    --    whole, for the same reason the rotation smoother takes one.
+    if not self.pos_has_value then
+        self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = cam_x, cam_y, cam_z
+        self.pos_has_value = true
+    else
+        local s = getEffectiveSmoothing(
+            c.local_smoothing, c.remote_smoothing, self.is_remote_connection)
+        local alpha = calculateSmoothingFactor(s, deltaTime)
+        self.pos_smooth.x = self.pos_smooth.x + (cam_x - self.pos_smooth.x) * alpha
+        self.pos_smooth.y = self.pos_smooth.y + (cam_y - self.pos_smooth.y) * alpha
+        self.pos_smooth.z = self.pos_smooth.z + (cam_z - self.pos_smooth.z) * alpha
+    end
+
+    -- 5) and on the way out
+    return self:_clampPosition(self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z)
 end
 
 --- Apply 6DOF head translation to the FPP camera.
@@ -1057,34 +1154,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
     local cam = getFPPCamera()
     if not cam then return end
 
-    -- 1) cm -> m
-    local dx, dy, dz = rx * 0.01, ry * 0.01, rz * 0.01
-
-    -- 2) exponential smoothing, frame-rate independent. Position uses the
-    --    same connection-selected value as rotation; there is no separate
-    --    position smoothing setting.
-    local s = getEffectiveSmoothing(
-        c.local_smoothing, c.remote_smoothing, self.is_remote_connection)
-    local alpha = calculateSmoothingFactor(s, deltaTime)
-    self.pos_smooth.x = self.pos_smooth.x + (dx - self.pos_smooth.x) * alpha
-    self.pos_smooth.y = self.pos_smooth.y + (dy - self.pos_smooth.y) * alpha
-    self.pos_smooth.z = self.pos_smooth.z + (dz - self.pos_smooth.z) * alpha
-
-    -- 3) axis remap (OT -> Cyberpunk local cam). X and Y (cam-frame
-    --    lateral/longitudinal) are inverted so the camera tracks head
-    --    motion in the expected direction (leaning right moves view
-    --    right; leaning forward moves view forward).
-    local cam_x = -self.pos_smooth.x                      -- lateral (inverted)
-    local cam_y = -self.pos_smooth.z                      -- forward (inverted)
-    local cam_z =  self.pos_smooth.y                      -- vertical
-
-    -- 4) asymmetric clamp
-    local lx = c.position_limit_x
-    local ly_up, ly_dn = c.position_limit_y_up, c.position_limit_y_down
-    local lz_fwd, lz_back = c.position_limit_z_fwd, c.position_limit_z_back
-    if cam_x >  lx then cam_x =  lx elseif cam_x < -lx then cam_x = -lx end
-    if cam_z >  ly_up then cam_z =  ly_up elseif cam_z < -ly_dn then cam_z = -ly_dn end
-    if cam_y >  lz_fwd then cam_y =  lz_fwd elseif cam_y < -lz_back then cam_y = -lz_back end
+    local cam_x, cam_y, cam_z = self:_smoothPosition(rx, ry, rz, deltaTime)
 
     if not (isValidNumber(cam_x) and isValidNumber(cam_y) and isValidNumber(cam_z)) then
         return
@@ -1121,25 +1191,7 @@ function Camera:applyChaseCamPosition(rx, ry, rz, deltaTime)
         return
     end
 
-    local dx, dy, dz = rx * 0.01, ry * 0.01, rz * 0.01
-
-    local s = getEffectiveSmoothing(
-        c.local_smoothing, c.remote_smoothing, self.is_remote_connection)
-    local alpha = calculateSmoothingFactor(s, deltaTime)
-    self.pos_smooth.x = self.pos_smooth.x + (dx - self.pos_smooth.x) * alpha
-    self.pos_smooth.y = self.pos_smooth.y + (dy - self.pos_smooth.y) * alpha
-    self.pos_smooth.z = self.pos_smooth.z + (dz - self.pos_smooth.z) * alpha
-
-    local cam_x = -self.pos_smooth.x
-    local cam_y = -self.pos_smooth.z
-    local cam_z =  self.pos_smooth.y
-
-    local lx = c.position_limit_x
-    local ly_up, ly_dn = c.position_limit_y_up, c.position_limit_y_down
-    local lz_fwd, lz_back = c.position_limit_z_fwd, c.position_limit_z_back
-    if cam_x >  lx then cam_x =  lx elseif cam_x < -lx then cam_x = -lx end
-    if cam_z >  ly_up then cam_z =  ly_up elseif cam_z < -ly_dn then cam_z = -ly_dn end
-    if cam_y >  lz_fwd then cam_y =  lz_fwd elseif cam_y < -lz_back then cam_y = -lz_back end
+    local cam_x, cam_y, cam_z = self:_smoothPosition(rx, ry, rz, deltaTime)
 
     if not (isValidNumber(cam_x) and isValidNumber(cam_y) and isValidNumber(cam_z)) then
         return

@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- The camera snapped to the head pose over several frames after every menu exit,
+  load and tracking toggle instead of landing on it. Both smoothers blended up
+  from zero, and zero is not a pose anybody's head is in; the first sample after
+  a reset is now taken whole.
+- A lean past the position limits left the smoothing state outside them, so the
+  view stayed pinned at a limit for a fraction of a second after the head had
+  already come back. Position is now clamped on the way into the smoother as well
+  as on the way out. The native receiver publishes its raw position with no bound
+  of its own, so the input really is unbounded.
+- Leaving the chase camera left a stale position offset behind: the state reset in
+  Camera:suspend was gated on a flag that only the first-person path ever set.
+
+### Changed
+
+- The first-person and chase-camera translation paths were byte-identical copies,
+  which is why both carried the same two defects. They share one function now, as
+  the rotation paths already did.
+- `pixi run test` also runs the shared pipeline conformance vectors from
+  cameraunlock-core, and the camera smoothers have tests of their own for the
+  first time.
+
 ## [1.3.3] - 2026-08-28
 
 ### Changed
