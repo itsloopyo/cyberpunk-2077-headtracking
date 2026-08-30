@@ -44,9 +44,8 @@ std::atomic<uint32_t> s_injected{0};
 std::atomic<uint32_t> s_faults{0};
 
 // The SDK handles are kept so the detour can go in LATER, the first time the
-// chase camera is actually active, rather than at plugin load. A detour into
-// the camera publish is not something to have sitting in every session of a
-// feature that ships switched off.
+// chase camera is actually active, rather than at plugin load. A session that
+// never drives in third person never gets a detour on the camera publish.
 const RED4ext::v1::Sdk* s_sdk = nullptr;
 RED4ext::v1::PluginHandle s_handle = nullptr;
 

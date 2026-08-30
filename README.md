@@ -179,7 +179,9 @@ The outside chase camera tracks your head too. Turn it off with "Chase Camera Tr
 - The near scene follows your head; the distant scene stays fixed on the screen. Third-person driving renders through more than one view, and only one of them currently carries the head rotation.
 - The game's camera motion blur smears the whole world, because it works out how fast static geometry is moving from a camera that has not been rotated. **Turn Motion Blur off** in Graphics.
 
-Rotation only, no leaning: 6DOF translation moves the first-person camera and the chase camera does not read it. Head yaw there pans and tilts about the camera's own axes, so it behaves like local yaw mode whichever yaw mode you have selected.
+6DOF translation reaches the chase camera too, by a different route. On foot the offset goes into the first-person camera's local position; here it is published to the native plugin, which shifts the chase camera's own world position by it, turned by the camera's orientation from before the head rotation was composed in, so leaning goes with the vehicle rather than with where your head is pointing. `position_enabled` switches translation off for both cameras.
+
+Head yaw there pans and tilts about the camera's own axes, so it behaves like local yaw mode whichever yaw mode you have selected.
 
 ## Configuration
 

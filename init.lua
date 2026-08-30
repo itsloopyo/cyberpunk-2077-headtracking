@@ -737,9 +737,9 @@ local function onUpdateImpl(deltaTime)
     -- The reticle offset is derived from the head rotation applied to the FPP
     -- camera. In the vehicle chase camera that camera is not what is on screen:
     -- the view is only head-rotated when the native chase injection is actually
-    -- running, which needs chase_camera_tracking on. With it off (the shipped
-    -- default) the chase view is clean, so compensating the reticle drags it off
-    -- the aim point while the camera sits still. Stand the driver down there.
+    -- running, which needs chase_camera_tracking on. With it off the chase view
+    -- is clean, so compensating the reticle drags it off the aim point while
+    -- the camera sits still. Stand the driver down there.
     local view_is_head_tracked = chase_camera or not state:isChaseCameraActive()
     if crosshair then crosshair:tick(view_is_head_tracked) end
 

@@ -241,14 +241,13 @@ function Settings.new()
         -- Clean-camera diagnostic path. Lua keeps cam.localOrientation
         -- mouse-only while native experiments try to inject head rotation.
         decouple_diag_clean_cam = false,
-        -- Head tracking in the vehicle chase camera. Off by default because it
-        -- is incomplete: the head rotation is injected into the render params
-        -- of one render stage, which turns the near scene and leaves the
-        -- distant scene - drawn by another stage, from a camera not yet found -
-        -- nailed to the screen, and leaves the engine's camera motion blur
-        -- reconstructing static-geometry velocity from an un-rotated camera, so
-        -- it smears the whole world. Turn it on to use it anyway; turn Motion
-        -- Blur off in the game's graphics settings if you do.
+        -- Head tracking in the vehicle chase camera. Still incomplete: the head
+        -- rotation is injected into the render params of one render stage,
+        -- which turns the near scene and leaves the distant scene - drawn by
+        -- another stage, from a camera not yet found - nailed to the screen,
+        -- and leaves the engine's camera motion blur reconstructing
+        -- static-geometry velocity from an un-rotated camera, so it smears the
+        -- whole world. Turn Motion Blur off in the game's graphics settings.
         chase_camera_tracking = true,
     }
 
