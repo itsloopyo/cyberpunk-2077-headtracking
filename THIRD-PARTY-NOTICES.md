@@ -14,7 +14,7 @@ Cyberpunk 2077.
 | Cyber Engine Tweaks | v1.37.1 | MIT | Bundled verbatim in the installer ZIP |
 | RED4ext | v1.30.0 | MIT | Bundled verbatim in the installer ZIP |
 | TweakXL | v1.11.4 | MIT | Bundled verbatim in the installer ZIP |
-| cameraunlock-core | c279bc6312f3452f82deed519768aa32b26abcdf | MIT | Compiled into `HeadTrackingAim.dll` |
+| cameraunlock-core | 67a82e334bcf32979d17965eab4b0f37a48a6ad0 | MIT | Compiled into `HeadTrackingAim.dll` |
 | OpenTrack | n/a | ISC | Not bundled; UDP protocol interoperability only |
 
 ---
@@ -135,7 +135,7 @@ SOFTWARE.
 Git submodule at `cameraunlock-core/`, compiled into `HeadTrackingAim.dll`. Our own code,
 MIT licensed, reproduced here so the notices are complete.
 
-- Pinned commit: `c279bc6312f3452f82deed519768aa32b26abcdf`
+- Pinned commit: `67a82e334bcf32979d17965eab4b0f37a48a6ad0`
 
 ```
 MIT License
