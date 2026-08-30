@@ -903,6 +903,20 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     self.stats.last_applied_roll = self.smooth_roll
 end
 
+--- Zero every piece of position state that carries across frames.
+--- pos_smooth, pos_raw and pos_has_value are what make the next frame resume
+--- where the last one left off, so anything that stops position tracking has to
+--- clear all four. Clearing pos_local alone leaves the lean sitting in the
+--- smoother, and it reappears in full on the first frame after position comes
+--- back. pos_applied is deliberately not here: it tracks whether a camera write
+--- is outstanding, and only the caller that owns the camera can answer that.
+function Camera:_clearPositionState()
+    self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
+    self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = 0, 0, 0
+    self.pos_raw.x, self.pos_raw.y, self.pos_raw.z = 0, 0, 0
+    self.pos_has_value = false
+end
+
 --- One-shot startup reset: forces cam.localOrientation to identity and
 --- clears the undo-chain caches the first frame the FPP cam is available.
 --- Independent of tracker packets so the camera lands in a clean state
@@ -917,13 +931,7 @@ function Camera:tryInitialReset()
     self.last_clean_local_quat = nil
     self._computed_head_quat = nil
     self._prev_head_quat = nil
-    self.pos_smooth.x = 0
-    self.pos_smooth.y = 0
-    self.pos_smooth.z = 0
-    self.pos_has_value = false
-    self.pos_local.x = 0
-    self.pos_local.y = 0
-    self.pos_local.z = 0
+    self:_clearPositionState()
     self.pos_applied = false
     self.pending_initial_reset = false
     print("[HeadTracking] Initial reset applied (cam.localOrientation -> identity)")
@@ -1026,10 +1034,7 @@ function Camera:suspend()
     -- Outside the pos_applied branch: that flag is only ever set by
     -- applyPosition, so gating the state reset on it left the chase-camera path
     -- resuming from a stale smoothed offset.
-    self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
-    self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = 0, 0, 0
-    self.pos_raw.x, self.pos_raw.y, self.pos_raw.z = 0, 0, 0
-    self.pos_has_value = false
+    self:_clearPositionState()
 end
 
 --- Full teardown: suspend, then discard the smoothed values and peel-state
@@ -1165,9 +1170,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
             if cam then pcall(_callSetLocalPosition, cam, Vector4.new(0, 0, 0, 1.0)) end
             self.pos_applied = false
         end
-        self.pos_local.x = 0
-        self.pos_local.y = 0
-        self.pos_local.z = 0
+        self:_clearPositionState()
         return
     end
     if rx ~= nil and not (isValidNumber(rx) and isValidNumber(ry) and isValidNumber(rz)) then
@@ -1206,9 +1209,7 @@ end
 function Camera:applyChaseCamPosition(rx, ry, rz, deltaTime)
     local c = self.cached_settings
     if not c.position_enabled then
-        self.pos_local.x = 0
-        self.pos_local.y = 0
-        self.pos_local.z = 0
+        self:_clearPositionState()
         return
     end
     if rx ~= nil and not (isValidNumber(rx) and isValidNumber(ry) and isValidNumber(rz)) then

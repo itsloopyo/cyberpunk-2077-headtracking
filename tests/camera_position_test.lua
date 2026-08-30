@@ -51,9 +51,12 @@ local function bare_camera(overrides)
     cam.rot_has_value = false
     cam.pos_smooth = { x = 0, y = 0, z = 0 }
     cam.pos_raw = { x = 0, y = 0, z = 0 }
+    cam.pos_local = { x = 0, y = 0, z = 0 }
     cam.pos_has_value = false
+    cam.pos_applied = false
     cam.is_remote_connection = false
     cam.cached_settings = {
+        position_enabled = true,
         local_smoothing = 0.0,
         remote_smoothing = 0.15,
         clamp_yaw = 120.0,
@@ -264,6 +267,91 @@ do
     cam.pos_has_value = false
     local x = cam:_smoothPosition(5, 0, 0, DT)
     assert_near(x, -0.05, "position snaps again after the flag is cleared")
+end
+
+-- ------------------------------------------- the position-enabled toggle
+
+--- CET globals applyPosition reaches for. The chase-camera path needs none of
+--- this, which is why the two cases below are not written the same way.
+local function stub_cet()
+    local written = {}
+    local component = {
+        SetLocalPosition = function(_, v) written[#written + 1] = v end,
+    }
+    Vector4 = { new = function(x, y, z, w) return { x = x, y = y, z = z, w = w } end }
+    Game = {
+        GetPlayer = function()
+            return { GetFPPCameraComponent = function() return component end }
+        end,
+    }
+    return written
+end
+
+--- Lean hard enough that the smoother saturates at the lateral limit.
+local function lean_to_the_limit(cam, apply)
+    for _ = 1, 120 do apply(cam, 40, 0, 0, DT) end
+    assert_near(cam.pos_local.x, -0.30, "lean saturates at the lateral limit")
+end
+
+do
+    -- Turning positional tracking off used to zero pos_local and stop there,
+    -- leaving pos_smooth, pos_raw and pos_has_value holding the lean. Turning it
+    -- back on with the head straight then replayed most of that lean on the very
+    -- first frame, because the smoother resumed from the old value instead of
+    -- snapping to the new sample.
+    local cam = bare_camera()
+    lean_to_the_limit(cam, cam.applyChaseCamPosition)
+
+    cam.cached_settings.position_enabled = false
+    cam:applyChaseCamPosition(0, 0, 0, DT)
+    assert_near(cam.pos_local.x, 0, "position off publishes no offset")
+
+    cam.cached_settings.position_enabled = true
+    cam:applyChaseCamPosition(0, 0, 0, DT)
+    assert_near(cam.pos_local.x, 0, "head straight, so the first frame back is neutral")
+    assert_true(not cam.pos_has_value or cam.pos_smooth.x == 0,
+        "the smoother is not still holding the old lean")
+end
+
+do
+    -- Same toggle on the first-person path, which additionally writes the
+    -- camera component.
+    local written = stub_cet()
+    local cam = bare_camera()
+    lean_to_the_limit(cam, cam.applyPosition)
+    assert_true(cam.pos_applied, "the lean was written to the camera")
+
+    cam.cached_settings.position_enabled = false
+    cam:applyPosition(0, 0, 0, DT)
+    assert_near(written[#written].x, 0, "position off writes the camera back to origin")
+    assert_true(not cam.pos_applied, "position off clears the outstanding write")
+
+    cam.cached_settings.position_enabled = true
+    cam:applyPosition(0, 0, 0, DT)
+    assert_near(cam.pos_local.x, 0, "head straight, so the first frame back is neutral")
+    assert_near(written[#written].x, 0, "and nothing stale reaches the camera")
+end
+
+do
+    -- suspend() and the toggle have to leave the same state behind, or the two
+    -- resume paths disagree about whether the smoother is primed.
+    local cam_toggle = bare_camera()
+    lean_to_the_limit(cam_toggle, cam_toggle.applyChaseCamPosition)
+    cam_toggle.cached_settings.position_enabled = false
+    cam_toggle:applyChaseCamPosition(0, 0, 0, DT)
+
+    local cam_suspend = bare_camera()
+    lean_to_the_limit(cam_suspend, cam_suspend.applyChaseCamPosition)
+    cam_suspend:_clearPositionState()
+
+    for _, field in ipairs({ "pos_local", "pos_smooth", "pos_raw" }) do
+        for _, axis in ipairs({ "x", "y", "z" }) do
+            assert_near(cam_toggle[field][axis], cam_suspend[field][axis],
+                string.format("toggle and suspend agree on %s.%s", field, axis))
+        end
+    end
+    assert_true(cam_toggle.pos_has_value == cam_suspend.pos_has_value,
+        "toggle and suspend agree on pos_has_value")
 end
 
 print("== Camera smoothing OK ==")
