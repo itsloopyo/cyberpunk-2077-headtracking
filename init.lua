@@ -668,26 +668,21 @@ local function onUpdateImpl(deltaTime)
     local interp_yaw, interp_pitch, interp_roll =
         pose_interp:update(raw_yaw, raw_pitch, raw_roll, raw_seq, deltaTime)
 
-    -- Position is handed over on packet frames only, and applyPosition is
-    -- skipped entirely on the frames between - so the position EMA advances at
-    -- the tracker's rate while rotation is interpolated at the render rate.
+    -- Position reaches the pipeline on packet frames only; between them it is
+    -- nil, and Camera:_smoothPosition keeps running against the sample it last
+    -- saw. The smoothing factor is derived from the render deltaTime, so a
+    -- smoother that advanced only on packet frames delivered a different rate
+    -- than the configured one - half of it at 120fps against a 60Hz tracker -
+    -- and stepped at the tracker's rate while rotation moved at the render rate.
     --
-    -- Assessed against the core, which runs a full PositionInterpolator here,
-    -- and deliberately kept: a translation step is not a rotation step. A 60Hz
-    -- tracker moving the head 2cm shows a 2cm jump between frames, which is at
-    -- the edge of perceptible, where the same cadence in yaw is the stepping the
-    -- rotation interpolator exists to remove. Adding a second interpolator would
-    -- double the smoothing state that Camera:reset and Camera:suspend have to
-    -- clear correctly on every menu exit, load and tracking toggle, and this file
-    -- has already produced two defects of exactly that shape.
-    --
-    -- What is NOT settled by that, and is worth an owner's decision: the
-    -- smoothing factor is computed from the RENDER deltaTime
-    -- (camera.lua Camera:_smoothPosition) but the EMA only advances on packet
-    -- frames, so at 120fps on a 60Hz tracker the position settles roughly twice
-    -- as slowly as the configured value asks for. Running the smoother every
-    -- frame against the last known sample would fix that and remove the stepping
-    -- without an interpolator; it is a change in feel, so it is not made here.
+    -- That is done with the one smoother rather than the PositionInterpolator
+    -- the core runs here, deliberately: a translation step is not a rotation
+    -- step. A 60Hz tracker moving the head 2cm shows a 2cm jump between frames,
+    -- which is at the edge of perceptible, where the same cadence in yaw is the
+    -- stepping the rotation interpolator exists to remove. A second interpolator
+    -- would double the smoothing state that Camera:reset and Camera:suspend have
+    -- to clear correctly on every menu exit, load and tracking toggle, and this
+    -- file has already produced two defects of exactly that shape.
     local raw_x, raw_y, raw_z
     if data then raw_x, raw_y, raw_z = data.x or 0, data.y or 0, data.z or 0 end
 
@@ -714,12 +709,10 @@ local function onUpdateImpl(deltaTime)
         -- localPosition write, the chase camera ignores that the same way it
         -- ignores localOrientation, so there the offset is published and the
         -- native hook translates the camera's own world position with it.
-        if pose_x ~= nil then
-            if chase_camera then
-                camera:applyChaseCamPosition(pose_x, pose_y, pose_z, deltaTime)
-            else
-                camera:applyPosition(pose_x, pose_y, pose_z, deltaTime)
-            end
+        if chase_camera then
+            camera:applyChaseCamPosition(pose_x, pose_y, pose_z, deltaTime)
+        else
+            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime)
         end
         perf:recordCameraUpdate()
     end

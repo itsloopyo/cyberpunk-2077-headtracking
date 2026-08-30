@@ -29,9 +29,10 @@ function AdsPose.new()
     -- The pose the sights came up on, non-nil for exactly as long as they are
     -- up in a mode that keeps tracking live.
     self.entry = nil
-    -- Latest position. Rotation is interpolated every frame, position is not,
-    -- so a frame with no fresh packet still has to hand the entry capture a
-    -- real translation rather than nil.
+    -- Latest position. Rotation is interpolated upstream and arrives every
+    -- frame; position arrives only on the frames a packet did, and is held and
+    -- smoothed downstream in camera.lua. So a frame with no fresh packet still
+    -- has to hand the entry capture a real translation rather than nil.
     self.last_x, self.last_y, self.last_z = 0, 0, 0
     return self
 end

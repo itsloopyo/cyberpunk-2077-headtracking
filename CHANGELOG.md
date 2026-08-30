@@ -15,6 +15,15 @@
   of its own, so the input really is unbounded.
 - Leaving the chase camera left a stale position offset behind: the state reset in
   Camera:suspend was gated on a flag that only the first-person path ever set.
+- Position settled more slowly than the smoothing setting asked for, and stepped
+  at the tracker's rate while rotation moved at the render rate. The smoothing
+  factor is derived from the render frame time, but the position smoother only
+  advanced on the frames a packet arrived on, so the two disagreed by the
+  frame-to-packet ratio: at 120fps against a 60Hz tracker a lean took 0.108s to
+  close 90% of the gap where the setting asked for 0.054s, and at 240fps it took
+  0.204s. The smoother now runs every frame against the sample it last saw, which
+  puts both numbers on the configured rate. At 60fps against a 60Hz tracker
+  nothing changes. This alters how leaning feels on a high-refresh display.
 
 ### Changed
 

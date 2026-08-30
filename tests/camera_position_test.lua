@@ -19,6 +19,12 @@
 -- First-sample snap. Without it the smoother blends up from zero after every
 -- reset, and zero is not a pose anybody's head is in. reset() runs on every menu
 -- exit, every load and every tracking toggle.
+--
+-- Every-frame smoothing. The smoothing factor is derived from the render
+-- deltaTime, so a smoother that only advanced on the frames a packet landed on
+-- delivered a different rate than the configured one - half of it at 120fps
+-- against a 60Hz tracker - and stepped at the tracker's rate while rotation
+-- moved at the render rate.
 
 local Camera = assert(loadfile("modules/camera.lua"))()
 
@@ -44,6 +50,7 @@ local function bare_camera(overrides)
     cam.smooth_yaw, cam.smooth_pitch, cam.smooth_roll = 0, 0, 0
     cam.rot_has_value = false
     cam.pos_smooth = { x = 0, y = 0, z = 0 }
+    cam.pos_raw = { x = 0, y = 0, z = 0 }
     cam.pos_has_value = false
     cam.is_remote_connection = false
     cam.cached_settings = {
@@ -124,6 +131,98 @@ do
     assert_near(x2, 0.30, "lateral clamps symmetrically the other way")
     assert_near(y2, 0.40, "forward lean gets the generous budget")
     assert_near(z2, -0.20, "downward gets the down limit")
+end
+
+do
+    -- The smoother runs on every render frame, holding the last sample as its
+    -- target on the frames between packets. The configured rate is continuous -
+    -- alpha = 1 - exp(-speed * dt), speed = lerp(50, 0.1, smoothing) - so the
+    -- time to close 90% of a gap is ln(10) / speed at any frame rate, to within
+    -- one frame of quantisation. Advancing the EMA once per packet instead
+    -- stretches that by the frame-to-packet ratio: twice as slow at 120fps on a
+    -- 60Hz tracker, and half the frames showing no movement at all.
+    local FPS, TRACKER_HZ = 120, 60
+    local frame_dt = 1 / FPS
+    local frames_per_packet = FPS / TRACKER_HZ
+    local smoothing = 0.15 -- the remote_smoothing default
+    local speed = 50.0 + (0.1 - 50.0) * smoothing
+    local expected_settle = math.log(10) / speed
+
+    local cam = bare_camera()
+    cam.is_remote_connection = true
+    cam:_smoothPosition(0, 0, 0, frame_dt) -- head at rest; the snap fires here
+
+    local target = -0.10 -- 10 cm lateral, inverted into the camera frame
+    local settle_frames, prev, stalled_at = nil, 0, nil
+    for frame = 1, 600 do
+        local x
+        if (frame - 1) % frames_per_packet == 0 then
+            x = cam:_smoothPosition(10, 0, 0, frame_dt)
+        else
+            x = cam:_smoothPosition(nil, nil, nil, frame_dt)
+        end
+        if not settle_frames then
+            if x == prev and not stalled_at then stalled_at = frame end
+            if x <= target * 0.9 then settle_frames = frame end
+        end
+        prev = x
+    end
+
+    assert_true(stalled_at == nil, string.format(
+        "output held still on frame %s: a frame with no fresh packet must still "
+        .. "advance the smoother", tostring(stalled_at)))
+    assert_true(settle_frames ~= nil, "position never reached 90% of the target")
+    local settle = settle_frames * frame_dt
+    assert_true(settle <= expected_settle + frame_dt, string.format(
+        "90%% settle took %.4fs; the configured smoothing asks for %.4fs (+-one "
+        .. "frame). Advancing once per packet gives %.4fs.",
+        settle, expected_settle, expected_settle * frames_per_packet))
+end
+
+do
+    -- A feed that stops has to settle on the last sample and stay on it. The
+    -- target is constant between packets, so the EMA converges and holds; it
+    -- cannot wind up over a menu, a loading screen or a tracker that went away.
+    local cam = bare_camera()
+    cam.is_remote_connection = true
+    cam:_smoothPosition(0, 0, 0, DT)
+    cam:_smoothPosition(10, 0, 0, DT)
+    for _ = 1, 3600 do cam:_smoothPosition(nil, nil, nil, DT) end
+    local x, y, z = cam:_smoothPosition(nil, nil, nil, DT)
+    assert_near(x, -0.10, "settles on the last sample over a minute of dry frames", 1e-12)
+    assert_near(y, 0, "no drift on the forward axis", 1e-12)
+    assert_near(z, 0, "no drift on the vertical axis", 1e-12)
+end
+
+do
+    -- With nothing held there is nothing to smooth toward, and saying so is what
+    -- keeps a resume from running against a target from before the suspension.
+    local cam = bare_camera()
+    assert_true(cam:_smoothPosition(nil, nil, nil, DT) == nil,
+        "no output before the first sample")
+
+    cam:_smoothPosition(5, 0, 0, DT)
+    -- suspend() reaches for the camera component, which does not exist here, so
+    -- the state is cleared the same way suspend() clears it.
+    cam.pos_has_value = false
+    cam.pos_raw.x, cam.pos_raw.y, cam.pos_raw.z = 0, 0, 0
+    assert_true(cam:_smoothPosition(nil, nil, nil, DT) == nil,
+        "no output once the position state is cleared")
+end
+
+do
+    -- local_smoothing defaults to 0 and the loopback path has to stay
+    -- effectively instant, which running every frame only helps.
+    local cam = bare_camera()
+    cam:_smoothPosition(0, 0, 0, DT)
+    local frames, x = 0, 0
+    repeat
+        frames = frames + 1
+        x = cam:_smoothPosition(10, 0, 0, DT)
+    until x <= -0.099 or frames > 60
+    assert_true(frames <= 6, string.format(
+        "local_smoothing 0 took %d frames (%.3fs) to close 99%% of a 10 cm lean",
+        frames, frames * DT))
 end
 
 -- ---------------------------------------------------------------- rotation

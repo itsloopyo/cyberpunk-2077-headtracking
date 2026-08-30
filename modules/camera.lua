@@ -282,6 +282,11 @@ function Camera.new(settings)
     -- limits are expressed there and a clamp has to run in the frame it clamps.
     self.pos_smooth = { x = 0, y = 0, z = 0 }
     self.pos_local = { x = 0, y = 0, z = 0 }
+    -- The tracker sample the smoother is currently heading for, in raw cm, held
+    -- so the frames between packets can keep running it. Re-run from the raw
+    -- values rather than from a cached camera-frame target, so a limit changed
+    -- mid-hold takes effect on the next frame like any other.
+    self.pos_raw = { x = 0, y = 0, z = 0 }
     self.pos_has_value = false -- as rot_has_value, for the position smoother
     self.pos_applied = false   -- have we ever written a non-zero position?
 
@@ -1023,6 +1028,7 @@ function Camera:suspend()
     -- resuming from a stale smoothed offset.
     self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
     self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = 0, 0, 0
+    self.pos_raw.x, self.pos_raw.y, self.pos_raw.z = 0, 0, 0
     self.pos_has_value = false
 end
 
@@ -1084,13 +1090,29 @@ end
 --- (native/src/UdpReceiver.cpp), so the input here really is unbounded. Clamping
 --- an already-bounded value is a no-op, so ordinary movement is unchanged.
 --- Matches ClampToLimits' two call sites in the core's position_processor.h.
---- @param rx number Tracker lateral in cm
---- @param ry number Tracker vertical in cm
---- @param rz number Tracker longitudinal in cm
+---
+--- Runs EVERY frame, holding the last sample as its target on the frames with no
+--- fresh packet (rx nil). The smoothing factor is derived from the render
+--- deltaTime, so advancing the EMA only on packet frames made the configured
+--- smoothing mean something else: at 120fps against a 60Hz tracker the position
+--- settled at half the rate asked for, and it stepped at the tracker's rate while
+--- rotation moved at the render rate. The target is a constant between packets,
+--- so an EMA against it converges and stops - a stalled feed settles on the last
+--- reported sample rather than winding anywhere.
+--- @param rx number|nil Tracker lateral in cm; nil = no fresh sample this frame
+--- @param ry number|nil Tracker vertical in cm
+--- @param rz number|nil Tracker longitudinal in cm
 --- @param deltaTime number Seconds since the previous frame
---- @return number cam_x, number cam_y, number cam_z Camera-frame offset in m
+--- @return number|nil cam_x, number cam_y, number cam_z Camera-frame offset in m
 function Camera:_smoothPosition(rx, ry, rz, deltaTime)
     local c = self.cached_settings
+
+    if rx == nil then
+        if not self.pos_has_value then return nil end
+        rx, ry, rz = self.pos_raw.x, self.pos_raw.y, self.pos_raw.z
+    else
+        self.pos_raw.x, self.pos_raw.y, self.pos_raw.z = rx, ry, rz
+    end
 
     -- 1) cm -> m
     local dx, dy, dz = rx * 0.01, ry * 0.01, rz * 0.01
@@ -1127,7 +1149,8 @@ function Camera:_smoothPosition(rx, ry, rz, deltaTime)
 end
 
 --- Apply 6DOF head translation to the FPP camera.
---- Inputs are raw OpenTrack cm values (lateral, vertical, longitudinal).
+--- Inputs are raw OpenTrack cm values (lateral, vertical, longitudinal), or nil
+--- on a frame with no fresh packet - call this every frame, see _smoothPosition.
 --- Pipeline: per-axis sensitivity -> exponential smoothing ->
 ---           cm to m -> axis remap -> asymmetric clamp -> SetLocalPosition.
 --- Cyberpunk local cam frame (smoke-test confirmed): +Z is up; we map
@@ -1147,7 +1170,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
         self.pos_local.z = 0
         return
     end
-    if not isValidNumber(rx) or not isValidNumber(ry) or not isValidNumber(rz) then
+    if rx ~= nil and not (isValidNumber(rx) and isValidNumber(ry) and isValidNumber(rz)) then
         return
     end
 
@@ -1156,7 +1179,8 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
 
     local cam_x, cam_y, cam_z = self:_smoothPosition(rx, ry, rz, deltaTime)
 
-    if not (isValidNumber(cam_x) and isValidNumber(cam_y) and isValidNumber(cam_z)) then
+    if cam_x == nil
+        or not (isValidNumber(cam_x) and isValidNumber(cam_y) and isValidNumber(cam_z)) then
         return
     end
 
@@ -1175,9 +1199,9 @@ end
 --- the camera's own world position instead, and reads the offset out of the
 --- shared state that getAppliedPosition() feeds - so this only has to compute
 --- and store it.
---- @param rx number Tracker lateral in cm
---- @param ry number Tracker vertical in cm
---- @param rz number Tracker longitudinal in cm
+--- @param rx number|nil Tracker lateral in cm; nil = no fresh sample this frame
+--- @param ry number|nil Tracker vertical in cm
+--- @param rz number|nil Tracker longitudinal in cm
 --- @param deltaTime number Seconds since the previous frame
 function Camera:applyChaseCamPosition(rx, ry, rz, deltaTime)
     local c = self.cached_settings
@@ -1187,13 +1211,14 @@ function Camera:applyChaseCamPosition(rx, ry, rz, deltaTime)
         self.pos_local.z = 0
         return
     end
-    if not isValidNumber(rx) or not isValidNumber(ry) or not isValidNumber(rz) then
+    if rx ~= nil and not (isValidNumber(rx) and isValidNumber(ry) and isValidNumber(rz)) then
         return
     end
 
     local cam_x, cam_y, cam_z = self:_smoothPosition(rx, ry, rz, deltaTime)
 
-    if not (isValidNumber(cam_x) and isValidNumber(cam_y) and isValidNumber(cam_z)) then
+    if cam_x == nil
+        or not (isValidNumber(cam_x) and isValidNumber(cam_y) and isValidNumber(cam_z)) then
         return
     end
 
