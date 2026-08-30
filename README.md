@@ -2,7 +2,7 @@
 
 ![Cyberpunk 2077 running with this mod](https://raw.githubusercontent.com/itsloopyo/cyberpunk-2077-headtracking/main/assets/readme-clip.gif)
 
-An unofficial head tracking mod for Cyberpunk 2077 that moves the view with your head while your mouse or controller keeps aiming, driven by a webcam, phone, or any OpenTrack compatible tracker, with no VR headset required.
+An unofficial head tracking mod for Cyberpunk 2077 that moves the view with your head while your mouse or controller keeps aiming, driven by OpenTrack over UDP, with no VR headset required.
 
 ## Features
 
@@ -83,39 +83,64 @@ The Nexus ZIP is already laid out in this structure, so extracting it into the C
 
 ## Setting Up OpenTrack
 
-In OpenTrack, set **Output** to *UDP over network*:
+The mod listens for OpenTrack pose data on UDP port `4242`, on every network
+interface. One datagram is six little-endian 64-bit floats in the order
+`x, y, z, yaw, pitch, roll`: position in centimetres, rotation in degrees, 48
+bytes in total. Anything that sends that to that port drives the view.
+OpenTrack's **UDP over network** output sends exactly this, and the steps below
+set it up.
 
-- Remote IP: `127.0.0.1` (or your gaming PC's LAN IP if OpenTrack runs on another machine).
-- Port: `4242`.
+1. Install [OpenTrack](https://github.com/opentrack/opentrack/releases).
+2. Pick a tracker under **Input**, using the notes below.
+3. Set **Output** to **UDP over network**, host `127.0.0.1`, port `4242`.
+4. Press **Start**. Tracking and the game can start in either order.
 
-Pick any **Input** that suits your tracker. Click **Start** before launching the game. Allow UDP 4242 through Windows Firewall when prompted.
+### Webcam
 
-### VR Headset Setup
+OpenTrack ships a `neuralnet tracker` input that reads a plain webcam. Select it
+under **Input**, pick your camera in its settings, and use the output settings
+above. How well it tracks depends on your camera and your lighting, so try it
+before buying anything.
 
-You can use a VR headset purely as a head tracker. There is no VR rendering, you still play on your monitor.
+### Phone
 
-1. Connect the headset to your PC with Air Link, Virtual Desktop, or a link cable, and start SteamVR.
-2. In OpenTrack, set **Input** to *SteamVR / OpenVR*. OpenTrack reads the headset's orientation from SteamVR.
-3. Set Output to *UDP over network* targeting `127.0.0.1:4242` as above, then click **Start**.
-4. Centre the headset in SteamVR or OpenTrack while looking forward at the screen. The mod has no centre of its own.
+A phone app can reach the mod directly, with no OpenTrack on the PC, if it sends
+the datagram described above. Point it at this PC's IP address (run `ipconfig`
+to find it) on port `4242`. Not every phone tracker speaks this protocol, so
+check yours for an OpenTrack or UDP output option first. [Headcam](https://headcam.app)
+sends it, and I wrote it so decent tracking is free for anyone who already owns
+a phone.
 
-### Webcam Setup
+Sending direct works when the app filters its own signal on the device. The
+mod's smoothing is sized to take the edge off a clean signal rather than to
+rescue a noisy one, so a raw feed sent direct will jitter. If it does, point the
+app at OpenTrack's **UDP over network** *input* on some other port, say 5252,
+and let OpenTrack's filters and curves clean it up before its output forwards to
+`127.0.0.1:4242`.
 
-1. Install OpenTrack from its [releases page](https://github.com/opentrack/opentrack/releases).
-2. In OpenTrack, set **Tracker** to *Neuralnet Tracker*, which works without IR markers.
-3. Select your webcam, run the calibration wizard, and confirm the head model follows your movements in OpenTrack's preview.
-4. Set Output as above and click **Start**.
+Anything arriving from outside `127.0.0.0/8` counts as a remote connection and
+is smoothed with `RemoteSmoothing` rather than `LocalSmoothing`. That includes a
+tracker on this very PC that sends to the machine's own LAN address, because the
+mod reads the source address and not the machine.
 
-### Phone App Setup
+### Headset or other hardware
 
-Phone trackers generally all speak OpenTrack UDP, but they differ in how much filtering they do on the phone, and that is what decides how you should wire them up:
+If your device has an OpenTrack input driver, select it under **Input** and use
+the same output settings. OpenTrack's own **Input** list is the authority on
+what it can read; the mod only ever sees what OpenTrack sends.
 
-- **Direct send**: point the app at your PC's LAN IP on port `4242`. This only works if the app filters its own signal on-device. A raw or lightly filtered feed sent straight to the mod will jitter, because the mod's smoothing is sized to take the edge off a clean signal rather than to rescue a noisy one. [Headcam](https://headcam.app) (my free tracking app) filters on-device, so can send directly.
+### Centring
 
-  Not sure about yours? Try direct first. Hold your head still and watch the view: if it drifts or shakes, switch to the OpenTrack route below.
-- **Via OpenTrack**: have the phone send to OpenTrack on a different port (for example 5252), then OpenTrack's Output forwards to `127.0.0.1:4242`. Apps that send a raw or lightly filtered signal need this route so OpenTrack's filters and curve mapping can clean the feed up first.
+Centring belongs to your tracker. The mod subtracts no centre of its own: it
+applies the pose it receives exactly as it arrives, so a stream of zeros holds
+the view where the game itself puts it. Press the centre control in your tracker
+(OpenTrack's **Center** bind, or the CENTER button in Headcam) and the tracker
+zeroes its own output, which leaves the view centred with the mod doing nothing.
 
-The mod's connection-specific smoothing applies either way. Configure sensitivity, deadzones, response curves, and tracker-axis options in OpenTrack or your tracking app; the mod consumes its output at 1:1 scale.
+That is why there is no centre hotkey here and nothing to re-centre in game. Two
+centres in series would drift apart, because each side re-centres at moments the
+other cannot see, and you would end up pressing twice to centre once. If the
+view sits off to one side, centre it in the tracker.
 
 ## Controls
 
@@ -281,11 +306,11 @@ pixi run install    # build the native plugin and deploy to the detected game in
 pixi run package    # produce installer and Nexus ZIPs in release/
 ```
 
-## Community and Support
+## Community & Support
 
-- [Discord](https://discord.com/invite/dxyZdyFNT9) - setup help, bug reports, and new-release announcements
-- [Lopari](https://lopari.app) - my free launcher for Windows with one-click install and launch of my mods
-- [Headcam](https://headcam.app) - my free phone head-tracker app
+- Discord: [Loop's Head Tracking Hangout](https://discord.com/invite/dxyZdyFNT9) - setup help, bug reports, and new-release announcements
+- [Lopari](https://lopari.app) - free Windows launcher with one-click install and launch for the released head-tracking mods
+- [Headcam](https://headcam.app) - free app that turns your iPhone or Android phone into the head tracker
 
 ## License
 
