@@ -106,6 +106,14 @@ local function getEffectiveSmoothing(localSmoothing, remoteSmoothing, isRemoteCo
     return localSmoothing
 end
 
+--- Ends of the speed ramp: smoothing 0 maps to the fast end, 1 to the slow end,
+--- and the result is clamped back to the same pair so the per-frame factor is
+--- never 0 or 1. Match kFrameInterpolationSpeed / kMaxSmoothingSpeed in the C++
+--- core; the values live in cameraunlock-core/data/pipeline-conformance.json,
+--- which tests/core_constants_test.lua checks these against.
+local FRAME_INTERPOLATION_SPEED = 50.0
+local MAX_SMOOTHING_SPEED = 0.1
+
 --- Frame-rate independent smoothing factor. Port of cameraunlock-core
 --- SmoothingUtils.CalculateSmoothingFactor: speed = lerp(50, 0.1, smoothing)
 --- clamped to [0.1, 50], alpha = 1 - exp(-speed * dt). There is no snap
@@ -118,8 +126,13 @@ end
 local function calculateSmoothingFactor(smoothing, deltaTime)
     local dt = deltaTime
     if not dt or dt <= 0 then dt = 1.0 / 60.0 end
-    local speed = 50.0 + (0.1 - 50.0) * smoothing
-    if speed < 0.1 then speed = 0.1 elseif speed > 50.0 then speed = 50.0 end
+    local speed = FRAME_INTERPOLATION_SPEED
+        + (MAX_SMOOTHING_SPEED - FRAME_INTERPOLATION_SPEED) * smoothing
+    if speed < MAX_SMOOTHING_SPEED then
+        speed = MAX_SMOOTHING_SPEED
+    elseif speed > FRAME_INTERPOLATION_SPEED then
+        speed = FRAME_INTERPOLATION_SPEED
+    end
     return 1.0 - math_exp(-speed * dt)
 end
 
