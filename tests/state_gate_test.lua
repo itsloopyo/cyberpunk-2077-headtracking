@@ -237,6 +237,42 @@ spinPastCacheTtl()
 assert_true(st:isTrackingAllowed(), "lowering the weapon stays allowed")
 assert_false(st:isAdsActive(), "lowering the weapon clears the ADS flag")
 
+-- 13. With an ADS transition wired, "paused" holds the gate OPEN for the length
+--     of the fade and closes it only once the head pose has actually gone. A
+--     gate that shut on the first aiming frame cut the pose in one frame, which
+--     is the jolt the fade exists to remove. Without a fade wired (every case
+--     above) the branch keeps its pre-fade behaviour, which is what lets the
+--     rest of this file construct a State with no init.lua around it.
+local sights_up = false
+st:setAdsFade({ isSightsUp = function() return sights_up end })
+
+ads_mode = "paused"
+live.upper_body = PSM_UPPERBODY_AIM
+spinPastCacheTtl()
+assert_true(st:isTrackingAllowed(), "paused keeps the gate open while the pose fades out")
+assert_true(st:isAdsActive(), "and still reports the sights up, which is what drives the fade")
+
+sights_up = true
+spinPastCacheTtl()
+assert_false(st:isTrackingAllowed(), "paused closes the gate once the pose has gone")
+assert_eq(st:getReason(), State.REASON.ADS, "and the reason is still ads")
+
+sights_up = false
+spinPastCacheTtl()
+assert_true(st:isTrackingAllowed(), "the gate reopens as soon as the sights start dropping")
+
+-- The tracked modes never consult the fade for the gate: they keep it open for
+-- the whole aim whatever the transition is doing.
+ads_mode = "tracked"
+sights_up = true
+spinPastCacheTtl()
+assert_true(st:isTrackingAllowed(), "tracked keeps the gate open at the sights-up end")
+
+st:setAdsFade(nil)
+ads_mode = "tracked"
+live.upper_body = 0
+spinPastCacheTtl()
+
 -- A menu returning early must not leave a stale ADS flag behind: init.lua
 -- would otherwise hold a frozen pose through a suppression that already
 -- peeled it.

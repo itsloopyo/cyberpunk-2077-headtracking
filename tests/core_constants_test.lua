@@ -88,4 +88,12 @@ assert_eq(module_local(interp, "EXTRAPOLATION_HOLD_SECONDS"),
 assert_eq(module_local(interp, "EXTRAPOLATION_DECAY_SECONDS"),
     core("extrapolation_decay_seconds"), "EXTRAPOLATION_DECAY_SECONDS")
 
+-- The ADS transition. Core spells the two durations in milliseconds because its
+-- callers hand it a millisecond clock; every clock in this port is os.clock(),
+-- which is seconds, so the module holds seconds and the conversion happens here
+-- rather than on every frame.
+local fade = "modules/ads_fade.lua"
+assert_eq(module_local(fade, "LOWER_S") * 1000, core("ads_fade_lower_ms"), "ads_fade.LOWER_S")
+assert_eq(module_local(fade, "RAISE_S") * 1000, core("ads_fade_raise_ms"), "ads_fade.RAISE_S")
+
 print("core_constants_test: all constants match cameraunlock-core")

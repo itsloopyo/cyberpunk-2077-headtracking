@@ -69,6 +69,9 @@ local UI = safeRequire("modules/ui")
 local BuiltinCrosshair = safeRequire("modules/builtin_crosshair")
 local AdsReticle = safeRequire("modules/ads_reticle")
 local AdsPose = safeRequire("modules/ads_pose")
+local AdsFade = safeRequire("modules/ads_fade")
+local AdsFrame = safeRequire("modules/ads_frame")
+local AdsBlend = safeRequire("modules/ads_blend")
 local Aim = safeRequire("modules/aim")
 local NativeSettingsIntegration = safeRequire("modules/nativesettings")
 local Perf = safeRequire("modules/perf")
@@ -295,6 +298,13 @@ local was_chase_camera = false
 -- modules/ads_pose.lua.
 local ads_pose = nil
 
+-- The shape of the transition into and out of the aim, shared by all three
+-- modes. See modules/ads_fade.lua; what the scale it returns blends between is
+-- modules/ads_blend.lua, and the per-frame decisions around both are
+-- modules/ads_frame.lua.
+local ads_fade = nil
+local ads_frame = nil
+
 -- Whether onDraw should paint the aim marker this frame. onUpdate owns the
 -- decision and onDraw only reads it, so it is cleared at the top of every
 -- update - including the paths that return early - rather than left to go
@@ -435,6 +445,17 @@ registerForEvent("onInit", function()
         ads_pose = AdsPose.new()
     end)
 
+    runInitStep("ads_fade", function()
+        if not AdsFade then error("AdsFade module failed to load") end
+        if not AdsBlend then error("AdsBlend module failed to load") end
+        if not AdsFrame then error("AdsFrame module failed to load") end
+        ads_fade = AdsFade.new()
+        ads_frame = AdsFrame.new(ads_fade)
+        -- The gate asks the fade whether the pose has gone before "paused"
+        -- stands tracking down.
+        state:setAdsFade(ads_fade)
+    end)
+
     runInitStep("nativeUI", function()
         nativeUI = NativeSettingsIntegration.new(settings)
         nativeUI:setCamera(camera)
@@ -509,7 +530,7 @@ local function onUpdateImpl(deltaTime)
     end
 
     if not state or not udp or not camera or not aim or not pose_interp or not ads_pose
-            or not ShiftCompat then
+            or not ads_fade or not ads_frame or not ShiftCompat then
         if (init_debug_frame % INIT_DEBUG_INTERVAL) == 1 then
             -- This block is the answer to most "no head tracking" reports, so
             -- the first pass goes to HeadTracking.log. It repeats on an
@@ -532,6 +553,8 @@ local function onUpdateImpl(deltaTime)
                 " aim=" .. tostring(aim ~= nil) ..
                 " pose_interp=" .. tostring(pose_interp ~= nil) ..
                 " ads_pose=" .. tostring(ads_pose ~= nil) ..
+                " ads_fade=" .. tostring(ads_fade ~= nil) ..
+                " ads_frame=" .. tostring(ads_frame ~= nil) ..
                 " shift_compat=" .. tostring(ShiftCompat ~= nil))
             out("[HeadTracking:INIT] =================================================")
         end
@@ -567,6 +590,12 @@ local function onUpdateImpl(deltaTime)
     if udp:consumeNativeCycleAdsModeRequested()   then handleCycleAdsMode()   end
 
     local tracking_allowed = state:isTrackingAllowed()
+    -- Read alongside the verdict it belongs to, not at the point of use.
+    -- State:getReason() re-runs the whole walk whenever the cache has been
+    -- invalidated, and the fade below invalidates it - so a getReason() further
+    -- down answers about a re-walk rather than about the verdict this frame is
+    -- acting on, and the two can disagree.
+    local tracking_reason = state:getReason()
     if was_tracking_allowed and not tracking_allowed then
         -- Falling edge: peel our head rotation off NOW, while last_head_quat is
         -- still the rotation actually baked in the camera. This restores the
@@ -577,7 +606,7 @@ local function onUpdateImpl(deltaTime)
         -- happens many times a firefight, so it must not throw away the
         -- smoothing state: lowering the weapon would swing the view back
         -- through the whole head angle.
-        if state:getReason() == State.REASON.ADS then
+        if tracking_reason == State.REASON.ADS then
             camera:suspend()
         else
             camera:reset()
@@ -587,12 +616,34 @@ local function onUpdateImpl(deltaTime)
 
     -- "marker" and "tracked" keep the gate open through the aim and feed poses
     -- relative to the one the sights came up on, so the entry frame is identity
-    -- - the same snap onto the aim point that "paused" gets by standing
-    -- tracking down - and head movement after it still moves the view.
-    -- "paused" never reaches here: it blocks in state.lua.
-    local ads_tracked = tracking_allowed and state:isAdsActive()
-    if ads_tracked and settings:get("ads_mode") == "marker" then
+    -- - the same swing onto the aim point that "paused" makes by fading the
+    -- pose away - and head movement after it still moves the view.
+    --
+    -- "paused" reaches here too, for the length of the transition only: the
+    -- gate stays open while the fade runs the pose down to nothing and closes
+    -- behind it. So the mode has to be tested as well as the sights, or a
+    -- paused aim would spend its first 150ms on the entry-relative pose.
+    local ads_mode = settings:get("ads_mode") or "paused"
+
+    -- The sights as the GAME sees them, never the tracking gate's verdict. The
+    -- whole per-frame decision is modules/ads_frame.lua, which is where the two
+    -- ordering defects this shape exists to prevent are written down.
+    local ads_aiming = state:isAdsActive()
+    local ads_scale = ads_frame:update(
+        ads_mode, ads_aiming, tracking_allowed,
+        tracking_reason == State.REASON.ADS, now)
+    local ads_tracked = ads_frame.tracked
+
+    if ads_tracked and ads_mode == "marker" then
         ads_marker_active = ads_reticle ~= nil
+    end
+
+    -- Without the invalidate the walk keeps its cached "allowed" for up to
+    -- STATE_CACHE_TTL_S after the pose has gone, which leaves the camera being
+    -- written a zero pose for another tenth of a second before "paused" hands
+    -- it back to the game.
+    if ads_frame.sights_up_changed then
+        state:invalidateCache()
     end
 
     -- Third-person driving renders from the vehicle chase camera, which ignores
@@ -616,7 +667,7 @@ local function onUpdateImpl(deltaTime)
         if should_diag then
             dlog(string.format(
                 "[HeadTracking:DIAG] tracking BLOCKED reason=%s | enabled=%s | shm=%s | last_packet=%.1fs ago",
-                tostring(state:getReason()),
+                tostring(tracking_reason),
                 tostring(settings:get("enabled")),
                 tostring(udp:isReady()),
                 udp:secondsSinceLastPacket()
@@ -638,6 +689,10 @@ local function onUpdateImpl(deltaTime)
         if crosshair then crosshair:tick(false) end
         pose_interp:reset()
         ads_pose:reset()
+        -- The transition is not touched here. ads_frame:update above has already
+        -- decided what this suppression means for it: reset for a menu, a load
+        -- or the master toggle, survive for the ADS block, which is the one the
+        -- fade closed itself.
         return
     end
 
@@ -686,9 +741,20 @@ local function onUpdateImpl(deltaTime)
     local raw_x, raw_y, raw_z
     if data then raw_x, raw_y, raw_z = data.x or 0, data.y or 0, data.z or 0 end
 
-    local pose_yaw, pose_pitch, pose_roll, pose_x, pose_y, pose_z =
-        ads_pose:update(ads_tracked, interp_yaw, interp_pitch, interp_roll,
+    local rel_yaw, rel_pitch, rel_roll, rel_x, rel_y, rel_z =
+        ads_pose:update(ads_frame.pose_holds, interp_yaw, interp_pitch, interp_roll,
                         raw_x, raw_y, raw_z)
+
+    -- Off the aim the blend is the identity operation (scale 1, and ads_pose
+    -- has already passed the absolute pose straight through), so hip fire pays
+    -- one table and nothing else.
+    local blended = AdsBlend.blend(ads_mode, ads_scale,
+        { yaw = interp_yaw, pitch = interp_pitch, roll = interp_roll,
+          x = raw_x, y = raw_y, z = raw_z },
+        { yaw = rel_yaw, pitch = rel_pitch, roll = rel_roll,
+          x = rel_x, y = rel_y, z = rel_z })
+    local pose_yaw, pose_pitch, pose_roll = blended.yaw, blended.pitch, blended.roll
+    local pose_x, pose_y, pose_z = blended.x, blended.y, blended.z
 
     if pose_yaw ~= nil then
         local clean_cam_decouple = settings:get("decouple_diag_clean_cam") == true

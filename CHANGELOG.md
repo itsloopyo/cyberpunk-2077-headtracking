@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Raising the sights now eases the view onto the aim over 150ms instead of snapping
+  to it, and lowering them eases back over 250ms. All three ADS modes make the same
+  move, and the durations are the shared ones from cameraunlock-core. Tapping the aim
+  button turns the transition round from wherever it had reached rather than from the
+  end it was heading for, so a tap does not step the view
+
 ### Added
 
 - head tracking in the vehicle chase camera, on by default (`chase_camera_tracking`, or the switch in the settings panel). Driving in third person used to leave the view frozen because that camera ignores every write to the player's first-person camera. Two rough edges remain: only the near scene rotates, and the game's camera motion blur smears the world unless you turn Motion Blur off

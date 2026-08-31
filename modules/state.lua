@@ -128,6 +128,13 @@ function State.new()
     -- Cached rather than latched: the walk recomputes it from isAdsLive().
     self.ads_active = false
 
+    -- The ADS transition, injected by init.lua. The "paused" branch of the
+    -- walk asks it whether the head pose has actually gone before it stands
+    -- tracking down, so the view eases onto the aim rather than snapping to it.
+    -- nil means no fade is wired and the branch closes the gate on the first
+    -- aiming frame, which is what the gate tests construct.
+    self.ads_fade = nil
+
     -- Whether the last verdict walk found the player looking through the
     -- vehicle chase camera. Same deal as ads_active: recomputed, not latched.
     self.chase_camera = false
@@ -279,6 +286,22 @@ end
 function State:adsMode()
     if not self.settings then return "paused" end
     return self.settings:get("ads_mode") or "paused"
+end
+
+--- Hand the gate the ADS transition. Called once at init; see the field note
+--- in new() for what a missing one means.
+--- @param fade table|nil An ads_fade.lua instance
+function State:setAdsFade(fade)
+    self.ads_fade = fade
+end
+
+--- Has the ADS transition finished putting the head pose away? True with no
+--- fade wired, so the gate keeps its pre-fade behaviour for any caller that
+--- does not supply one.
+--- @return boolean
+function State:adsPoseIsAway()
+    if not self.ads_fade then return true end
+    return self.ads_fade:isSightsUp()
 end
 
 --- Is the player aiming down sights? Computed by the verdict walk rather than
@@ -521,6 +544,10 @@ function State:isTrackingAllowed()
     -- tracking is the user's call, toggled with Insert / Ctrl+Shift+U:
     --   "paused"  - stand tracking down, so the view swings onto the point the
     --               reticle was marking and the sight picture is the game's.
+    --               The gate stays OPEN for the length of the transition
+    --               (ads_fade.lua) and closes once the head pose has actually
+    --               gone: a gate that shut on the first aiming frame cut the
+    --               pose in one frame, which is the jolt the fade removes.
     --   "marker" / "tracked" - keep the gate open. ads_pose.lua feeds poses
     --               relative to the one the sights came up on, so the view
     --               makes that same swing and then keeps tracking from there.
@@ -530,7 +557,7 @@ function State:isTrackingAllowed()
     -- when both are true at once.
     if self:isAdsLive() then
         self.ads_active = true
-        if self:adsMode() == "paused" then
+        if self:adsMode() == "paused" and self:adsPoseIsAway() then
             return self:setVerdict(false, State.REASON.ADS)
         end
     end
