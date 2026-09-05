@@ -193,7 +193,7 @@ The mod writes its config to:
 
 Edit it directly, or configure the mod in game if you have a settings framework installed. The defaults below are what the mod ships with:
 
-- [Native Settings UI](https://www.nexusmods.com/cyberpunk2077/mods/3518) puts every option below (except the reverse-engineering diagnostic) into the game's own Settings menu, controller included. Optional: without it the mod runs exactly the same and you edit `config.json` by hand.
+- [Native Settings UI](https://www.nexusmods.com/cyberpunk2077/mods/3518) puts every option below (except the diagnostic toggle) into the game's own Settings menu, controller included. Optional: without it the mod runs exactly the same and you edit `config.json` by hand.
 
 Native Settings is the only framework this mod registers with. If you use a different settings front-end, whether it picks this mod up is down to whether that front-end reads Native Settings' registry - nothing extra is needed from here either way.
 
@@ -334,4 +334,4 @@ Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICE
 
 This mod is not affiliated with, endorsed by, or supported by CD PROJEKT RED. It is a single-player utility, so do not use it in any multiplayer or competitive context. Use at your own risk.
 
-Cyberpunk 2077 and CD PROJEKT RED are trademarks of CD PROJEKT S.A. This repository contains no game assets, engine code, or decompiled game code, and a legitimate copy of the game is required to use the mod. The clip at the top of this page is in-game footage that remains the property of CD PROJEKT RED, shown non-commercially to demonstrate the mod under their fan content guidelines. Full attribution for every third-party component is in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Cyberpunk 2077 and CD PROJEKT RED are trademarks of CD PROJEKT S.A. This repository contains no game assets and no game or engine code of any kind, and a legitimate copy of the game is required to use the mod. The clip at the top of this page is in-game footage that remains the property of CD PROJEKT RED, shown non-commercially to demonstrate the mod under their fan content guidelines. Full attribution for every third-party component is in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

@@ -14,7 +14,7 @@ Cyberpunk 2077.
 | Cyber Engine Tweaks | v1.37.1 | MIT | Bundled verbatim in the installer ZIP |
 | RED4ext | v1.30.0 | MIT | Bundled verbatim in the installer ZIP |
 | TweakXL | v1.11.4 | MIT | Bundled verbatim in the installer ZIP |
-| cameraunlock-core | f441e29427b7422a584ba492dddd7788881804b0 | MIT | Compiled into `HeadTrackingAim.dll` |
+| cameraunlock-core | 29b11b62f183183295d435b7292d8c1c0a8e5cff | MIT | Compiled into `HeadTrackingAim.dll` |
 | OpenTrack | n/a | ISC | Not bundled; UDP protocol interoperability only |
 
 ---
@@ -135,12 +135,12 @@ SOFTWARE.
 Git submodule at `cameraunlock-core/`, compiled into `HeadTrackingAim.dll`. Our own code,
 MIT licensed, reproduced here so the notices are complete.
 
-- Pinned commit: `f441e29427b7422a584ba492dddd7788881804b0`
+- Pinned commit: `29b11b62f183183295d435b7292d8c1c0a8e5cff`
 
 ```
 MIT License
 
-Copyright (c) 2026 CameraUnlock
+Copyright (c) 2026 itsloopyo
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -175,7 +175,7 @@ obligation here. It is credited because the wire format is its work.
 
 ## CD PROJEKT RED material
 
-Game assets, engine code, decompiled or disassembled game code, and any other material
+Game assets, game or engine code of any kind, and any other material
 belonging to CD PROJEKT RED are not included in this repository. A legitimate copy of
 Cyberpunk 2077 is required to use this mod.
 
@@ -221,5 +221,5 @@ game code, no game assets and no proprietary DLLs, and it requires a
 legitimately purchased copy of the game. Any engine structure offsets,
 function addresses or byte patterns referenced in the source were derived by
 the authors through independent analysis of a legitimately owned copy. They
-are factual measurements recorded as numbers; no decompiled or disassembled
-game code is stored in this repository.
+are factual measurements recorded as numbers; no game code of any kind is
+stored in this repository.

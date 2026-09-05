@@ -592,7 +592,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
     --
     -- Caveat: anything that reads cam.forward (camera frame) still sees head
     -- rotation. Full aim-decoupling for native bullet-spawn paths needs the
-    -- C++ pre/post camera hook - see native/RE_NOTES.md.
+    -- C++ pre/post camera hook.
     local current_quat
     do
         local ok, got = pcall(_callGetLocalOrientation, cam)

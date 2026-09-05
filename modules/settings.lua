@@ -547,8 +547,8 @@ end
 ---     already tracking is left alone, because the pair it holds IS the live
 ---     mode from last session.
 ---   * The reticle driver comes up on for the same reason.
----   * decouple_diag_clean_cam is a reverse-engineering diagnostic that hands
----     the view to an experimental native path. It is off every launch so a
+---   * decouple_diag_clean_cam is a diagnostic that hands the view to an
+---     experimental native path. It is off every launch so a
 ---     config left mid-investigation cannot ship a broken camera into normal
 ---     play.
 function Settings:applyLaunchState()

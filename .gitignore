@@ -42,7 +42,7 @@ skills/
 # Per-game install state (written by install.cmd into the game dir, but never check in if it lands here)
 .headtracking-state.json
 
-# Reverse-engineering session artifacts (kept locally under tools/re-artifacts/ if useful)
+# Local session artifacts (kept under tools/re-artifacts/ if useful)
 tools/re-artifacts/
 
 # RED4ext / ASI runtime logs

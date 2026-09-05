@@ -103,9 +103,9 @@ assert_true(integration:init(), "integration initialises against the stub")
 
 -- (1) Coverage. Every setting the user is meant to touch has a widget.
 --
--- decouple_diag_clean_cam is deliberately absent: it is a reverse-engineering
--- diagnostic that writes a mouse-only orientation to the camera, and putting it
--- in the settings panel would invite people to break their own view with it. It
+-- decouple_diag_clean_cam is deliberately absent: it is a diagnostic that
+-- writes a mouse-only orientation to the camera, and putting it in the settings
+-- panel would invite people to break their own view with it. It
 -- stays reachable from the CET console.
 --
 -- saved_tracking_mode is persisted STATE, not a knob: it records which mode the

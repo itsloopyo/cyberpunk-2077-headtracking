@@ -195,8 +195,8 @@ CallerCensus DrainCallers(CallerSlot* table) {
     return census;
 }
 
-// The census is a reverse-engineering instrument, so it earns a line in a
-// shipped log only when it says something new. The busiest call sites settle
+// The census is a diagnostic instrument, so it earns a line in a shipped log
+// only when it says something new. The busiest call sites settle
 // within seconds of entering gameplay and then repeat for the rest of the
 // session. Compare the RANKED RVAs and stay silent while they hold; the hit
 // counts move every window and would defeat the gate.
