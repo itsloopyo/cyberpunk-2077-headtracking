@@ -8,6 +8,7 @@ An unofficial head tracking mod for Cyberpunk 2077 that moves the view with your
 
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim
 - **6DOF positional tracking** - lean into corners and peek around cover with your head position
+- **Works with any OpenTrack compatible tracker** - free options available for PC, iOS and Android
 - **Three ways to aim down sights** - raising the sights always swings the view onto the point the reticle was marking. After that, pick one: head tracking off for the rest of the aim (the default), on with a marker showing where your rounds will land, or on with no marker. Cycled in game with `Insert`
 
 ## Gameplay Changes
@@ -33,6 +34,13 @@ Everything is applied through TweakXL, so removing the mod restores stock behavi
 - Windows 10 or 11, 64-bit.
 
 ## Installation
+
+### Lopari
+
+Download [Lopari](https://lopari.app), choose **Cyberpunk 2077**, and click
+**Play with head tracking**.
+
+### Standalone Installer
 
 1. Download the latest installer ZIP from the [Releases page](https://github.com/itsloopyo/cyberpunk-2077-headtracking/releases).
 2. Extract it anywhere (Desktop is fine).
