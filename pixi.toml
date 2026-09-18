@@ -8,6 +8,7 @@ platforms = ["win-64", "linux-64"]
 # Platform-independent tasks. Everything below in [target.*.tasks] either
 # builds the Windows payload or refuses to.
 [tasks]
+update-submodule = "git submodule update --remote cameraunlock-core && powershell -NoProfile -ExecutionPolicy Bypass -File cameraunlock-core/scripts/update-submodule.ps1"
 # Fetch/refresh submodules (CameraUnlock standard task). The first pass covers
 # BOTH submodules so a fresh clone can build - native/deps/RED4ext.SDK is a
 # hard build dependency (CMakeLists.txt aborts without it). The second pass
