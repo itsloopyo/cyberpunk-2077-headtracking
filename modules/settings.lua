@@ -58,11 +58,6 @@ local VALIDATION_RULES = {
     ads_mode = { type = "string" },
     -- Tracking mode the master switch restores. See SAVED_TRACKING_MODE_VALUES.
     saved_tracking_mode = { type = "string" },
-    -- Diagnostic: write CLEAN (mouse-only) orientation to cam.localOrientation
-    -- instead of head-rotated. Used to probe which engine systems read
-    -- cam+0xD0 for their "where is the camera pointing" answer. See
-    -- modules/camera.lua and Camera:apply().
-    decouple_diag_clean_cam = { type = "boolean" },
     chase_camera_tracking = { type = "boolean" },
 }
 
@@ -238,9 +233,6 @@ function Settings.new()
         -- Mode the master switch restores; rewritten every time tracking is
         -- switched off. Not shown in the settings panel.
         saved_tracking_mode = "both",
-        -- Clean-camera diagnostic path. Lua keeps cam.localOrientation
-        -- mouse-only while native experiments try to inject head rotation.
-        decouple_diag_clean_cam = false,
         -- Head tracking in the vehicle chase camera. Still incomplete: the head
         -- rotation is injected into the render params of one render stage,
         -- which turns the near scene and leaves the distant scene - drawn by
@@ -547,16 +539,11 @@ end
 ---     already tracking is left alone, because the pair it holds IS the live
 ---     mode from last session.
 ---   * The reticle driver comes up on for the same reason.
----   * decouple_diag_clean_cam is a diagnostic that hands the view to an
----     experimental native path. It is off every launch so a
----     config left mid-investigation cannot ship a broken camera into normal
----     play.
 function Settings:applyLaunchState()
     if not self:isTrackingEnabled() then
         self:setTrackingEnabled(true)
     end
     self:set("crosshair_enabled", true)
-    self:set("decouple_diag_clean_cam", false)
 end
 
 --- Get all current setting values as a table copy

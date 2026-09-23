@@ -4,7 +4,7 @@
 --
 -- CET sandboxes each mod's globals, so the table returned from init.lua is the
 -- ONLY way the user reaches these from the console:
---   GetMod("HeadTracking").DiagCleanCam(true)
+--   GetMod("HeadTracking").DiagVerbose(true)
 --
 -- That makes the table a public API. This test pins its exact shape and the
 -- exact message every entry emits while its driver is nil, so a refactor of
@@ -51,7 +51,6 @@ local EXPECTED = {
     DiagYawBasis          = CAMERA_MISSING,
     DiagYawMode           = CAMERA_MISSING,
     DiagShotDiscovery     = AIM_MISSING,
-    DiagCleanCam          = "[HeadTracking:DIAG] settings/ui not initialised; mod still booting?",
 
     -- These two intentionally stay SILENT when the crosshair driver is
     -- absent, unlike the 14 above. Pinned so the asymmetry is a deliberate,

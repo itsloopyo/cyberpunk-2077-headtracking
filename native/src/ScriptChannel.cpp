@@ -21,10 +21,9 @@
 
 namespace {
 
-// Bit layout for the `flags` out-param, mirrored in modules/udp.lua. Bit 1 and
-// bit 6 are live status; bits 3-5 and bit 7 are one-shot edges that Lua clears
-// on consume. Keep both sides in sync when adding new flags.
-constexpr uint32_t kFlagCameraActive     = 1u << 1;
+// Bit layout for the `flags` out-param, mirrored in modules/udp.lua. Bit 6 is
+// live status; bits 3-5 and bit 7 are one-shot edges that Lua clears on
+// consume. Keep both sides in sync when adding new flags.
 constexpr uint32_t kFlagToggleTracking   = 1u << 3;
 constexpr uint32_t kFlagCycleMode        = 1u << 4;
 constexpr uint32_t kFlagToggleYaw        = 1u << 5;
@@ -129,9 +128,6 @@ void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, i
     const HeadTrackingState state = g_sharedState.Read();
 
     uint32_t flags = 0;
-    if (state.camera_hook_active && state.enabled && state.applied_frame > 0) {
-        flags |= kFlagCameraActive;
-    }
     const ChordEdges edges = ConsumeChordEdges();
     if (edges.toggleTracking) flags |= kFlagToggleTracking;
     if (edges.cycleMode)      flags |= kFlagCycleMode;
@@ -155,7 +151,7 @@ void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, i
 
 void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, int64_t) {
     float yaw = 0.0f, pitch = 0.0f, roll = 0.0f;
-    bool enabled = false, isAds = false, propagatorInject = false;
+    bool enabled = false, isAds = false;
     float qi = 0.0f, qj = 0.0f, qk = 0.0f, qr = 1.0f;
     float positionX = 0.0f, positionY = 0.0f, positionZ = 0.0f, aimDistance = 0.0f;
     bool chaseCamera = false;
@@ -168,7 +164,6 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     RED4ext::GetParameter(aFrame, &qj);
     RED4ext::GetParameter(aFrame, &qk);
     RED4ext::GetParameter(aFrame, &qr);
-    RED4ext::GetParameter(aFrame, &propagatorInject);
     RED4ext::GetParameter(aFrame, &positionX);
     RED4ext::GetParameter(aFrame, &positionY);
     RED4ext::GetParameter(aFrame, &positionZ);
@@ -206,8 +201,6 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     w->roll = roll;
     w->enabled = enabled;
     w->is_ads = isAds;
-    w->camera_hook_inject = enabled;
-    w->propagator_inject_active = propagatorInject ? 1u : 0u;
     w->quat_i = qi;
     w->quat_j = qj;
     w->quat_k = qk;
@@ -237,8 +230,8 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
         static_cast<float>(2.0 * std::acos(absR) * 57.2957795), std::memory_order_relaxed);
 
     if (!s_loggedFirstPush.exchange(true)) {
-        LogInfo("[ScriptChannel] first state push from the CET mod: enabled=%d propInject=%d chaseCam=%d yaw=%.2f pitch=%.2f roll=%.2f",
-                enabled ? 1 : 0, propagatorInject ? 1 : 0, chaseCamera ? 1 : 0, yaw, pitch, roll);
+        LogInfo("[ScriptChannel] first state push from the CET mod: enabled=%d chaseCam=%d yaw=%.2f pitch=%.2f roll=%.2f",
+                enabled ? 1 : 0, chaseCamera ? 1 : 0, yaw, pitch, roll);
     }
     if (aOut) *aOut = true;
 }
@@ -284,7 +277,6 @@ void RegisterFunctions() {
     push->AddParam("Float", "qj");
     push->AddParam("Float", "qk");
     push->AddParam("Float", "qr");
-    push->AddParam("Bool", "propagatorInject");
     push->AddParam("Float", "positionX");
     push->AddParam("Float", "positionY");
     push->AddParam("Float", "positionZ");

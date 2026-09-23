@@ -51,7 +51,7 @@ void NativeRunningHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHand
 
 // Continuously-mirrored head quat from SHM. OnUpdate refreshes this from
 // shared_mem.state.quat_{i,j,k,r} every tick. Read by the render-pipeline
-// by AimProviderHook, AimGetterHook and CamPropagatorHook.
+// by AimProviderHook and AimGetterHook.
 extern float                  g_headQuat[4];
 
 // Processed head translation in camera-local metres (x right, y forward,

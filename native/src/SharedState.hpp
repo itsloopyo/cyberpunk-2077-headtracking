@@ -7,18 +7,12 @@
 // Shared state structure - must match CET Lua FFI definition exactly.
 // Field order, sizes and padding must be identical in aim.lua's ffi.cdef.
 //
-// Three logical sections:
-//   1. Lua -> native (processed pose): Lua writes the smoothed,
-//      clamped, signed head rotation that it would otherwise feed to
-//      cam:SetLocalOrientation. When the C++ camera hook is live, it picks
-//      up the rotation from these fields and injects it into the view
-//      matrix at render time; Lua stops writing to cam.localOrientation.
+// Main sections:
+//   1. Lua -> native (processed pose): the smoothed, clamped, signed head
+//      rotation Lua writes into cam.localOrientation, mirrored for the
+//      native hooks that peel it back off the aim.
 //   2. native -> Lua (raw UDP pose): the C++ UDP receiver writes raw
-//      OpenTrack values as they arrive. Lua reads these only if it wants
-//      to apply its own processing pipeline.
-//   3. native -> Lua (camera hook status): the C++ camera hook publishes
-//      whether it successfully attached. Lua reads this to decide whether
-//      it still needs to do the SetLocalOrientation fallback.
+//      OpenTrack values as they arrive.
 struct HeadTrackingState {
     // ------------------------------------------------------------------
     // Section 1: Lua -> native (processed pose)
@@ -28,8 +22,7 @@ struct HeadTrackingState {
     float roll;                 // processed roll, degrees
     bool  enabled;              // tracking allowed this frame (gates compensation + view injection)
     bool  is_ads;               // weapon aim-down-sights state
-    bool  camera_hook_inject;   // Lua asks C++ to inject head rotation into this frame's view matrix
-    uint8_t pad0;
+    uint8_t pad0[2];
     uint32_t frame;             // incremented each Lua write (sync / liveness)
     float ads_scale;            // reserved ADS effect multiplier
 
@@ -56,19 +49,6 @@ struct HeadTrackingState {
     uint64_t raw_timestamp_ms;   // GetTickCount64() at receive time
 
     // ------------------------------------------------------------------
-    // Section 3: native -> Lua (camera hook status)
-    // ------------------------------------------------------------------
-    // C++ sets this to true once the view-matrix hook is attached and
-    // firing. Lua checks it every frame: when true, Lua stops calling
-    // cam:SetLocalOrientation because C++ is handling render-side
-    // injection directly. When false (offset not filled, attach failed,
-    // hook never seen fire), Lua falls back to SetLocalOrientation so
-    // users still get head tracking, just coupled to aim as before.
-    bool  camera_hook_active;
-    uint8_t pad1[3];
-    uint32_t camera_hook_fires;  // increments on every hook call (heartbeat)
-
-    // ------------------------------------------------------------------
     // Section 4: native -> Lua (Running::OnUpdate hook status)
     // ------------------------------------------------------------------
     // C++ registers a RED4ext Running state OnUpdate callback. Each fire
@@ -76,20 +56,6 @@ struct HeadTrackingState {
     // actually firing and to time it against Lua's own onUpdate for the
     // pre-render snap-restore work.
     uint32_t native_running_frame;  // increments every Running::OnUpdate fire
-
-    // ------------------------------------------------------------------
-    // Section 7: Lua -> native (cam-propagator decouple gate)
-    // ------------------------------------------------------------------
-    // True when Lua is writing CLEAN (mouse-only) quat to cam.localOrientation
-    // and wants the native CamPropagatorHook to inject head rotation into
-    // the per-tick camera-state propagator at +0x1D8558. Renderer reads
-    // propagated values (gets head-rotated view), game logic / targeting
-    // reads cam+0xD0 directly (gets clean = follows mouse).
-    //
-    // When false the hook is a no-op pass-through.
-    uint32_t propagator_inject_active;
-    uint32_t propagator_hook_fires;  // heartbeat: native sandwich count
-
 
     // ------------------------------------------------------------------
     // Section 9: aim-provider decouple (AimProviderHook)
@@ -120,11 +86,10 @@ struct HeadTrackingState {
     //
     // aim_getter_mode (Lua -> native):
     //   0 off   1 instrument only   2 peel via +0x802390 (GetWorldOrientation)
-    //   3 peel via +0x1D92A0 (GetWorldTransform)   4 peel via +0x84C968
-    //   (the weapon-fire routine's Normalize(target - muzzle))
+    //   4 peel via +0x84C968 (the weapon-fire routine's Normalize(target - muzzle))
+    //   5 fixed test yaw on +0x802390
     uint32_t aim_getter_mode;
     uint32_t aim_getter_calls_a;
-    uint32_t aim_getter_calls_b;
     uint32_t aim_getter_calls_c;
     uint32_t aim_getter_overrides;
 
@@ -141,7 +106,7 @@ struct HeadTrackingState {
 constexpr const char* SHARED_MEM_NAME = "HeadTrackingAimState";
 constexpr size_t SHARED_MEM_SIZE = sizeof(HeadTrackingState);
 
-static_assert(sizeof(HeadTrackingState) == 152,
+static_assert(sizeof(HeadTrackingState) == 136,
     "HeadTrackingState layout changed - update modules/aim.lua cdef to match");
 
 class SharedState {

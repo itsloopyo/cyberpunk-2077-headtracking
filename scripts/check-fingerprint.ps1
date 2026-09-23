@@ -132,11 +132,15 @@ extern const BuildProfile kStoreProfile_$profileDate = {
     "store-win64-$profileDate",
     { 0x$('{0:X8}' -f $timeDateStamp), 0x$('{0:X8}' -f $sizeOfImage), 0x$('{0:X8}' -f $checkSum) },
     {
-        0x000000,  // Propagator
         0x000000,  // GetWorldOrientation
-        0x000000,  // GetWorldTransform
         0x000000,  // FireNormaliseCall
         0x000000,  // NormaliseFn
+        0x000000,  // RicochetEffectExecute
+        0x000000,  // PhysicalRayExecute
+        0x000000,  // PhysicalRayNormaliseCall
+        0x000000,  // SmartGunCameraCallA
+        0x000000,  // SmartGunCameraCallB
+        0x000000,  // CameraPublishFn
     },
 };
 "@

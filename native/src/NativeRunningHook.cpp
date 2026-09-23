@@ -7,7 +7,6 @@
 #include "AimGetterHook.hpp"
 #include "ScriptChannel.hpp"
 #include "FppCameraWrite.hpp"
-#include "CamPropagatorHook.hpp"
 
 #include <RED4ext/RED4ext.hpp>
 #include <RED4ext/GameStates.hpp>
@@ -354,15 +353,6 @@ bool OnUpdate(RED4ext::CGameApplication*) {
             g_headPos[2] = 0.0f;
             g_aimDistance = 0.0f;
         }
-
-        // The propagator hook sits on a function the game calls hundreds of
-        // thousands of times a second across several threads, so its gate is
-        // mirrored here at frame cadence rather than read from shared memory
-        // per call, the same way g_headQuat is above.
-        CamPropagatorHook_Tick(w->enabled &&
-                               w->camera_hook_inject &&
-                               w->propagator_inject_active != 0u &&
-                               w->applied_frame > 0);
 
         // Resolve the cam instance pointer periodically even without a
         // Needed so `g_camInstance` is populated as

@@ -7,8 +7,7 @@
 // =============================================================================
 //
 // Every hook that peels or composes head rotation needs the Hamilton product,
-// and each one used to carry its own byte-identical copy (AimGetterHook,
-// AimProviderHook, CamPropagatorHook, ShotEntryProbe, ShotSnapHook). Five
+// and each one used to carry its own byte-identical copy. Five
 // copies of the sign-sensitive composition the whole mod's correctness rests
 // on is exactly the shape where one edited copy silently diverges, so it lives
 // here once.

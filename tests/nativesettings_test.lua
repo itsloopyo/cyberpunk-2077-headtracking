@@ -103,14 +103,9 @@ assert_true(integration:init(), "integration initialises against the stub")
 
 -- (1) Coverage. Every setting the user is meant to touch has a widget.
 --
--- decouple_diag_clean_cam is deliberately absent: it is a diagnostic that
--- writes a mouse-only orientation to the camera, and putting it in the settings
--- panel would invite people to break their own view with it. It
--- stays reachable from the CET console.
---
 -- saved_tracking_mode is persisted STATE, not a knob: it records which mode the
 -- master switch should restore, and is rewritten every time tracking goes off.
-local NOT_IN_UI = { decouple_diag_clean_cam = true, saved_tracking_mode = true }
+local NOT_IN_UI = { saved_tracking_mode = true }
 
 local missing = {}
 for key in pairs(settings:getDefaults()) do
@@ -229,8 +224,8 @@ assert_eq(refreshes[master_ref], true, "position-only counts as tracking on for 
 assert_eq(refreshes[pos_ref], true, "position switch follows back on")
 
 -- (6) A setting with no widget must not throw on the way through - the observer
---     fires for every key, including the diagnostic one.
-integration:onSettingChanged("decouple_diag_clean_cam", true)
+--     fires for every key, including persisted state.
+integration:onSettingChanged("saved_tracking_mode", "rot")
 
 local exposed = 0
 for _ in pairs(integration.widgetRefs) do exposed = exposed + 1 end

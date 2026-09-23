@@ -85,8 +85,7 @@ local function ensureFfi()
                 float roll;
                 bool  enabled;
                 bool  is_ads;
-                bool  camera_hook_inject;
-                uint8_t pad0;
+                uint8_t pad0[2];
                 uint32_t frame;
                 float ads_scale;
                 float quat_i, quat_j, quat_k, quat_r;
@@ -102,18 +101,8 @@ local function ensureFfi()
                 uint32_t raw_frame;
                 uint64_t raw_timestamp_ms;
 
-                /* === Section 3: native -> Lua (camera hook status) === */
-                bool camera_hook_active;
-                uint8_t pad1[3];
-                uint32_t camera_hook_fires;
-
                 /* === Section 4: native -> Lua (Running::OnUpdate status) === */
                 uint32_t native_running_frame;
-
-
-                /* === Section 7: Lua -> native (cam-propagator decouple gate) === */
-                uint32_t propagator_inject_active;
-                uint32_t propagator_hook_fires;
 
 
                 /* === Section 9: aim-provider decouple === */
@@ -125,7 +114,6 @@ local function ensureFfi()
                 /* === Section 10: aim-getter decouple === */
                 uint32_t aim_getter_mode;
                 uint32_t aim_getter_calls_a;
-                uint32_t aim_getter_calls_b;
                 uint32_t aim_getter_calls_c;
                 uint32_t aim_getter_overrides;
 
@@ -159,7 +147,7 @@ local function ensureFfi()
     -- half of that contract. MapViewOfFile below maps the WHOLE section, so a
     -- drifted cdef does not fail loudly - it silently reads and writes the
     -- wrong offsets, and a larger struct runs off the end of the mapping.
-    local EXPECTED_STATE_SIZE = 208
+    local EXPECTED_STATE_SIZE = 136
     local actual_size = ffi.sizeof("HeadTrackingState")
     if actual_size ~= EXPECTED_STATE_SIZE then
         -- Clear the module handle so the `if ffi then return true end`
@@ -235,7 +223,6 @@ local function initSharedMemory()
     shared_mem.state.roll = 0
     shared_mem.state.enabled = false
     shared_mem.state.is_ads = false
-    shared_mem.state.camera_hook_inject = false
     shared_mem.state.frame = 0
     shared_mem.state.ads_scale = 0.2
     shared_mem.state.quat_i = 0
@@ -247,11 +234,6 @@ local function initSharedMemory()
     shared_mem.state.position_y = 0
     shared_mem.state.position_z = 0
     shared_mem.state.aim_distance = 0
-
-
-    shared_mem.state.propagator_inject_active = 0
-    shared_mem.state.propagator_hook_fires = 0
-
 
     print("[HeadTracking:AIM] Shared memory initialized successfully")
     return true
@@ -299,11 +281,6 @@ local function updateSharedMemory(yaw, pitch, enabled, is_ads, ads_scale, roll, 
     shared_mem.state.enabled = enabled
     shared_mem.state.is_ads = is_ads or false
     shared_mem.state.ads_scale = ads_scale or 0.2
-    -- The C++ view-matrix hook uses camera_hook_inject as a per-frame gate
-    -- that mirrors `enabled`. Keeping it as a separate flag leaves room
-    -- for future "enabled but don't inject this frame" states (e.g. ADS
-    -- mode overrides).
-    shared_mem.state.camera_hook_inject = enabled
     shared_mem.state.position_x = aim_state.position_x
     shared_mem.state.position_y = aim_state.position_y
     shared_mem.state.position_z = aim_state.position_z
@@ -321,14 +298,6 @@ local function updateSharedMemory(yaw, pitch, enabled, is_ads, ads_scale, roll, 
     shared_mem.state.frame = shared_mem.frame_counter
 end
 
---- Read the C++ camera-hook liveness flag from shared memory.
---- @return boolean Whether the native view-matrix hook is attached AND firing
-local function readCameraHookActive()
-    if not shared_mem.initialized or shared_mem.state == nil then
-        return false
-    end
-    return shared_mem.state.camera_hook_active == true
-end
 
 
 --- Read the native Running::OnUpdate frame counter. Used to confirm the
@@ -367,11 +336,6 @@ local aim_state = {
     head_quat = { i = 0, j = 0, k = 0, r = 1 },
     override_registered = false,
     shared_mem_initialized = false,
-    -- Cached "is the C++ view-matrix hook live?" flag. Polled each
-    -- update() from shared memory so camera.lua can branch on it.
-    native_camera_hook_active = false,
-    clean_cam_snap_skip_logged = false,
-    settings = nil,
     -- Tracking input. Set via Aim:setUdp() from init.lua so the
     udp = nil,
     -- OFF since the projectile restoration landed. Rounds now launch as
@@ -561,7 +525,6 @@ function Aim.new(settings, camera)
     local self = setmetatable({}, Aim)
     self.settings = settings
     self.camera = camera
-    aim_state.settings = settings
 
     return self
 end
@@ -673,29 +636,13 @@ function Aim:update(yaw, pitch, roll, quat, position_x, position_y, position_z, 
     updateSharedMemory(yaw, pitch, aim_state.enabled, aim_state.is_ads,
                        aim_state.ads_scale, aim_state.smooth_roll,
                        aim_state.head_quat)
-    local native_camera_ready = readCameraHookActive()
-    if not native_camera_ready
-       and aim_state.udp and aim_state.udp.isNativeCameraHookActive then
-        native_camera_ready = aim_state.udp:isNativeCameraHookActive()
-    end
     if aim_state.udp and aim_state.udp.setNativeState then
-        local propagator_inject = aim_state.settings:get("decouple_diag_clean_cam") == true
         aim_state.udp:setNativeState(yaw, pitch, aim_state.smooth_roll,
                                      aim_state.enabled, aim_state.is_ads,
                                      aim_state.head_quat,
-                                     propagator_inject,
                                      aim_state.position_x, aim_state.position_y,
                                      aim_state.position_z, aim_state.aim_distance)
     end
-
-    aim_state.native_camera_hook_active = native_camera_ready
-end
-
---- @param active boolean
-function Aim:setPropagatorInjectActive(active)
-    if not shared_mem.initialized or shared_mem.state == nil then return end
-    shared_mem.state.propagator_inject_active = active and 1 or 0
-    shared_mem.state.camera_hook_inject = active and true or false
 end
 
 --- Enable or disable aim compensation.
@@ -727,7 +674,7 @@ end
 --- apply no head rotation at all.
 function Aim:publishSuppressedState()
     if not (aim_state.udp and aim_state.udp.setNativeState) then return end
-    aim_state.udp:setNativeState(0, 0, 0, false, false, IDENTITY_QUAT, false)
+    aim_state.udp:setNativeState(0, 0, 0, false, false, IDENTITY_QUAT)
 end
 
 --- Set ADS (Aiming Down Sights) state
@@ -764,15 +711,6 @@ function Aim:summarizeDiscovery()
     if #parts == 0 then return end
     table.sort(parts)
     dlog("[HeadTracking:AIM] DISCOVERY counts: " .. table.concat(parts, " "))
-end
-
---- Whether the native C++ view-matrix hook is attached AND firing.
---- When true, modules/camera.lua stops writing to cam:SetLocalOrientation
---- because the C++ hook is injecting head rotation at render time, keeping
---- game-logic camera state clean. Polled from shared memory in update().
---- @return boolean active
-function Aim:nativeCameraHookActive()
-    return aim_state.native_camera_hook_active == true
 end
 
 --- Read the native Running::OnUpdate frame counter for diagnostics.

@@ -14,7 +14,6 @@
 //   Bool HeadTrackingPushState(Float yaw, Float pitch, Float roll,
 //                              Bool enabled, Bool isAds,
 //                              Float qi, Float qj, Float qk, Float qr,
-//                              Bool propagatorInject,
 //                              Float positionX, Float positionY, Float positionZ,
 //                              Float aimDistance, Bool chaseCamera)
 //

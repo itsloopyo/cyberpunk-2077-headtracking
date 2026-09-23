@@ -757,18 +757,12 @@ local function onUpdateImpl(deltaTime)
     local pose_x, pose_y, pose_z = blended.x, blended.y, blended.z
 
     if pose_yaw ~= nil then
-        local clean_cam_decouple = settings:get("decouple_diag_clean_cam") == true
-        if aim.setPropagatorInjectActive then
-            aim:setPropagatorInjectActive(clean_cam_decouple)
-        end
-
-        local skip_cam_write = clean_cam_decouple
         local rot_on = settings:get("enabled") and true or false
         if rot_on then
             if chase_camera then
                 camera:applyChaseCam(pose_yaw, pose_pitch, pose_roll, deltaTime)
             else
-                camera:apply(pose_yaw, pose_pitch, pose_roll, deltaTime, nil, skip_cam_write)
+                camera:apply(pose_yaw, pose_pitch, pose_roll, deltaTime)
             end
         end
         -- Both cameras get 6DOF, by different routes: the FPP camera takes a
@@ -878,32 +872,6 @@ end)
 local function resolveToggle(current, force)
     if force == nil then return not current end
     return force and true or false
-end
-
--- DIAGNOSTIC: exposed through the returned mod table so the user can flip
--- the clean-cam diag from the CET console while the game is running:
---   GetMod("HeadTracking").DiagCleanCam()      -- toggle on/off
---   GetMod("HeadTracking").DiagCleanCam(true)  -- force on
---   GetMod("HeadTracking").DiagCleanCam(false) -- force off
--- When on, Lua writes CLEAN (mouse-only) quat to cam.localOrientation.
--- View tracking visibly breaks (camera stops following the head); the
--- point is to observe which engine systems STILL track the head (= they
--- don't read cam+0xD0) vs. follow the mouse (= they DO read cam+0xD0).
--- Watch in particular: interaction-prompt direction, click-flick direction.
-local function diagCleanCam(force)
-    if not settings or not ui then
-        print("[HeadTracking:DIAG] settings/ui not initialised; mod still booting?")
-        return
-    end
-    local current = settings:get("decouple_diag_clean_cam")
-    if current == nil then current = false end
-    local new_val = resolveToggle(current, force)
-    settings:set("decouple_diag_clean_cam", new_val)
-    local msg = "Clean-cam diag: " .. (new_val and "ON (cam = clean/mouse)" or "OFF (cam = head-tracked)")
-    print("[HeadTracking:DIAG] " .. msg)
-    if ui then
-        if new_val then ui:showWarning(msg, 3.0) else ui:showSuccess(msg, 2.0) end
-    end
 end
 
 -- Standard CameraUnlock hotkey contract.
@@ -1039,7 +1007,7 @@ end
 -- other three.
 
 -- Public API for the CET console. Reachable as
---   GetMod("HeadTracking").DiagCleanCam(true)
+--   GetMod("HeadTracking").DiagVerbose(true)
 -- CET sandboxes each mod's own globals, so file-scope `function Foo() ...`
 -- does NOT become a console global; the return table is the only way
 -- through.
@@ -1108,7 +1076,6 @@ local function delegate(driver_name, method, opts)
 end
 
 return {
-    DiagCleanCam    = diagCleanCam,
     DiagVerbose     = diagVerbose,
 
     -- These two predate the "driver not available" convention and stay silent

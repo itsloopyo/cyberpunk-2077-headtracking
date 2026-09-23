@@ -7,7 +7,6 @@
 #include "UdpReceiver.hpp"
 #include "ScriptChannel.hpp"
 #include "NativeRunningHook.hpp"
-#include "CamPropagatorHook.hpp"
 #include "AimProviderHook.hpp"
 #include "RicochetPreviewHook.hpp"
 #include "AimGetterHook.hpp"
@@ -63,14 +62,9 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         RicochetPreviewHook_Start(aSdk, aHandle);
 
         NativeRunningHook_Start(aSdk, aHandle);
-        CamPropagatorHook_Start(aSdk, aHandle);
         ChaseCameraHook_Start(aSdk, aHandle);
 
         if (HeadTrackingState* w = g_sharedState.GetWritable()) {
-            w->camera_hook_active = CamPropagatorHook_IsActive();
-            w->camera_hook_fires  = 0;
-            w->propagator_inject_active = 0;
-            w->propagator_hook_fires    = 0;
             w->provider_hook_active     = 0;
             w->provider_mode            = 1;  // camera-match gated peel
             w->provider_calls           = 0;
@@ -80,7 +74,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
             // mutate nothing. tools/set_aim_mode.py flips the mode live.
             w->aim_getter_mode          = 1;
             w->aim_getter_calls_a       = 0;
-            w->aim_getter_calls_b       = 0;
             w->aim_getter_calls_c       = 0;
             w->aim_getter_overrides     = 0;
         }
@@ -103,10 +96,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         UdpReceiver_Stop();
 
         ChaseCameraHook_Stop(aSdk, aHandle);
-        CamPropagatorHook_Stop(aSdk, aHandle);
-        if (HeadTrackingState* w = g_sharedState.GetWritable()) {
-            w->camera_hook_active = false;
-        }
 
         g_sharedState.Shutdown();
         LogInfo("[HeadTrackingAim] Shared memory shutdown");

@@ -8,7 +8,7 @@
 --
 --   Game.HeadTrackingPollPose()  -> ok, yaw, pitch, roll, x, y, z, flags
 --   Game.HeadTrackingPushState(yaw, pitch, roll, enabled, isAds,
---                              qi, qj, qk, qr, propagatorInject,
+--                              qi, qj, qk, qr,
 --                              positionX, positionY, positionZ, aimDistance,
 --                              chaseCamera) -> ok
 --   Game.HeadTrackingSetFppOrientation(qi, qj, qk, qr, active) -> ok
@@ -28,11 +28,9 @@ local DATA_FRESHNESS_WINDOW_S = 0.5
 -- Reusable parsed-data table to avoid GC pressure.
 local reusable_data = { yaw = 0, pitch = 0, roll = 0, x = 0, y = 0, z = 0, seq = 0 }
 
--- native_flags bit layout, mirrored in native/src/ScriptChannel.cpp. Bits 1 and
--- 6 are live status (hook activity, connection locality); bits 3-5 and 7 are
--- one-shot edges that native sets when a chord/key transitions to down, and
--- Lua clears on consume.
-local FLAG_CAMERA_ACTIVE     = 2   -- bit 1
+-- native_flags bit layout, mirrored in native/src/ScriptChannel.cpp. Bit 6 is
+-- live status (connection locality); bits 3-5 and 7 are one-shot edges that
+-- native sets when a chord/key transitions to down, and Lua clears on consume.
 local FLAG_TOGGLE_TRACKING   = 8   -- bit 3
 local FLAG_CYCLE_MODE        = 16  -- bit 4
 local FLAG_TOGGLE_YAW        = 32  -- bit 5
@@ -62,13 +60,12 @@ local native_cycle_ads_mode_requested = false
 -- closure per invocation and both of these run every frame, so the arguments
 -- ride in upvalues instead. Neither is reentrant, which is what makes the
 -- upvalue reuse safe (same reasoning as guardedVar in init.lua).
-local push_args = { 0, 0, 0, false, false, 0, 0, 0, 1, false, 0, 0, 0, 0, false }
+local push_args = { 0, 0, 0, false, false, 0, 0, 0, 1, 0, 0, 0, 0, false }
 local function _callPush()
     return Game.HeadTrackingPushState(
         push_args[1], push_args[2], push_args[3], push_args[4], push_args[5],
         push_args[6], push_args[7], push_args[8], push_args[9], push_args[10],
-        push_args[11], push_args[12], push_args[13], push_args[14],
-        push_args[15])
+        push_args[11], push_args[12], push_args[13], push_args[14])
 end
 local function _callPoll()
     return Game.HeadTrackingPollPose()
@@ -111,8 +108,8 @@ function TrackingInput:isDataFresh()
 end
 
 function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat,
-                                      propagator_inject, position_x, position_y,
-                                      position_z, aim_distance)
+                                      position_x, position_y, position_z,
+                                      aim_distance)
     -- Reuse the state table to avoid a 10-field heap allocation every frame
     -- (this is called once per onUpdate via Aim:update). The table is left nil
     -- until the first call so poll() knows there is nothing to push yet.
@@ -130,7 +127,6 @@ function TrackingInput:setNativeState(yaw, pitch, roll, enabled, is_ads, quat,
     st.qj = quat and quat.j or 0
     st.qk = quat and quat.k or 0
     st.qr = quat and quat.r or 1
-    st.propagator_inject = propagator_inject and true or false
     st.position_x = position_x or 0
     st.position_y = position_y or 0
     st.position_z = position_z or 0
@@ -144,10 +140,6 @@ end
 --- @param active boolean
 function TrackingInput:setChaseCamera(active)
     chase_camera_active = active and true or false
-end
-
-function TrackingInput:isNativeCameraHookActive()
-    return hasFlag(native_flags, FLAG_CAMERA_ACTIVE)
 end
 
 --- True when the tracking data is arriving from a remote network device
@@ -216,12 +208,11 @@ function TrackingInput:poll()
         push_args[7] = st.qj
         push_args[8] = st.qk
         push_args[9] = st.qr
-        push_args[10] = st.propagator_inject
-        push_args[11] = st.position_x
-        push_args[12] = st.position_y
-        push_args[13] = st.position_z
-        push_args[14] = st.aim_distance
-        push_args[15] = chase_camera_active
+        push_args[10] = st.position_x
+        push_args[11] = st.position_y
+        push_args[12] = st.position_z
+        push_args[13] = st.aim_distance
+        push_args[14] = chase_camera_active
         pcall(_callPush)
     end
 

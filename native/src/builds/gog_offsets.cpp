@@ -14,9 +14,7 @@ extern const BuildProfile kGogProfile_20250827 = {
     "gog-win64-20250827",
     { 0x68AF45EA, 0x04EFC000, 0x039357A5 },
     {
-        0x1D8558,  // Propagator
         0x802390,  // GetWorldOrientation
-        0x1D92A0,  // GetWorldTransform
         0x84C968,  // FireNormaliseCall
         0x13DE80,  // NormaliseFn
         0x84AAC8,  // RicochetEffectExecute

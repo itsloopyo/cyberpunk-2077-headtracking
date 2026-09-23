@@ -276,7 +276,6 @@ function Camera.new(settings)
         clamp_pitch = 80.0,
         clamp_roll = 45.0,
         yaw_mode = "world",
-        decouple_diag_clean_cam = false,
         position_enabled = false,
         position_limit_x = 0.30,
         position_limit_y_up = 0.20,
@@ -332,9 +331,6 @@ function Camera:refreshSettingsCache()
     self.cached_settings.clamp_pitch = s:get("clamp_pitch") or 80.0
     self.cached_settings.clamp_roll = s:get("clamp_roll") or 45.0
     self.cached_settings.yaw_mode = s:get("yaw_mode") or "world"
-    local diag = s:get("decouple_diag_clean_cam")
-    if diag == nil then diag = false end
-    self.cached_settings.decouple_diag_clean_cam = diag
     local pe = s:get("position_enabled")
     if pe == nil then pe = false end
     self.cached_settings.position_enabled = pe
@@ -535,13 +531,7 @@ end
 --- @param pitch number Raw pitch rotation in degrees from tracker
 --- @param roll number Raw roll rotation in degrees from tracker
 --- @param deltaTime number|nil Optional delta time for smoothing (defaults to os.clock delta)
---- @param combatState table|nil Currently unused.
---- @param skip_cam_write boolean|nil When true, run the processing pipeline
----   and stash the computed head_quat but do NOT write to cam:SetLocalOrientation.
----   Set to true by init.lua when aim:nativeCameraHookActive() - the C++ view-matrix
----   hook is handling render-side injection and we must leave cam.transform clean
----   (otherwise the game sees a double-rotated camera).
-function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
+function Camera:apply(yaw, pitch, roll, deltaTime)
     -- Validate input values
     if not isValidNumber(yaw) or not isValidNumber(pitch) or not isValidNumber(roll) then
         return
@@ -846,42 +836,17 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         return
     end
 
-    -- Always stash the computed head quaternion so aim.lua can forward it
-    -- to the C++ view-matrix hook via shared memory - whether or not we
-    -- end up writing to the camera below. Preserve the previous value so
-    -- getRenderedYPR() can midpoint-average the two for the reticle.
+    -- Stash the computed head quaternion so aim.lua can forward it to the
+    -- native aim hooks. Preserve the previous value so getRenderedYPR() can
+    -- midpoint-average the two for the reticle.
     self._prev_head_quat = self._computed_head_quat
     self._computed_head_quat = head_quat
-
-    -- Native hook handoff: the C++ view-matrix hook is injecting head
-    -- rotation at render time, so we must NOT also write it into
-    -- cam.localOrientation (that would double-rotate the render AND
-    -- re-couple aim to head). Restore the clean base we already recovered
-    -- and bail out before the normal write path.
-    if skip_cam_write then
-        if self.last_head_quat then
-            pcall(_callSetLocalOrientation, cam, clean_quat)
-            self.last_head_quat = nil
-            self.last_clean_local_quat = nil
-        end
-        publishFppOrientation(nil, false)
-        return
-    end
 
     -- Step 7: Compose head rotation ON TOP of the clean base: final =
     -- clean_quat * head_quat. In world mode head_quat already carries the
     -- conjugation that puts its yaw on the world axis, so this single
     -- multiply yields Qyaw_world * clean * Qpitchroll_local.
-
-    -- DIAGNOSTIC: when decouple_diag_clean_cam is on, write CLEAN (mouse-only)
-    -- quat to cam.localOrientation. The point is to observe which engine
-    -- systems read cam+0xD0 - whatever still follows the head after this
-    -- flip is reading from somewhere else; whatever now follows the mouse
-    -- (interaction prompts, hitscan target, click-flick direction, ...)
-    -- IS reading cam+0xD0. View tracking will visibly break - that is
-    -- expected and is what makes the diagnostic legible.
-    local write_head_rotation = not self.cached_settings.decouple_diag_clean_cam
-    local final_quat = write_head_rotation and quatNormalize(quatMul(clean_quat, head_quat)) or clean_quat
+    local final_quat = quatNormalize(quatMul(clean_quat, head_quat))
 
     local fi, fj, fk, fr = final_quat.i, final_quat.j, final_quat.k, final_quat.r
     local f_mag2 = fi*fi + fj*fj + fk*fk + fr*fr
@@ -898,12 +863,8 @@ function Camera:apply(yaw, pitch, roll, deltaTime, combatState, skip_cam_write)
         end
         publishFppOrientation(final_quat, true)
         -- Remember what we applied so next frame can undo it; and stash
-        -- the clean base for aim decoupling to consult. In diag-clean-cam
-        -- mode we wrote clean (no head rotation), so the "applied head
-        -- rotation" was effectively identity - record nil so the next
-        -- frame's undo path is a no-op rather than peeling off a head
-        -- quat that we never actually applied.
-        self.last_head_quat = write_head_rotation and head_quat or nil
+        -- the clean base for aim decoupling to consult.
+        self.last_head_quat = head_quat
         self.last_clean_local_quat = clean_quat
         self._last_written_final_quat = { i = fi, j = fj, k = fk, r = fr }
     end
@@ -1363,9 +1324,7 @@ end
 --- Get the last head rotation quaternion computed by apply(). Used by
 --- modules/aim.lua to hand the C++ view-matrix hook an identical
 --- rotation (avoids any Euler-vs-quat drift between the two sides).
---- Returns the CURRENTLY-computed quat even when skip_cam_write was set,
---- so the native hook always has fresh data. Identity if apply() hasn't
---- run yet.
+--- Identity if apply() hasn't run yet.
 --- @return Quaternion
 function Camera:getHeadQuat()
     if self._computed_head_quat then return self._computed_head_quat end

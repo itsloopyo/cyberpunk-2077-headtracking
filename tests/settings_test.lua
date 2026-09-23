@@ -452,7 +452,6 @@ assert_eq(l2:get("position_enabled"), true, "launch restores the saved mode, pos
 assert_eq(l2:get("saved_tracking_mode"), "pos", "launch reads the memory without clobbering it")
 assert_eq(l2:get("yaw_mode"), "local", "launch leaves yaw_mode alone")
 assert_eq(l2:get("crosshair_enabled"), true, "launch turns the reticle driver on")
-assert_eq(l2:get("decouple_diag_clean_cam"), false, "launch clears the RE diagnostic")
 
 -- Quit mid-session in rotation-only WITHOUT pressing End: the live pair in
 -- config.json is the mode, and launch must not overwrite it from a stale

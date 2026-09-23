@@ -48,9 +48,7 @@ struct PeFingerprint {
 // is what lets a placeholder profile land the moment a patch is spotted,
 // before the rederive is done, without risking activation.
 struct OffsetTable {
-    uintptr_t Propagator;           // CamPropagatorHook detour target
     uintptr_t GetWorldOrientation;  // AimGetter lever A detour target
-    uintptr_t GetWorldTransform;    // AimGetter lever B detour target
     uintptr_t FireNormaliseCall;    // AimGetter lever C: the `call Normalize` site
     uintptr_t NormaliseFn;          // AimGetter lever C: the Normalize callee
     uintptr_t RicochetEffectExecute;

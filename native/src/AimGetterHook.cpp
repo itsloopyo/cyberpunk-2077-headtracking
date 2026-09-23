@@ -18,12 +18,11 @@
 // Levers (all confirmed present in this build's EXE by opcode, see the RVA
 // notes in AimGetterHook.hpp):
 //   A +0x802390 GetWorldOrientation - out quat in rdx.
-//   B +0x1D92A0 GetWorldTransform   - out orientation at r8+0x10.
 //   C +0x84C968 the weapon-fire routine's `dir = Normalize(target - muzzle)`
 //               call site, patched to route through us so the resulting shot
 //               direction can be rotated back to the mouse.
 //
-// A and B hand back the camera world orientation, so the peel is the same
+// A hands back the camera world orientation, so the peel is the same
 // right-multiplication by inv(head) the Lua side uses. C hands back a WORLD
 // direction, so the head rotation has to be conjugated into world space first
 // (see PeelWorldDirection).
@@ -67,13 +66,12 @@ namespace {
 // across hundreds of rounds, never fired), and the velocity params are not
 // reachable from the provider's stack.
 
-// All four addresses come from the matched build profile - see
+// These addresses come from the matched build profile - see
 // builds/build_profile.h. They are zero on a build we have not derived them
 // against, and each lever checks for that before it touches anything.
 inline uintptr_t GetWorldOrientationRva() { return builds::ActiveProfile().Offsets.GetWorldOrientation; }
 inline uintptr_t SmartGunCallARva() { return builds::ActiveProfile().Offsets.SmartGunCameraCallA; }
 inline uintptr_t SmartGunCallBRva() { return builds::ActiveProfile().Offsets.SmartGunCameraCallB; }
-inline uintptr_t GetWorldTransformRva()   { return builds::ActiveProfile().Offsets.GetWorldTransform; }
 inline uintptr_t FireNormaliseCallRva()   { return builds::ActiveProfile().Offsets.FireNormaliseCall; }
 inline uintptr_t NormaliseFnRva()         { return builds::ActiveProfile().Offsets.NormaliseFn; }
 
@@ -81,14 +79,14 @@ inline uintptr_t NormaliseFnRva()         { return builds::ActiveProfile().Offse
 // orientation offset the cam resolver already found (+0xD0 -> +0xF0).
 constexpr int kWorldOrientationDelta = 0x20;
 
-// A/B hand back a verbatim copy of a camera orientation, so the match against
+// A hands back a verbatim copy of a camera orientation, so the match against
 // our own camera is exact up to float noise.
 constexpr float kCamMatchDot = 0.9995f;
 // C hands back a spread-perturbed shot direction. The cone has to stay wide
 // enough to still recognise our own shot when the camera orientation we compare
 // against carries a different amount of head rotation than the direction does
 // (that is exactly what the heartbeat's head/local/world dump resolves), so
-// 0.6 - about 53 degrees - not the tight match A and B can afford.
+// 0.6 - about 53 degrees - not the tight match A can afford.
 constexpr float kDirMatchDot = 0.6f;
 
 // Trigger-release grace: the fire routine can run a frame or two after the
@@ -99,7 +97,6 @@ enum Mode : uint32_t {
     kModeOff        = 0,
     kModeInstrument = 1,  // hooks live, counters only
     kModePeelA      = 2,
-    kModePeelB      = 3,
     kModePeelC      = 4,
     // Discriminator: rotate lever A's answer by a large fixed yaw, independent
     // of the tracker. With no head pose the view stays still, so if the impacts
@@ -120,9 +117,7 @@ std::atomic<uint32_t> s_mode{kModeInstrument};
 // of its call site, so a system whose behaviour follows the head - the smart
 // weapon targeting cone, for one - can be identified by equipping the weapon
 // that drives it and reading which call site appears. Only calls whose answer
-// actually WAS the camera orientation (dot >= kCamMatchDot) are recorded, which
-// cuts the generic transform getter's half a million calls a second down to the
-// handful that matter. Counts are per heartbeat window so the log reads as
+// actually WAS the camera orientation (dot >= kCamMatchDot) are recorded. Counts are per heartbeat window so the log reads as
 // "who asked in the last 30 seconds", making an A/B by equipped weapon legible.
 constexpr size_t kCallerSlots = 48;
 struct CallerSlot {
@@ -130,7 +125,6 @@ struct CallerSlot {
     std::atomic<uint32_t>  hits{0};
 };
 CallerSlot s_callersA[kCallerSlots];
-CallerSlot s_callersB[kCallerSlots];
 
 void RecordCaller(CallerSlot* table, void* returnAddress) {
     const uintptr_t base = modguard::ExeBase();
@@ -223,25 +217,22 @@ void LogCallers(const char* label, const CallerCensus& census) {
 }
 
 std::atomic<uint32_t> s_smartGunPeels{0};
-std::atomic<uint32_t> s_callsA{0}, s_callsB{0}, s_callsC{0};
-std::atomic<uint32_t> s_matchA{0}, s_matchB{0}, s_matchC{0};
+std::atomic<uint32_t> s_callsA{0}, s_callsC{0};
+std::atomic<uint32_t> s_matchA{0}, s_matchC{0};
 std::atomic<uint32_t> s_overrides{0};
-uint32_t              s_loggedA = 0, s_loggedB = 0, s_loggedC = 0;
+uint32_t              s_loggedA = 0, s_loggedC = 0;
 uint64_t              s_lastWindowMs = 0;
-uint32_t              s_lastCallsA = 0, s_lastCallsB = 0, s_lastCallsC = 0;
+uint32_t              s_lastCallsA = 0, s_lastCallsC = 0;
 uint32_t              s_lastMode = 0xFFFFFFFFu;
 uint64_t              s_lastLiveLogMs = 0;
-bool                  s_lastMoving[3] = {false, false, false};
-CallerCensus          s_lastCensusA, s_lastCensusB;
+bool                  s_lastMovingA = false, s_lastMovingC = false;
+CallerCensus          s_lastCensusA;
 
 using GetWorldOrientationFn = void* (*)(void*, void*);
-using GetWorldTransformFn   = uintptr_t (*)(void*, void*, void*);
 using NormaliseFn           = void* (*)(float*, float*);
 
 void*                 s_targetA  = nullptr;
-void*                 s_targetB  = nullptr;
 GetWorldOrientationFn s_origA    = nullptr;
-GetWorldTransformFn   s_origB    = nullptr;
 NormaliseFn           s_origC    = nullptr;
 
 uint8_t* s_callsite     = nullptr;
@@ -417,7 +408,7 @@ bool ApplyTestYaw(float* q) {
     return true;
 }
 
-// Shared body for the two camera getters. Returns true when it rewrote the quat.
+// Lever A's body. Returns true when it rewrote the quat.
 bool HandleCameraQuat(void* outQuat, bool peel, float* dotOut, bool testYaw = false) {
     *dotOut = 0.0f;
     if (!outQuat) return false;
@@ -496,28 +487,6 @@ void* Hook_GetWorldOrientation(void* rcx, void* rdx) {
                 dot, peel ? 1 : 0, smartGun ? 1 : 0, rewrote ? 1 : 0);
     }
     if (smartGun && rewrote) s_smartGunPeels.fetch_add(1, std::memory_order_relaxed);
-    return ret;
-}
-
-uintptr_t Hook_GetWorldTransform(void* rcx, void* rdx, void* r8) {
-    const uintptr_t ret = s_origB ? s_origB(rcx, rdx, r8) : 0;
-    const uint32_t mode = s_mode.load(std::memory_order_relaxed);
-    if (mode == kModeOff) return ret;
-
-    s_callsB.fetch_add(1, std::memory_order_relaxed);
-    const bool peel = (mode == kModePeelB) && InFireWindow();
-    void* outQuat = r8 ? reinterpret_cast<uint8_t*>(r8) + 0x10 : nullptr;
-    float dot = 0.0f;
-    const bool rewrote = HandleCameraQuat(outQuat, peel, &dot);
-    if (dot >= kCamMatchDot) {
-        s_matchB.fetch_add(1, std::memory_order_relaxed);
-        RecordCaller(s_callersB, _ReturnAddress());
-    }
-
-    if (s_loggedB < 8 && dot >= kCamMatchDot) {
-        ++s_loggedB;
-        LogInfo("[AimGetter] B +0x1D92A0 dot=%.5f peel=%d rewrote=%d", dot, peel ? 1 : 0, rewrote ? 1 : 0);
-    }
     return ret;
 }
 
@@ -670,8 +639,8 @@ bool AimGetterHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle 
     if (!sdk) return false;
 
     // Every lever here is a code detour at a hardcoded address. On a build we
-    // have not derived those against they belong to some other function, so all
-    // three stay out rather than being bounds-checked into a false sense of
+    // have not derived those against they belong to some other function, so
+    // they all stay out rather than being bounds-checked into a false sense of
     // safety - ResolveCodeRva cannot tell a moved function from a matching one.
     if (!builds::HasActiveProfile()) {
         LogInfo("[AimGetter] no matching build profile - levers not installed");
@@ -689,19 +658,9 @@ bool AimGetterHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle 
         s_targetA = nullptr;
     }
 
-    s_targetB = reinterpret_cast<void*>(
-        modguard::ResolveCodeRva(GetWorldTransformRva(), 16, "AimGetter B"));
-    if (s_targetB &&
-        !sdk->hooking->Attach(handle, s_targetB, reinterpret_cast<void*>(&Hook_GetWorldTransform),
-                              reinterpret_cast<void**>(&s_origB))) {
-        LogError("[AimGetter] B: attach failed at +0x%llX", (unsigned long long)GetWorldTransformRva());
-        s_targetB = nullptr;
-    }
-
     PatchFireNormaliseCallsite();
     s_started.store(true, std::memory_order_release);
-    LogInfo("[AimGetter] started (A=%d B=%d C=%d)",
-            s_targetA ? 1 : 0, s_targetB ? 1 : 0, s_callsite ? 1 : 0);
+    LogInfo("[AimGetter] started (A=%d C=%d)", s_targetA ? 1 : 0, s_callsite ? 1 : 0);
     return true;
 }
 
@@ -725,12 +684,9 @@ void AimGetterHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle h
 
     if (sdk) {
         if (s_targetA) sdk->hooking->Detach(handle, s_targetA);
-        if (s_targetB) sdk->hooking->Detach(handle, s_targetB);
     }
     s_targetA = nullptr;
-    s_targetB = nullptr;
     s_origA = nullptr;
-    s_origB = nullptr;
     LogInfo("[AimGetter] stopped");
 }
 
@@ -739,7 +695,6 @@ void AimGetterHook_Tick() {
     if (w) {
         s_mode.store(w->aim_getter_mode, std::memory_order_relaxed);
         w->aim_getter_calls_a = s_callsA.load(std::memory_order_relaxed);
-        w->aim_getter_calls_b = s_callsB.load(std::memory_order_relaxed);
         w->aim_getter_calls_c = s_callsC.load(std::memory_order_relaxed);
         w->aim_getter_overrides = s_overrides.load(std::memory_order_relaxed);
     }
@@ -754,46 +709,39 @@ void AimGetterHook_Tick() {
     s_lastWindowMs = now;
 
     const CallerCensus censusA = DrainCallers(s_callersA);
-    const CallerCensus censusB = DrainCallers(s_callersB);
     if (!SameCallers(censusA, s_lastCensusA)) {
         LogCallers("A", censusA);
         s_lastCensusA = censusA;
     }
-    if (!SameCallers(censusB, s_lastCensusB)) {
-        LogCallers("B", censusB);
-        s_lastCensusB = censusB;
-    }
 
     const uint32_t a = s_callsA.load(std::memory_order_relaxed);
-    const uint32_t b = s_callsB.load(std::memory_order_relaxed);
     const uint32_t c = s_callsC.load(std::memory_order_relaxed);
     const uint32_t mode = s_mode.load(std::memory_order_relaxed);
 
-    // A, B and C tick on every frame of ordinary gameplay, so comparing their
+    // A and C tick on every frame of ordinary gameplay, so comparing their
     // VALUES reported the same line every 30s for the whole session. Report the
     // mode and whether each lever is moving at all; the 5-minute liveness line
     // carries the running totals, which is where growth shows up.
-    const bool moving[3] = {a != s_lastCallsA, b != s_lastCallsB, c != s_lastCallsC};
+    const bool movingA = a != s_lastCallsA;
+    const bool movingC = c != s_lastCallsC;
     const bool changed = mode != s_lastMode ||
-                         moving[0] != s_lastMoving[0] ||
-                         moving[1] != s_lastMoving[1] ||
-                         moving[2] != s_lastMoving[2];
+                         movingA != s_lastMovingA ||
+                         movingC != s_lastMovingC;
     // Counters are rebased every window whether or not a line goes out, so the
     // rates below always describe the window just closed rather than however
     // many silent windows preceded it.
     if (changed || now - s_lastLiveLogMs > 300000) {
         s_lastLiveLogMs = now;
-        LogInfo("[AimGetter] heartbeat: mode=%u A=%u (%.1f/s match=%u) B=%u (%.1f/s match=%u) "
+        LogInfo("[AimGetter] heartbeat: mode=%u A=%u (%.1f/s match=%u) "
                 "C=%u (%.1f/s match=%u) overrides=%u smartPeels=%u",
                 mode,
                 a, (a - s_lastCallsA) * 1000.0 / elapsed, s_matchA.load(std::memory_order_relaxed),
-                b, (b - s_lastCallsB) * 1000.0 / elapsed, s_matchB.load(std::memory_order_relaxed),
                 c, (c - s_lastCallsC) * 1000.0 / elapsed, s_matchC.load(std::memory_order_relaxed),
                 s_overrides.load(std::memory_order_relaxed),
                 s_smartGunPeels.load(std::memory_order_relaxed));
     }
-    s_lastCallsA = a; s_lastCallsB = b; s_lastCallsC = c; s_lastMode = mode;
-    s_lastMoving[0] = moving[0]; s_lastMoving[1] = moving[1]; s_lastMoving[2] = moving[2];
+    s_lastCallsA = a; s_lastCallsC = c; s_lastMode = mode;
+    s_lastMovingA = movingA; s_lastMovingC = movingC;
 }
 
 

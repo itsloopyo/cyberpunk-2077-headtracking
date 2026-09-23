@@ -201,7 +201,7 @@ The mod writes its config to:
 
 Edit it directly, or configure the mod in game if you have a settings framework installed. The defaults below are what the mod ships with:
 
-- [Native Settings UI](https://www.nexusmods.com/cyberpunk2077/mods/3518) puts every option below (except the diagnostic toggle) into the game's own Settings menu, controller included. Optional: without it the mod runs exactly the same and you edit `config.json` by hand.
+- [Native Settings UI](https://www.nexusmods.com/cyberpunk2077/mods/3518) puts every option below except `saved_tracking_mode`, which the mod keeps for itself, into the game's own Settings menu, controller included. Optional: without it the mod runs exactly the same and you edit `config.json` by hand.
 
 Native Settings is the only framework this mod registers with. If you use a different settings front-end, whether it picks this mod up is down to whether that front-end reads Native Settings' registry - nothing extra is needed from here either way.
 
