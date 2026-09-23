@@ -239,6 +239,8 @@ function Camera.new(settings)
     self.smooth_yaw = 0
     self.smooth_pitch = 0
     self.smooth_roll = 0
+    -- Reciprocal of the camera's live magnification; see zoomFactor.
+    self.zoom_factor = 1
     -- False until the first pose after a reset, so that pose is taken whole
     -- rather than blended up from zero. See _smoothPose.
     self.rot_has_value = false
@@ -363,6 +365,27 @@ local function getFPPCamera()
     return cam, player
 end
 
+local function _readZoomTerms(cam)
+    return cam.zoom, cam.zoomOverrideWeight, cam.zoomOverrideValue
+end
+
+--- How much the FPP camera is magnifying the world right now, as the factor the
+--- head pose is scaled by so a head movement moves the picture as far as it
+--- would un-zoomed. Aiming down sights blends the camera's zoom toward
+--- zoomOverrideValue by zoomOverrideWeight, and that value is the on-screen
+--- magnification itself: a 1.70 override measured 1.7015 between a hip and an
+--- ADS screenshot. So the factor is its reciprocal, 1.0 at the hip.
+--- @return number factor, number|nil zoom, number|nil weight, number|nil override
+local function zoomFactor(cam)
+    local ok, zoom, weight, override = pcall(_readZoomTerms, cam)
+    if not ok or not isValidNumber(zoom) or not isValidNumber(weight) or not isValidNumber(override) then
+        return nil
+    end
+    local effective = zoom * (1 - weight) + override * weight
+    if effective <= 0 then return nil end
+    return 1 / effective, zoom, weight, override
+end
+
 -- World-mode (horizon-locked) head-rotation composition.
 --
 -- Head rotation is applied as a LOCAL offset on the FPP camera component:
@@ -476,8 +499,11 @@ function Camera:_smoothPose(yaw, pitch, roll, deltaTime)
     -- the mod keeps none of its own, so there is nothing to subtract.
     -- Invert yaw so looking left turns camera left (natural mapping)
     -- Invert roll so tilting head left tilts camera left
-    local adj_yaw = -yaw
-    local adj_pitch = pitch
+    -- Yaw and pitch are scaled by the camera's zoom so a scope does not
+    -- magnify the head; roll rotates the picture the same at any zoom.
+    local zoom = self.zoom_factor
+    local adj_yaw = -yaw * zoom
+    local adj_pitch = pitch * zoom
     local adj_roll = -roll
 
     local cache = self.cached_settings
@@ -560,6 +586,19 @@ function Camera:apply(yaw, pitch, roll, deltaTime)
         dlog("[HeadTracking] Camera component AVAILABLE again after " .. consecutive_null_camera_frames .. " null frame(s)")
         consecutive_null_camera_frames = 0
     end
+
+    local factor, zoom, weight, override = zoomFactor(cam)
+    if not self._zoom_logged then
+        self._zoom_logged = true
+        if factor then
+            print(string.format(
+                "[HeadTracking] zoom compensation: zoom=%.4f overrideWeight=%.4f overrideValue=%.4f factor=%.4f",
+                zoom, weight, override, factor))
+        else
+            print("[HeadTracking] zoom compensation: camera zoom unreadable, head tracking is not zoom compensated")
+        end
+    end
+    self.zoom_factor = factor or 1
 
     self:_smoothPose(yaw, pitch, roll, deltaTime)
 
@@ -935,6 +974,7 @@ function Camera:applyChaseCam(yaw, pitch, roll, deltaTime)
     if not isValidNumber(yaw) or not isValidNumber(pitch) or not isValidNumber(roll) then
         return
     end
+    self.zoom_factor = 1
 
     self.last_raw_yaw = yaw
     self.last_raw_pitch = pitch
@@ -1161,6 +1201,8 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
         return
     end
 
+    local zoom = self.zoom_factor
+    cam_x, cam_y, cam_z = cam_x * zoom, cam_y * zoom, cam_z * zoom
     pcall(_callSetLocalPosition, cam, Vector4.new(cam_x, cam_y, cam_z, 1.0))
     self.pos_local.x = cam_x
     self.pos_local.y = cam_y

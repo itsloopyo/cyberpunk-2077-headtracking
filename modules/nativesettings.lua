@@ -15,14 +15,6 @@ NativeSettingsIntegration.__index = NativeSettingsIntegration
 -- step with the hotkey cycle in init.lua, so the dropdown and the key walk the
 -- modes the same way.
 local ENUM_SETTINGS = {
-    ads_mode = {
-        values = { "paused", "marker", "tracked" },
-        labels = {
-            "Tracking paused",
-            "Tracking on, aim marker shown",
-            "Tracking on, no aim marker",
-        },
-    },
     yaw_mode = {
         values = { "world", "local" },
         labels = { "World (horizon-locked)", "Camera-relative" },
@@ -235,22 +227,6 @@ function NativeSettingsIntegration:registerSettings()
             self.settings:set("chase_camera_tracking", state)
         end
     )
-    -- Aim-down-sights behaviour. Same three modes the Insert hotkey cycles.
-    do
-        local spec = ENUM_SETTINGS.ads_mode
-        self.widgetRefs["ads_mode"] = ns.addSelectorString(
-            "/HeadTracking",
-            "Aiming Down Sights",
-            "What happens to head tracking while the sights are up. Raising them always swings the view onto the point the reticle was marking; this picks what follows. Hotkey: Insert / Ctrl+Shift+U.",
-            spec.labels,
-            enumIndex("ads_mode", self.settings:get("ads_mode")),
-            enumIndex("ads_mode", self.settings:getDefaults().ads_mode),
-            function(index)
-                self.settings:set("ads_mode", spec.values[index])
-            end
-        )
-    end
-
     -- Yaw mode. The camera has to drop its yaw-mode intermediates on the way
     -- through or the old mode's composition is baked into the new one's base,
     -- which is drift that accumulates per switch - the same call the PageDown

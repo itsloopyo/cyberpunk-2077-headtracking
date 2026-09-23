@@ -2322,29 +2322,6 @@ function BuiltinCrosshair:_resetAll()
     if self._shove_nameplate then self:_writeNameplates(0, 0) end
 end
 
---- Screen offset from centre to the true aim point, in pixels.
----
---- The one projection in this mod. ads_reticle draws its marker at this offset
---- rather than deriving its own, because two projections built from different
---- assumptions agree at small single-axis angles and drift apart on combined
---- poses - the failure AGENTS.md calls out under Reticle Compensation.
----
---- Computed fresh rather than served from `_last_dx`: tick() returns early
---- before computing anything when it has no controllers to write to, which is
---- exactly the state the game leaves it in with the sights up.
----
---- Deliberately independent of `crosshair_enabled`. That setting governs
---- whether this module moves the game's OWN reticle during normal play; the
---- ADS marker is a separate widget in a mode where the game draws no reticle
---- at all, and folding it in here would make ads_mode = "marker" silently
---- behave as "tracked".
---- @param screen_w number
---- @param screen_h number
---- @return number dx, number dy, boolean valid
-function BuiltinCrosshair:getAimOffset(screen_w, screen_h)
-    return self:_computeOffset(screen_w, screen_h)
-end
-
 function BuiltinCrosshair:tick(tracking_allowed)
     self._hit_marker_tracking_allowed = self.enabled and tracking_allowed
     if self._np_probe_frames > 0 then

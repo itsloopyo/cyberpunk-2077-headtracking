@@ -29,9 +29,7 @@ test-delegate = { cmd = "lua tests/delegate_equivalence_test.lua" }
 test-aim      = { cmd = "lua tests/aim_compensation_test.lua" }
 test-pose     = { cmd = "lua tests/poseinterpolator_test.lua" }
 test-state    = { cmd = "lua tests/state_gate_test.lua" }
-test-ads      = { cmd = "lua tests/ads_pose_test.lua" }
 test-ads-fade = { cmd = "lua tests/ads_fade_test.lua" }
-test-ads-frame = { cmd = "lua tests/ads_frame_test.lua" }
 test-reticle  = { cmd = "lua tests/reticle_projection_test.lua" }
 test-settings-ui = { cmd = "lua tests/nativesettings_test.lua" }
 test-manifest = { cmd = "node tests/module_manifest_test.mjs" }
@@ -46,7 +44,7 @@ test-constants = { cmd = "lua tests/core_constants_test.lua" }
 # is the core's own code, not a port, so there is nothing here to check.
 # Where a local test and a vector disagree, the vector is right.
 test-vectors  = { cmd = "node cameraunlock-core/scripts/pipeline-vectors/run-vectors.mjs --vectors cameraunlock-core/data/pipeline-conformance.json --harness \"lua tests/conformance_harness.lua\" --expect-skips position-interpolator-fills-frames-between-samples,position-interpolator-extrapolation-expires-on-stall,position-interpolator-resists-packet-jitter,position-interpolator-default-sample-interval-is-one-thirtieth,position-clamp-before-smoothing,position-clamp-is-asymmetric,vertical-limits-are-independent,gimbal-lock-at-exactly-90,euler-roundtrip-sweep,euler-decomposition-returns-canonical-angles,pivot-compensation-cancels-a-pure-head-turn,pivot-compensation-defaults-off,pivot-compensation-covers-pitch-and-the-up-arm,deadzone-is-continuous-at-its-edge,diagonal-motion-keeps-roll-at-zero,wire-position-is-centimetres,wire-rejects-finite-double-infinite-float,hcam-trailer-parses,packet-rejects-a-short-datagram,packet-accepts-a-longer-datagram-without-inventing-a-trailer,hcam-trailer-version-is-forward-compatible,hcam-trailer-does-not-recenter,no-center-captured-on-connect-rotation,no-center-captured-on-connect-position,duplicate-packets-track-the-source-rate" }
-test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-state", "test-ads", "test-ads-fade", "test-ads-frame", "test-reticle", "test-settings-ui", "test-manifest", "test-camera", "test-constants", "test-vectors"] }
+test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-state", "test-ads-fade", "test-reticle", "test-settings-ui", "test-manifest", "test-camera", "test-constants", "test-vectors"] }
 
 [target.win-64.tasks]
 # Build native RED4ext C++ plugin

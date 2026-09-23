@@ -125,30 +125,23 @@ end
 
 -- (2) Selector callbacks store the STRING the setting expects, not the index
 --     NativeSettings handed them.
-local ads_ref = integration.widgetRefs["ads_mode"]
-assert_eq(widgets[ads_ref].kind, "selector", "ads_mode is a selector")
-assert_eq(widgets[ads_ref].current, 1, "ads_mode selector opens on the stored value (paused)")
-
-widgets[ads_ref].callback(3)
-assert_eq(settings:get("ads_mode"), "tracked", "selecting index 3 stores 'tracked'")
-widgets[ads_ref].callback(2)
-assert_eq(settings:get("ads_mode"), "marker", "selecting index 2 stores 'marker'")
-
 local yaw_ref = integration.widgetRefs["yaw_mode"]
+assert_eq(widgets[yaw_ref].kind, "selector", "yaw_mode is a selector")
 widgets[yaw_ref].callback(2)
 assert_eq(settings:get("yaw_mode"), "local", "selecting index 2 stores 'local'")
+widgets[yaw_ref].callback(1)
+assert_eq(settings:get("yaw_mode"), "world", "selecting index 1 stores 'world'")
 
--- (3) The selector order matches the hotkey cycle order, so the dropdown and
---     Insert walks the modes the same way.
-assert_eq(widgets[ads_ref].values[1], "Tracking paused", "slot 1 is the tracking-paused mode")
-assert_eq(#widgets[ads_ref].values, 3, "three ADS modes offered")
+-- (3) Aiming down sights has no setting: head tracking carries straight on
+--     through the aim.
+assert_eq(integration.widgetRefs["ads_mode"], nil, "no ADS mode widget")
 
 -- (4) A change from outside the panel (the hotkey) refreshes the widget with an
 --     INDEX. Pushing the raw string here would silently leave the dropdown on
 --     whatever it was showing.
 refreshes = {}
-integration:onSettingChanged("ads_mode", "tracked")
-assert_eq(refreshes[ads_ref], 3, "ads_mode refresh pushes the index, not the string")
+integration:onSettingChanged("yaw_mode", "local")
+assert_eq(refreshes[yaw_ref], 2, "yaw_mode refresh pushes the index, not the string")
 
 -- (5) The master Enabled switch is the OR of rotation and position, and is a
 --     SEPARATE widget from the rotation switch that stores `enabled`. Folding

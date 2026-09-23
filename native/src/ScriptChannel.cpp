@@ -22,13 +22,12 @@
 namespace {
 
 // Bit layout for the `flags` out-param, mirrored in modules/udp.lua. Bit 6 is
-// live status; bits 3-5 and bit 7 are one-shot edges that Lua clears on
-// consume. Keep both sides in sync when adding new flags.
+// live status; bits 3-5 are one-shot edges that Lua clears on consume. Keep
+// both sides in sync when adding new flags.
 constexpr uint32_t kFlagToggleTracking   = 1u << 3;
 constexpr uint32_t kFlagCycleMode        = 1u << 4;
 constexpr uint32_t kFlagToggleYaw        = 1u << 5;
 constexpr uint32_t kFlagRemoteConnection = 1u << 6;
-constexpr uint32_t kFlagCycleAdsMode     = 1u << 7;
 
 std::atomic<uint64_t> s_lastPushMs{0};
 std::atomic<bool> s_lastPushEnabled{false};
@@ -40,7 +39,6 @@ std::atomic<bool> s_loggedFirstPush{false};
 bool s_toggleTrackingChordWasDown = false;
 bool s_cycleModeChordWasDown = false;
 bool s_yawModeChordWasDown = false;
-bool s_adsModeChordWasDown = false;
 
 // True when the foreground window belongs to this process. The chords below
 // are read from GetAsyncKeyState, which is global to the session: without this
@@ -53,7 +51,7 @@ bool GameWindowHasFocus() {
     return pid == GetCurrentProcessId();
 }
 
-// Polls the standard CameraUnlock chords (Ctrl+Shift+{Y,G,H,U}). Each chord is
+// Polls the standard CameraUnlock chords (Ctrl+Shift+{Y,G,H}). Each chord is
 // paired with the canonical nav-cluster key as a parallel edge source; either
 // firing produces one edge. Neither set can go through CET: registerHotkey
 // dispatch crashes before entering Lua on this game build, and the sandbox
@@ -62,7 +60,6 @@ struct ChordEdges {
     bool toggleTracking;
     bool cycleMode;
     bool yawMode;
-    bool adsMode;
 };
 
 ChordEdges ConsumeChordEdges() {
@@ -83,13 +80,6 @@ ChordEdges ConsumeChordEdges() {
     const bool yawDown =
         ((GetAsyncKeyState(VK_NEXT) & 0x8000) != 0) ||
         (modsDown && ((GetAsyncKeyState('H') & 0x8000) != 0));
-    // Insert / Ctrl+Shift+U cycle the aim-down-sights behaviour. U is the next
-    // free letter in the T/Y/U/G/H/J cluster after Y, G and H. Ctrl+Shift+T is
-    // deliberately NOT used: it was the recenter chord before mods stopped
-    // keeping a centre, so it would still fire on muscle memory.
-    const bool adsDown =
-        ((GetAsyncKeyState(VK_INSERT) & 0x8000) != 0) ||
-        (modsDown && ((GetAsyncKeyState('U') & 0x8000) != 0));
 
     // Latch the physical state even while unfocused, so a key held across the
     // focus boundary is not read as a fresh press the moment the game returns.
@@ -99,11 +89,9 @@ ChordEdges ConsumeChordEdges() {
     e.toggleTracking = focused && toggleDown && !s_toggleTrackingChordWasDown;
     e.cycleMode      = focused && cycleDown  && !s_cycleModeChordWasDown;
     e.yawMode        = focused && yawDown    && !s_yawModeChordWasDown;
-    e.adsMode        = focused && adsDown    && !s_adsModeChordWasDown;
     s_toggleTrackingChordWasDown = toggleDown;
     s_cycleModeChordWasDown      = cycleDown;
     s_yawModeChordWasDown        = yawDown;
-    s_adsModeChordWasDown        = adsDown;
     return e;
 }
 
@@ -132,7 +120,6 @@ void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, i
     if (edges.toggleTracking) flags |= kFlagToggleTracking;
     if (edges.cycleMode)      flags |= kFlagCycleMode;
     if (edges.yawMode)        flags |= kFlagToggleYaw;
-    if (edges.adsMode)        flags |= kFlagCycleAdsMode;
     // Live status, not an edge: Lua re-reads it every poll so a user switching
     // between a local OpenTrack instance and a phone on WiFi gets the other
     // smoothing parameter without a game restart.

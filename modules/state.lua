@@ -37,7 +37,6 @@ State.REASON = {
     SCENE = "scene",
     DISABLED = "disabled",
     NO_PLAYER = "no_player",
-    ADS = "ads",  -- Aiming down sights - the game owns the sight picture
     WARMUP = "warmup"  -- Post-scene-load warmup window; prevents applying stale tracking to mid-load camera
 }
 
@@ -62,7 +61,6 @@ local REASON_DESCRIPTIONS = {
     [State.REASON.SCENE]      = "Tracking paused: Cinematic",
     [State.REASON.DISABLED]   = "Head tracking disabled",
     [State.REASON.NO_PLAYER]  = "Tracking paused: No player",
-    [State.REASON.ADS]        = "Tracking paused: Aiming down sights",
     [State.REASON.WARMUP]     = "Tracking paused: Warming up after scene load",
 }
 
@@ -127,13 +125,6 @@ function State.new()
     -- Whether the last verdict walk found the player aiming down sights.
     -- Cached rather than latched: the walk recomputes it from isAdsLive().
     self.ads_active = false
-
-    -- The ADS transition, injected by init.lua. The "paused" branch of the
-    -- walk asks it whether the head pose has actually gone before it stands
-    -- tracking down, so the view eases onto the aim rather than snapping to it.
-    -- nil means no fade is wired and the branch closes the gate on the first
-    -- aiming frame, which is what the gate tests construct.
-    self.ads_fade = nil
 
     -- Whether the last verdict walk found the player looking through the
     -- vehicle chase camera. Same deal as ads_active: recomputed, not latched.
@@ -203,7 +194,7 @@ function State:init(camera, settings)
     end
 
     -- Weapon and ADS observers. The ADS pair deliberately latches nothing -
-    -- the gate polls the state machine - they only drop the cached verdict so
+    -- the walk polls the state machine - they only drop the cached verdict so
     -- the ADS edge is acted on the frame it arrives rather than up to
     -- STATE_CACHE_TTL_S later.
     local this = self
@@ -270,38 +261,11 @@ end
 --- correct through firing, unlike AimingStateEvents whose OnExit is not
 --- guaranteed to arrive.
 ---
---- A frame the blackboard cannot be read reports false, not "still aiming".
---- This gates head tracking now, and an unreadable blackboard stranding
---- tracking off for the rest of a session is far worse than one frame of
---- tracking leaking into ADS.
+--- A frame the blackboard cannot be read reports false, not "still aiming":
+--- the lean coming back is the safe direction.
 --- @return boolean
 function State:isAdsLive()
     return self:probeUpperBodyState() == PSM_UPPERBODY_AIM
-end
-
---- The configured aim-down-sights behaviour, defaulting to the shipped
---- "paused" when settings are not wired up yet (state is constructed before
---- settings in some init orders, and a nil read must not leave the gate open).
---- @return string One of "paused", "marker", "tracked"
-function State:adsMode()
-    if not self.settings then return "paused" end
-    return self.settings:get("ads_mode") or "paused"
-end
-
---- Hand the gate the ADS transition. Called once at init; see the field note
---- in new() for what a missing one means.
---- @param fade table|nil An ads_fade.lua instance
-function State:setAdsFade(fade)
-    self.ads_fade = fade
-end
-
---- Has the ADS transition finished putting the head pose away? True with no
---- fade wired, so the gate keeps its pre-fade behaviour for any caller that
---- does not supply one.
---- @return boolean
-function State:adsPoseIsAway()
-    if not self.ads_fade then return true end
-    return self.ads_fade:isSightsUp()
 end
 
 --- Is the player aiming down sights? Computed by the verdict walk rather than
@@ -380,19 +344,10 @@ end
 --- @return boolean the verdict, so callers can `return self:setVerdict(...)`
 function State:setVerdict(allowed, reason)
     if allowed ~= self.cached_allowed or reason ~= self.cached_reason then
-        -- Aiming down sights blocks and resumes on every single aim, which in a
-        -- firefight is hundreds of transitions. It is designed behaviour, not a
-        -- fault, so it goes to the console only. HeadTracking.log is the one
-        -- file a "no head tracking" report is answered from, and burying the
-        -- menu/loading/scene verdicts under ADS churn is how that file stops
-        -- being readable. Everything that can actually explain a dead mod still
-        -- reaches it.
-        local ads_churn = reason == State.REASON.ADS or self.cached_reason == State.REASON.ADS
-        local out = ads_churn and print or slog
         if allowed then
-            out("[HeadTracking:State] tracking RESUMED")
+            slog("[HeadTracking:State] tracking RESUMED")
         else
-            out("[HeadTracking:State] tracking BLOCKED: " .. tostring(reason))
+            slog("[HeadTracking:State] tracking BLOCKED: " .. tostring(reason))
         end
     end
     self.cached_allowed = allowed
@@ -440,8 +395,7 @@ function State:isTrackingAllowed()
     self.stats.cache_misses = self.stats.cache_misses + 1
     -- Recomputed by the ADS check at the end of the walk. An early return
     -- above it (menu, cinematic, warmup) leaves this false, which is what the
-    -- callers want: those block tracking outright, so there is no frozen ADS
-    -- pose to hold.
+    -- callers want: those block tracking outright.
     self.ads_active = false
     self.chase_camera = false
 
@@ -539,27 +493,12 @@ function State:isTrackingAllowed()
         self.chase_camera = live.chase_camera
     end
 
-    -- Aiming down sights: the game pulls the camera onto the weapon's sight
-    -- line, and that sight picture IS the aim. What that should do to head
-    -- tracking is the user's call, toggled with Insert / Ctrl+Shift+U:
-    --   "paused"  - stand tracking down, so the view swings onto the point the
-    --               reticle was marking and the sight picture is the game's.
-    --               The gate stays OPEN for the length of the transition
-    --               (ads_fade.lua) and closes once the head pose has actually
-    --               gone: a gate that shut on the first aiming frame cut the
-    --               pose in one frame, which is the jolt the fade removes.
-    --   "marker" / "tracked" - keep the gate open. ads_pose.lua feeds poses
-    --               relative to the one the sights came up on, so the view
-    --               makes that same swing and then keeps tracking from there.
-    --               "marker" additionally draws an aim marker at the projected
-    --               hit point.
-    -- Last in the walk so a menu or cinematic still reports its own reason
-    -- when both are true at once.
+    -- Aiming down sights leaves tracking on: the weapon stays on the aim and
+    -- the head keeps looking around it. The flag only tells init.lua to ease the
+    -- lean out, which would otherwise move the eye off the sights. Last in the
+    -- walk so a menu or cinematic early return leaves it false.
     if self:isAdsLive() then
         self.ads_active = true
-        if self:adsMode() == "paused" and self:adsPoseIsAway() then
-            return self:setVerdict(false, State.REASON.ADS)
-        end
     end
 
     return self:setVerdict(true, State.REASON.ALLOWED)

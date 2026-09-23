@@ -12,16 +12,6 @@ Settings.__index = Settings
 -- branches on it (camera.lua / nativesettings.lua).
 local YAW_MODE_VALUES = { world = true, ["local"] = true }
 
--- Allowed ads_mode strings, same reasoning as YAW_MODE_VALUES. Cycled with
--- Insert / Ctrl+Shift+U; state.lua and init.lua branch on all three. Every mode
--- makes the same swing onto the aim point when the sights come up; they differ
--- in what happens for the rest of the aim.
---   "paused"  - stand tracking down and hand the view back to the game.
---   "marker"  - keep tracking, and draw an aim marker at the projected hit
---               point, since the game hides its crosshair with the sights up.
---   "tracked" - keep tracking, no marker.
-local ADS_MODE_VALUES = { paused = true, marker = true, tracked = true }
-
 -- Which tracking mode the master switch restores. Recorded when tracking is
 -- switched off and read back when it is switched on, so End -> quit -> relaunch
 -- -> End returns to the mode the player was in rather than forcing 6DOF.
@@ -54,8 +44,6 @@ local VALIDATION_RULES = {
     -- Yaw mode: "world" (default, horizon-locked world-space yaw) or "local"
     -- (legacy camera-local yaw that tilts with mouse pitch). See camera.lua.
     yaw_mode = { type = "string" },
-    -- What aiming down sights does to the view. See ADS_MODE_VALUES.
-    ads_mode = { type = "string" },
     -- Tracking mode the master switch restores. See SAVED_TRACKING_MODE_VALUES.
     saved_tracking_mode = { type = "string" },
     chase_camera_tracking = { type = "boolean" },
@@ -167,18 +155,12 @@ local function validateValue(key, value)
         end
     end
 
-    -- String enum validation. Both string-typed settings are branched on by
-    -- name elsewhere (camera.lua reads yaw_mode as a binary "world" / "local",
-    -- state.lua and init.lua read ads_mode as one of three), so an unknown
-    -- value would silently fall through to whichever branch is last.
+    -- String enum validation. The string-typed settings are branched on by
+    -- name elsewhere (camera.lua reads yaw_mode as a binary "world" / "local"),
+    -- so an unknown value would silently fall through to whichever branch is
+    -- last.
     if rule.type == "string" and key == "yaw_mode" then
         if not YAW_MODE_VALUES[value] then
-            return false, nil
-        end
-    end
-
-    if rule.type == "string" and key == "ads_mode" then
-        if not ADS_MODE_VALUES[value] then
             return false, nil
         end
     end
@@ -226,10 +208,6 @@ function Settings.new()
         -- current local-up axis, which tilts with mouse pitch).
         -- Toggle between them with PageDown / Ctrl+Shift+H.
         yaw_mode = "world",
-        -- Aiming down sights hands the view back to the game by default, so
-        -- the sights land on the point the reticle was marking. Insert /
-        -- Ctrl+Shift+U cycles to "marker" then "tracked".
-        ads_mode = "paused",
         -- Mode the master switch restores; rewritten every time tracking is
         -- switched off. Not shown in the settings panel.
         saved_tracking_mode = "both",
@@ -527,9 +505,9 @@ end
 --- Bring a freshly loaded config up into the state a session starts in.
 ---
 --- Called once from init.lua, straight after :load(). Everything it does NOT
---- touch is therefore persisted as-is - most of the config, including yaw_mode
---- and ads_mode, both of which are settings the player sets from the panel or a
---- hotkey and would be silently discarded if this reset them.
+--- touch is therefore persisted as-is - most of the config, including yaw_mode,
+--- which the player sets from the panel or a hotkey and would be silently
+--- discarded if this reset it.
 ---
 --- What it does touch, and why:
 ---   * Tracking comes up ON, so a session that ended with End pressed does not

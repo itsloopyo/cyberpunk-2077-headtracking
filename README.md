@@ -9,7 +9,7 @@ An unofficial head tracking mod for Cyberpunk 2077 that moves the view with your
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim
 - **6DOF positional tracking** - lean into corners and peek around cover with your head position
 - **Works with any OpenTrack compatible tracker** - free options available for PC, iOS and Android
-- **Three ways to aim down sights** - raising the sights always swings the view onto the point the reticle was marking. After that, pick one: head tracking off for the rest of the aim (the default), on with a marker showing where your rounds will land, or on with no marker. Cycled in game with `Insert`
+- **Head tracking stays on down the sights** - aim down sights and keep looking around: the weapon stays on your aim, you can still sight down it wherever it sits on screen, and head movement is scaled to the zoom so a scope does not magnify it
 
 ## Gameplay Changes
 
@@ -159,9 +159,6 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 | Toggle tracking     | `End`       | `Ctrl+Shift+Y`  |
 | Cycle tracking mode | `Page Up`   | `Ctrl+Shift+G`  |
 | Toggle yaw mode     | `Page Down` | `Ctrl+Shift+H`  |
-| Cycle ADS mode      | `Insert`    | `Ctrl+Shift+U`  |
-
-`Insert` avoids MCM's `Home` shortcut. The `Ctrl+Shift+U` alternative is unchanged.
 
 `Page Up` / `Ctrl+Shift+G` cycles tracking mode:
 
@@ -170,13 +167,9 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 3. Rotational tracking disabled, positional tracking enabled
 4. Back to normal
 
-`Insert` / `Ctrl+Shift+U` cycles what happens when you aim down sights. All three start the same way - raising the sights swings the view onto the point the reticle was marking, so your shot lands where you had it lined up - and they differ in what happens for the rest of the aim:
+### Aiming down sights
 
-1. **Tracking paused** (default) - the game keeps the camera for as long as the sights are up. The sight picture is exactly the game's, and head movement does nothing until you lower the weapon.
-2. **Tracking on, with an aim marker** - head tracking carries on from the snapped position, and a small white crosshair is drawn wherever your rounds will actually land. This white marker is authoritative, including with scoped weapons. A scope's built-in reticle is only accurate while your eye is exactly aligned with the optic, so the two reticles separate when head tracking moves your view off that sight line.
-3. **Tracking on, no aim marker** - the same as 2 without the marker, for a cleaner screen when you are happy reading the sights themselves.
-
-The choice is saved, so it survives a restart. Pressing the key shows a toast naming the mode you switched to.
+Head tracking stays on while you aim. The weapon stays where your mouse or controller points it, so with your head turned it sits off to one side with its sights still lined up, and your rounds land where those sights point. Leaning eases out while the sights are up, because it would move your eye off them. Head movement is scaled to the zoom, so a scope does not magnify it.
 
 ## In vehicles
 
@@ -227,7 +220,6 @@ Native Settings is the only framework this mod registers with. If you use a diff
   "position_limit_z_back": 0.10,
 
   "yaw_mode": "world",
-  "ads_mode": "paused",
 
   "saved_tracking_mode": "both"
 }
@@ -239,10 +231,9 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - `remote_smoothing` (0.0 to 1.0, default 0.15): smoothing applied when the tracker is a remote device on the network. 0 = no smoothing, 1 = heavy.
   The mod picks between the two from the source address of each tracking packet, so switching from a local OpenTrack instance to a phone on WiFi swaps the value with no restart. Both cover rotation and position, so there is no separate position smoothing setting. Local defaults to zero because a same-machine tracker is already stable and any smoothing there is pure added latency.
 - `clamp_*` (degrees): rotation caps, so head rotation cannot fight the aim system.
-- `crosshair_enabled`: moves the game's own reticle to the true aim point during normal play. The ADS marker is separate and remains available in `ads_mode: "marker"`. Both use Cyberpunk's live camera projection, including the exact scope projection, rather than an estimated field of view.
+- `crosshair_enabled`: moves the game's own reticle to the true aim point during normal play. It uses Cyberpunk's live camera projection, including the exact scope projection, rather than an estimated field of view.
 - `position_enabled` and `position_limit_*`: enable 6DOF translation and set Cyberpunk-specific camera travel limits in metres. Positional sensitivity belongs in the tracker.
 - `saved_tracking_mode`: not a setting - it is where the mod remembers which tracking mode to restore when tracking is switched back on, whether that is you pressing `End` or the mod bringing tracking up on the next launch after you quit with it off. Rewritten every time you switch tracking off. Leave it alone.
-- `ads_mode`: what aiming down sights does. `"paused"` (default) stands tracking down for as long as the sights are up. `"marker"` keeps head tracking live through the aim and draws a white crosshair at the true aim point. Treat that marker as authoritative when a scope's reticle no longer lines up with it. `"tracked"` keeps tracking live with no marker. Cycled live with `Insert` / `Ctrl+Shift+U`, and persisted. The marker's size and colour are fixed; there is no setting for them.
 - `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`. The choice is saved, so it survives a restart.
 
 ## Troubleshooting
@@ -277,17 +268,8 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - If a phone tracker is sending straight to port `4242` and it does not filter heavily on-device, relay it through OpenTrack with a low-pass filter instead.
 - High-FPS displays show micro-jitter more readily. There is no internal minimum any more, so if a local tracker looks jittery at the default `local_smoothing` of 0.0, raise it.
 
-**Head tracking stops while aiming down sights.**
-- That is the default, and it is deliberate. Aiming down sights puts the camera on the weapon's sight line and that sight picture is the aim, so head rotation would swing the view off the sights while the rounds kept going where the sights point. Tracking pauses for as long as the sights are up and resumes when you lower the weapon.
-- Press `Insert` / `Ctrl+Shift+U` if you would rather keep tracking through the aim. The snap onto the aim point still happens; tracking just carries on from there. The first press also turns on an aim marker so you can see where the gun is pointing.
-- Your view is the same before and after, so repeatedly aiming will not walk it around.
-
-**The view jumps when I lower the sights, with ADS tracking left on.**
-- Expected, and it is the same swing in reverse. Raising the sights takes your head angle out of the view; lowering them puts it back. Hold your head still through the aim and there is nothing to put back.
-
-**No aim marker appears in the mode that should have one.**
-- The marker projects through the same machinery that moves the crosshair during normal play, so if that failed to start there is no marker either. Check the CET console at startup for `ADS aim marker initialized`; if instead you see the built-in crosshair driver reporting a failure, that is the cause. The mode still tracks your head through the aim, it just cannot draw.
-- The marker hides itself when the aim point falls behind the view, which happens if you turn your head far enough past the weapon.
+**The weapon is off to one side when I aim down sights.**
+- Your head is turned: the weapon stays on your aim and you are looking past it. Turn back to it, or move your aim to where you are looking.
 
 **Wrong rotation axis (camera moves the wrong way).**
 - Invert the offending axis in OpenTrack under **Output > Mapping** rather than in the mod. The mod has no inversion setting on purpose.

@@ -48,6 +48,7 @@ end
 local function bare_camera(overrides)
     local cam = setmetatable({}, Camera)
     cam.smooth_yaw, cam.smooth_pitch, cam.smooth_roll = 0, 0, 0
+    cam.zoom_factor = 1
     cam.rot_has_value = false
     cam.pos_smooth = { x = 0, y = 0, z = 0 }
     cam.pos_raw = { x = 0, y = 0, z = 0 }
@@ -229,6 +230,17 @@ do
 end
 
 -- ---------------------------------------------------------------- rotation
+
+do
+    -- A zoomed camera scales yaw and pitch by its zoom factor; roll is left
+    -- alone because it rotates the picture the same at any zoom.
+    local cam = bare_camera()
+    cam.zoom_factor = 0.5
+    cam:_smoothPose(40, 20, 10, DT)
+    assert_near(cam.smooth_yaw, -20, "yaw scaled by the zoom factor")
+    assert_near(cam.smooth_pitch, 10, "pitch scaled by the zoom factor")
+    assert_near(cam.smooth_roll, -10, "roll not scaled by the zoom factor")
+end
 
 do
     -- Same snap for the pose. Yaw and roll are inverted at this step, which is

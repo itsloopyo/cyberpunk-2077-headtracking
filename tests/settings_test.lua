@@ -349,13 +349,9 @@ m:setTrackingEnabled(true)
 assert_eq(m:get("enabled"), false, "position-only mode restored, rotation stays off")
 assert_eq(m:get("position_enabled"), true, "position-only mode restored, position back on")
 
--- (8) ads_mode is a three-value enum. An unknown string must fall back to the
--- shipped default rather than reach state.lua / init.lua, where an unmatched
--- value would read as "not paused" and quietly keep the gate open on ADS.
--- "center" is specifically covered: it shipped in a dev build and is still
--- sitting in those configs.
+-- (8) Settings the mod no longer has are not keys. The tracker owns pose
+-- shaping, and aiming down sights has no mode any more.
 local a = Settings.new()
-assert_eq(a:get("ads_mode"), "paused", "ads_mode defaults to paused")
 for _, key in ipairs({
     "sensitivity_yaw", "sensitivity_pitch", "sensitivity_roll",
     "deadzone_yaw", "deadzone_pitch", "deadzone_roll",
@@ -363,30 +359,21 @@ for _, key in ipairs({
 }) do
     assert_false(a:isValidKey(key), key .. " is owned by the tracker")
 end
-for _, mode in ipairs({ "paused", "marker", "tracked" }) do
-    assert_true(a:set("ads_mode", mode), "ads_mode=" .. mode .. " accepted")
-    assert_eq(a:get("ads_mode"), mode, "ads_mode=" .. mode .. " round-trips")
-end
-assert_false(a:set("ads_mode", "center"), "unknown ads_mode rejected")
-assert_eq(a:get("ads_mode"), "tracked", "rejected ads_mode leaves the previous value")
-assert_false(a:set("ads_mode", 2), "ads_mode number rejected")
+assert_false(a:isValidKey("ads_mode"), "ads_mode is gone")
 
--- A config.json holding a value outside the enum falls back to the shipped
--- default and says so, rather than reaching state.lua where an unmatched
--- string would read as "not paused" and quietly keep the gate open on ADS.
-local bad_path = "ads_mode_invalid_config.json"
-local bf = io.open(bad_path, "w")
-bf:write('{"ads_mode":"center","clamp_yaw":100}')
+-- A config.json written by a release that had the ADS mode cycle still loads,
+-- and the stale key is simply not carried.
+local old_path = "ads_mode_old_config.json"
+local bf = io.open(old_path, "w")
+bf:write('{"ads_mode":"paused","clamp_yaw":100}')
 bf:close()
 local bg = Settings.new()
-bg.path = bad_path
-bg:load()
--- Assert a second key first: "paused" is also what an unreadable file yields,
--- so without this the assertion below would pass vacuously.
+bg.path = old_path
+assert_true(bg:load(), "a config carrying ads_mode loads")
 assert_eq(bg:get("clamp_yaw"), 100, "fixture was actually read")
-assert_eq(bg:get("ads_mode"), "paused", "out-of-enum ads_mode falls back to the default")
-os.remove(bad_path)
-os.remove(bad_path .. ".bak")
+assert_eq(bg:get("ads_mode"), nil, "the stale ads_mode is not carried")
+os.remove(old_path)
+os.remove(old_path .. ".bak")
 
 -- (9) The mode the master switch restores is PERSISTED, so End -> quit ->
 -- relaunch -> End returns to the mode the player was in rather than forcing

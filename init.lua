@@ -67,10 +67,7 @@ local Settings = safeRequire("modules/settings")
 local State = safeRequire("modules/state")
 local UI = safeRequire("modules/ui")
 local BuiltinCrosshair = safeRequire("modules/builtin_crosshair")
-local AdsReticle = safeRequire("modules/ads_reticle")
-local AdsPose = safeRequire("modules/ads_pose")
 local AdsFade = safeRequire("modules/ads_fade")
-local AdsFrame = safeRequire("modules/ads_frame")
 local AdsBlend = safeRequire("modules/ads_blend")
 local Aim = safeRequire("modules/aim")
 local NativeSettingsIntegration = safeRequire("modules/nativesettings")
@@ -246,7 +243,6 @@ local settings = nil
 local state = nil
 local ui = nil
 local crosshair = nil  -- Drives the game's built-in reticle widget so the engine-drawn crosshair marks the true aim point under head tracking
-local ads_reticle = nil  -- ImGui aim marker drawn only in ads_mode = "marker", where the game has hidden its own crosshair
 local aim = nil  -- Decoupled aim compensation via Override hook
 local nativeUI = nil
 local perf = nil  -- Optional performance monitoring (low overhead)
@@ -293,23 +289,9 @@ local was_tracking_allowed = true
 -- cam.localOrientation and has to peel it back out before standing down.
 local was_chase_camera = false
 
--- Maps the absolute tracker pose to one relative to the pose the sights came up
--- on, for the ads_modes that keep tracking live through the aim. See
--- modules/ads_pose.lua.
-local ads_pose = nil
-
--- The shape of the transition into and out of the aim, shared by all three
--- modes. See modules/ads_fade.lua; what the scale it returns blends between is
--- modules/ads_blend.lua, and the per-frame decisions around both are
--- modules/ads_frame.lua.
+-- Eases the lean out while the sights are up. See modules/ads_fade.lua and
+-- modules/ads_blend.lua.
 local ads_fade = nil
-local ads_frame = nil
-
--- Whether onDraw should paint the aim marker this frame. onUpdate owns the
--- decision and onDraw only reads it, so it is cleared at the top of every
--- update - including the paths that return early - rather than left to go
--- stale and paint a marker over a menu.
-local ads_marker_active = false
 
 local function hotkeyDebounced(id)
     local now = os.clock()
@@ -370,7 +352,7 @@ registerForEvent("onInit", function()
         mlog(loaded and "[HeadTracking] Settings loaded from config.json"
                       or "[HeadTracking] Created default config.json")
         -- The few things a session starts in regardless of how the last one
-        -- ended. Everything else, yaw_mode and ads_mode included, is persisted.
+        -- ended. Everything else, yaw_mode included, is persisted.
         -- See Settings:applyLaunchState.
         settings:applyLaunchState()
     end)
@@ -438,22 +420,10 @@ registerForEvent("onInit", function()
         mlog("[HeadTracking] Pose interpolator initialized")
     end)
 
-    runInitStep("ads_pose", function()
-        if not AdsPose then
-            error("AdsPose module failed to load")
-        end
-        ads_pose = AdsPose.new()
-    end)
-
     runInitStep("ads_fade", function()
         if not AdsFade then error("AdsFade module failed to load") end
         if not AdsBlend then error("AdsBlend module failed to load") end
-        if not AdsFrame then error("AdsFrame module failed to load") end
         ads_fade = AdsFade.new()
-        ads_frame = AdsFrame.new(ads_fade)
-        -- The gate asks the fade whether the pose has gone before "paused"
-        -- stands tracking down.
-        state:setAdsFade(ads_fade)
     end)
 
     runInitStep("nativeUI", function()
@@ -479,20 +449,6 @@ registerForEvent("onInit", function()
         end
     end
 
-    -- The aim marker projects through the crosshair driver, so it only exists
-    -- if that came up. Without it ads_mode = "marker" still tracks through the
-    -- aim, it just draws no marker - which is exactly ads_mode = "tracked".
-    if crosshair and AdsReticle then
-        local ok, err = pcall(function()
-            ads_reticle = AdsReticle.new(crosshair)
-        end)
-        if ok then
-            mlog("[HeadTracking] ADS aim marker initialized")
-        else
-            ads_reticle = nil
-            mlog("[HeadTracking] ADS aim marker FAILED (non-fatal): " .. tostring(err))
-        end
-    end
 
     if init_failure_error then
         mlog("[HeadTracking] Initialization ABORTED - see step '" .. tostring(init_failure_step) .. "' error above")
@@ -529,8 +485,8 @@ local function onUpdateImpl(deltaTime)
         end
     end
 
-    if not state or not udp or not camera or not aim or not pose_interp or not ads_pose
-            or not ads_fade or not ads_frame or not ShiftCompat then
+    if not state or not udp or not camera or not aim or not pose_interp
+            or not ads_fade or not ShiftCompat then
         if (init_debug_frame % INIT_DEBUG_INTERVAL) == 1 then
             -- This block is the answer to most "no head tracking" reports, so
             -- the first pass goes to HeadTracking.log. It repeats on an
@@ -552,16 +508,12 @@ local function onUpdateImpl(deltaTime)
                 " camera=" .. tostring(camera ~= nil) ..
                 " aim=" .. tostring(aim ~= nil) ..
                 " pose_interp=" .. tostring(pose_interp ~= nil) ..
-                " ads_pose=" .. tostring(ads_pose ~= nil) ..
                 " ads_fade=" .. tostring(ads_fade ~= nil) ..
-                " ads_frame=" .. tostring(ads_frame ~= nil) ..
                 " shift_compat=" .. tostring(ShiftCompat ~= nil))
             out("[HeadTracking:INIT] =================================================")
         end
         return
     end
-
-    ads_marker_active = false
 
     perf:frameStart()
 
@@ -587,63 +539,28 @@ local function onUpdateImpl(deltaTime)
     if udp:consumeNativeToggleTrackingRequested() then handleToggleTracking() end
     if udp:consumeNativeCycleModeRequested()      then handleCycleMode()      end
     if udp:consumeNativeToggleYawRequested()      then handleToggleYawMode()  end
-    if udp:consumeNativeCycleAdsModeRequested()   then handleCycleAdsMode()   end
 
     local tracking_allowed = state:isTrackingAllowed()
-    -- Read alongside the verdict it belongs to, not at the point of use.
-    -- State:getReason() re-runs the whole walk whenever the cache has been
-    -- invalidated, and the fade below invalidates it - so a getReason() further
-    -- down answers about a re-walk rather than about the verdict this frame is
-    -- acting on, and the two can disagree.
+    -- Read alongside the verdict it belongs to, not at the point of use, so the
+    -- diagnostic below describes the verdict this frame is acting on.
     local tracking_reason = state:getReason()
     if was_tracking_allowed and not tracking_allowed then
         -- Falling edge: peel our head rotation off NOW, while last_head_quat is
         -- still the rotation actually baked in the camera. This restores the
         -- clean view for the suppressed period and clears last_head_quat so the
         -- resume frame doesn't peel a stale quat against an engine-reset camera.
-        --
-        -- ADS suspends rather than resets. It is measured in seconds and
-        -- happens many times a firefight, so it must not throw away the
-        -- smoothing state: lowering the weapon would swing the view back
-        -- through the whole head angle.
-        if tracking_reason == State.REASON.ADS then
-            camera:suspend()
-        else
-            camera:reset()
-        end
+        camera:reset()
     end
     was_tracking_allowed = tracking_allowed
 
-    -- "marker" and "tracked" keep the gate open through the aim and feed poses
-    -- relative to the one the sights came up on, so the entry frame is identity
-    -- - the same swing onto the aim point that "paused" makes by fading the
-    -- pose away - and head movement after it still moves the view.
-    --
-    -- "paused" reaches here too, for the length of the transition only: the
-    -- gate stays open while the fade runs the pose down to nothing and closes
-    -- behind it. So the mode has to be tested as well as the sights, or a
-    -- paused aim would spend its first 150ms on the entry-relative pose.
-    local ads_mode = settings:get("ads_mode") or "paused"
-
-    -- The sights as the GAME sees them, never the tracking gate's verdict. The
-    -- whole per-frame decision is modules/ads_frame.lua, which is where the two
-    -- ordering defects this shape exists to prevent are written down.
-    local ads_aiming = state:isAdsActive()
-    local ads_scale = ads_frame:update(
-        ads_mode, ads_aiming, tracking_allowed,
-        tracking_reason == State.REASON.ADS, now)
-    local ads_tracked = ads_frame.tracked
-
-    if ads_tracked and ads_mode == "marker" then
-        ads_marker_active = ads_reticle ~= nil
-    end
-
-    -- Without the invalidate the walk keeps its cached "allowed" for up to
-    -- STATE_CACHE_TTL_S after the pose has gone, which leaves the camera being
-    -- written a zero pose for another tenth of a second before "paused" hands
-    -- it back to the game.
-    if ads_frame.sights_up_changed then
-        state:invalidateCache()
+    -- Aiming down sights leaves head tracking on; only the lean eases out, so
+    -- the eye stays on the sights (modules/ads_blend.lua). The sights come from
+    -- the game's own aim state, and any suppression resets the transition so
+    -- the next aim starts clean.
+    local ads_scale = ads_fade:update(state:isAdsActive(), now)
+    if not tracking_allowed then
+        ads_fade:reset()
+        ads_scale = 1.0
     end
 
     -- Third-person driving renders from the vehicle chase camera, which ignores
@@ -688,11 +605,6 @@ local function onUpdateImpl(deltaTime)
         udp:poll()
         if crosshair then crosshair:tick(false) end
         pose_interp:reset()
-        ads_pose:reset()
-        -- The transition is not touched here. ads_frame:update above has already
-        -- decided what this suppression means for it: reset for a menu, a load
-        -- or the master toggle, survive for the ADS block, which is the one the
-        -- fade closed itself.
         return
     end
 
@@ -741,20 +653,13 @@ local function onUpdateImpl(deltaTime)
     local raw_x, raw_y, raw_z
     if data then raw_x, raw_y, raw_z = data.x or 0, data.y or 0, data.z or 0 end
 
-    local rel_yaw, rel_pitch, rel_roll, rel_x, rel_y, rel_z =
-        ads_pose:update(ads_frame.pose_holds, interp_yaw, interp_pitch, interp_roll,
-                        raw_x, raw_y, raw_z)
-
-    -- Off the aim the blend is the identity operation (scale 1, and ads_pose
-    -- has already passed the absolute pose straight through), so hip fire pays
-    -- one table and nothing else.
-    local blended = AdsBlend.blend(ads_mode, ads_scale,
+    -- Off the aim the scale is 1 and the pose passes through untouched.
+    local blended = AdsBlend.blend(ads_scale,
         { yaw = interp_yaw, pitch = interp_pitch, roll = interp_roll,
-          x = raw_x, y = raw_y, z = raw_z },
-        { yaw = rel_yaw, pitch = rel_pitch, roll = rel_roll,
-          x = rel_x, y = rel_y, z = rel_z })
+          x = raw_x, y = raw_y, z = raw_z })
     local pose_yaw, pose_pitch, pose_roll = blended.yaw, blended.pitch, blended.roll
     local pose_x, pose_y, pose_z = blended.x, blended.y, blended.z
+
 
     if pose_yaw ~= nil then
         local rot_on = settings:get("enabled") and true or false
@@ -822,15 +727,13 @@ local function onUpdateImpl(deltaTime)
 
     perf:updateEnd()
 end
+
 registerForEvent("onUpdate", guarded("onUpdate", onUpdateImpl))
 
 -- Lifecycle: Called for ImGui rendering
 local function onDrawImpl()
     if ui then
         ui:draw()
-    end
-    if ads_reticle then
-        ads_reticle:draw(ads_marker_active)
     end
 end
 registerForEvent("onDraw", guarded("onDraw", onDrawImpl))
@@ -875,8 +778,8 @@ local function resolveToggle(current, force)
 end
 
 -- Standard CameraUnlock hotkey contract.
--- Defaults per rule: End / PageUp / PageDown / Insert (nav cluster) with
--- Ctrl+Shift+{Y,G,H,U} chord alternatives drawn from the T/Y/U/G/H/J cluster.
+-- Defaults per rule: End / PageUp / PageDown (nav cluster) with
+-- Ctrl+Shift+{Y,G,H} chord alternatives drawn from the T/Y/U/G/H/J cluster.
 -- Both sets are polled natively in ScriptChannel.cpp and are NOT rebindable:
 -- CET's registerHotkey dispatch crashes before entering Lua on this game
 -- build, so none of these can go through the Bindings menu.
@@ -969,42 +872,6 @@ end
 -- PageDown / Ctrl+Shift+H are polled natively in ScriptChannel.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build, so do not bind
 -- PageDown here.
-
--- Insert  /  Ctrl+Shift+U - Cycle what aiming down sights does to the view.
--- U is the next free letter in the T/Y/U/G/H/J cluster after Y, G and H.
--- Ctrl+Shift+T is deliberately skipped: it was the recenter chord before mods
--- stopped keeping a centre, so it would still fire on muscle memory.
-local ADS_MODE_CYCLE = { "paused", "marker", "tracked" }
-local ADS_MODE_LABELS = {
-    paused  = "ADS: tracking paused",
-    marker  = "ADS: tracking on, aim marker shown",
-    tracked = "ADS: tracking on, no aim marker",
-}
-
-function handleCycleAdsMode()
-    dlog("[HeadTracking:HOTKEY] CycleAdsMode fired")
-    if hotkeyDebounced("CycleAdsMode") then return end
-    if not settings or not ui then return end
-
-    local current = settings:get("ads_mode") or "paused"
-    local next_mode = ADS_MODE_CYCLE[1]
-    for i, mode in ipairs(ADS_MODE_CYCLE) do
-        if mode == current then
-            next_mode = ADS_MODE_CYCLE[(i % #ADS_MODE_CYCLE) + 1]
-            break
-        end
-    end
-
-    settings:set("ads_mode", next_mode)
-    -- The gate branches on this setting, so a change mid-aim has to re-run the
-    -- walk rather than ride the cached verdict until its TTL expires.
-    if state then state:refresh() end
-
-    ui:showSuccess(ADS_MODE_LABELS[next_mode], 2.5)
-    mlog("[HeadTracking] ads_mode -> " .. next_mode)
-end
--- Insert / Ctrl+Shift+U are polled natively in ScriptChannel.cpp, same as the
--- other three.
 
 -- Public API for the CET console. Reachable as
 --   GetMod("HeadTracking").DiagVerbose(true)

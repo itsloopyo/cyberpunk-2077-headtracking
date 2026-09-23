@@ -14,12 +14,8 @@
 --     1.0 is a jolt in the direction the fade exists to remove.
 --   * a player who taps aim interrupts the transition half way, and it has to
 --     turn round from where it is rather than from where it started.
---   * roll comes from the ABSOLUTE pose in the tracked modes and is never
---     interpolated toward the relative one. It rides the fade in "paused" only,
---     and only because this mod hands the camera back at the end of the ramp -
---     see the ROLL note in modules/ads_blend.lua.
---   * abs and rel carry different rolls in every blend case below. With them
---     equal, a blend reading roll from the wrong pose passes the whole suite.
+--   * the blend eases the lean and never touches rotation, roll included:
+--     head tracking carries straight on through the aim.
 
 local function assert_eq(actual, expected, label)
     if actual ~= expected then
@@ -55,11 +51,9 @@ do
     assert_near(fade:update(true, 0.0), 1.0, "the entry frame does not step")
     assert_near(fade:update(true, LOWER / 2), 0.5, "smoothstep is symmetric about the half", 1e-3)
     assert_near(fade:update(true, LOWER), 0.0, "it reaches zero by sights-up")
-    assert_eq(fade:isSightsUp(), true, "and says so, which is what closes the gate")
     assert_near(fade:update(true, LOWER + 5.0), 0.0, "and holds there while the sights are up")
 
     assert_near(fade:update(false, 10.0), 0.0, "lowering the weapon does not step either")
-    assert_eq(fade:isSightsUp(), false, "the gate reopens as soon as the sights start dropping")
     assert_near(fade:update(false, 10.0 + RAISE), 1.0, "and it comes back in full")
 end
 
@@ -131,7 +125,6 @@ do
     fade:update(true, 0.0)
     fade:update(true, LOWER)
     fade:reset()
-    assert_eq(fade:isSightsUp(), false, "Reset drops the sights-up flag")
     assert_near(fade:update(false, 5.0), 1.0, "Reset drops straight back to the hip")
 end
 
@@ -141,92 +134,50 @@ local function pose(yaw, pitch, roll, x, y, z)
     return { yaw = yaw, pitch = pitch, roll = roll, x = x, y = y, z = z }
 end
 
--- At the hip every mode is the head pose untouched. abs and rel carry DIFFERENT
--- rolls throughout this section: with them equal, a blend that reads roll from
--- the wrong pose entirely passes every case.
+-- At the hip the pose passes through untouched.
 do
-    local abs = pose(-12, 5, 3, 1, 2, 3)
-    local rel = pose(0, 0, 7, 0, 0, 0)
-    for _, mode in ipairs({ "paused", "marker", "tracked" }) do
-        local out = AdsBlend.blend(mode, 1.0, abs, rel)
-        assert_near(out.yaw, -12, mode .. " hip yaw")
-        assert_near(out.pitch, 5, mode .. " hip pitch")
-        assert_near(out.roll, 3, mode .. " hip roll")
-        assert_near(out.z, 3, mode .. " hip z")
-    end
+    local out = AdsBlend.blend(1.0, pose(-12, 5, 3, 1, 2, 3))
+    assert_near(out.yaw, -12, "hip yaw")
+    assert_near(out.pitch, 5, "hip pitch")
+    assert_near(out.roll, 3, "hip roll")
+    assert_near(out.x, 1, "hip x")
+    assert_near(out.z, 3, "hip z")
 end
 
--- Sights fully up in "paused": the view is the game's own again.
+-- On the sights rotation is untouched, roll included, and the lean is gone.
 do
-    local out = AdsBlend.blend("paused", 0.0, pose(-12, 5, 3, 1, 2, 3), pose(0, 0, 7, 0, 0, 0))
-    assert_near(out.yaw, 0, "paused drops yaw")
-    assert_near(out.pitch, 0, "paused drops pitch")
-    assert_near(out.x, 0, "paused drops the lean x")
-    assert_near(out.y, 0, "paused drops the lean y")
-    assert_near(out.z, 0, "paused drops the lean z")
-    -- Faded rather than held: this mod hands the camera back at the end of the
-    -- ramp, and Camera:suspend() would cut a held tilt in one frame there.
-    assert_near(out.roll, 0, "paused rides the tilt down with the rest")
+    local out = AdsBlend.blend(0.0, pose(-12, 5, 3, 1, 2, 3))
+    assert_near(out.yaw, -12, "yaw is untouched on the sights")
+    assert_near(out.pitch, 5, "pitch is untouched on the sights")
+    assert_near(out.roll, 3, "roll is untouched on the sights")
+    assert_near(out.x, 0, "the lean x is gone on the sights")
+    assert_near(out.y, 0, "the lean y is gone on the sights")
+    assert_near(out.z, 0, "the lean z is gone on the sights")
 end
 
--- And halfway through, every axis is half way down together.
+-- Mid-fade the lean is scaled and rotation is still untouched.
 do
-    local out = AdsBlend.blend("paused", 0.5, pose(-20, 8, 3, 0, 0, 4), pose(0, 0, 7, 0, 0, 0))
-    assert_near(out.yaw, -10, "paused fades yaw")
-    assert_near(out.pitch, 4, "paused fades pitch")
-    assert_near(out.z, 2, "the lean rides the same fade as the rotation")
-    assert_near(out.roll, 1.5, "and the tilt rides it too")
-end
-
--- The tracked modes land on the entry-relative pose, whose roll is the absolute
--- one already, so the two branches agree about roll and about nothing else.
-do
-    local abs = pose(-12, 5, 3, 1, 2, 3)
-    local rel = pose(-4, 2, 7, 0.5, 0.5, 1)
-    for _, mode in ipairs({ "marker", "tracked" }) do
-        local out = AdsBlend.blend(mode, 0.0, abs, rel)
-        assert_near(out.yaw, -4, mode .. " lands on the relative yaw")
-        assert_near(out.pitch, 2, mode .. " lands on the relative pitch")
-        assert_near(out.x, 0.5, mode .. " lands on the relative x")
-        assert_near(out.z, 1, mode .. " lands on the relative z")
-        assert_near(out.roll, 3, mode .. " roll is the absolute one, not the relative one")
-    end
-end
-
--- Mid-fade, which is the only place the interpolation curve itself is
--- observable. Tested at the endpoints alone, any curve at all passes.
-do
-    local abs = pose(-12, 5, 3, 1, 2, 3)
-    local rel = pose(-4, 2, 7, 0.5, 0.5, 1)
-    local out = AdsBlend.blend("tracked", 0.25, abs, rel)
-    assert_near(out.yaw, -12 * 0.25 + -4 * 0.75, "tracked yaw is linear in the scale")
-    assert_near(out.pitch, 5 * 0.25 + 2 * 0.75, "tracked pitch is linear in the scale")
-    assert_near(out.x, 1 * 0.25 + 0.5 * 0.75, "tracked x is linear in the scale")
-    assert_near(out.roll, 3, "and roll is still untouched half way through")
+    local out = AdsBlend.blend(0.25, pose(-12, 5, 3, 2, 2, 4))
+    assert_near(out.x, 0.5, "the lean x rides the fade")
+    assert_near(out.z, 1, "the lean z rides the fade")
+    assert_near(out.yaw, -12, "yaw is untouched mid-fade")
 end
 
 -- Position arrives only on the frames a packet did. A nil has to pass through
--- as a nil: blending it against a zero would drag the applied lean toward
--- centre on every frame without a packet, at the tracker's own rate.
+-- as a nil: scaling it against a zero would drag the applied lean toward
+-- centre on every frame without a packet.
 do
-    local out = AdsBlend.blend("tracked", 0.5,
-        pose(-12, 5, 3, nil, nil, nil), pose(-4, 2, 3, nil, nil, nil))
-    assert_eq(out.x, nil, "a frame with no packet blends no position")
-    assert_near(out.yaw, -8, "rotation still blends on a frame with no packet")
-
-    local paused = AdsBlend.blend("paused", 0.5,
-        pose(-12, 5, 3, nil, nil, nil), pose(0, 0, 3, nil, nil, nil))
-    assert_eq(paused.x, nil, "and the same in paused")
-    assert_near(paused.yaw, -6, "paused still fades rotation on a frame with no packet")
+    local out = AdsBlend.blend(0.5, pose(-12, 5, 3, nil, nil, nil))
+    assert_eq(out.x, nil, "a frame with no packet carries no position")
+    assert_near(out.yaw, -12, "rotation still passes on a frame with no packet")
 end
 
 -- Before the first sample the interpolator returns nil for the whole rotation
--- triple. Nothing to blend and nothing to invent.
+-- triple. Nothing to invent.
 do
-    local out = AdsBlend.blend("tracked", 0.5,
-        pose(nil, nil, nil, 1, 2, 3), pose(nil, nil, nil, 0.5, 0.5, 1))
-    assert_eq(out.yaw, nil, "no rotation yet blends to no rotation")
-    assert_near(out.x, 0.75, "position still blends before the first rotation sample")
+    local out = AdsBlend.blend(0.5, pose(nil, nil, nil, 1, 2, 3))
+    assert_eq(out.yaw, nil, "no rotation yet passes as no rotation")
+    assert_near(out.x, 0.5, "position still eases before the first rotation sample")
 end
 
 print("== ADS transition OK ==")

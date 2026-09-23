@@ -162,9 +162,8 @@ assert_false(settleStaleLatch(), "loading blocks tracking")
 assert_eq(st:getReason(), State.REASON.LOADING, "block reason is loading")
 assert_true(GameUI.IsLoading(), "loading latch survives while the probe cannot answer")
 
--- 9. Aiming down sights blocks tracking; lowering the weapon resumes it. The
---    game owns the sight picture while ADS is up, so head rotation stands down
---    for the duration.
+-- 9. Aiming down sights leaves tracking on and reports the sights up, which is
+--    what init.lua eases the lean out on.
 live.has_player = true
 settleStaleLatch()  -- clears the stale loading latch, which re-arms the warmup
 spin(1.6)           -- WARMUP_SECONDS
@@ -172,120 +171,39 @@ assert_true(st:isTrackingAllowed(), "loading latch heals once the player is back
 
 live.upper_body = PSM_UPPERBODY_AIM
 spinPastCacheTtl()
-assert_false(st:isTrackingAllowed(), "ADS blocks tracking")
-assert_eq(st:getReason(), State.REASON.ADS, "block reason is ads")
-
-live.upper_body = 0
-spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "leaving ADS resumes tracking")
-
--- 10. The ADS edge observers latch nothing, so an OnExit that never arrives
---     cannot strand tracking off - the next poll of the state machine is the
---     only thing that decides.
-live.upper_body = PSM_UPPERBODY_AIM
-observers["AimingStateEvents.OnEnter"]()
-assert_false(st:isTrackingAllowed(), "ADS enter edge blocks on the same frame")
-live.upper_body = 0
-spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "ADS heals within the cache TTL with no OnExit edge")
-
--- 11. A real UI reason outranks ADS, so the status line names the menu rather
---     than the weapon the player happened to be holding.
-live.in_menu = true
-live.upper_body = PSM_UPPERBODY_AIM
-spinPastCacheTtl()
-assert_false(st:isTrackingAllowed(), "menu open blocks while ADS")
-assert_eq(st:getReason(), State.REASON.MENU, "menu outranks ads")
-live.in_menu = false
-live.upper_body = 0
-spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "back to gameplay")
-
--- 12. ads_mode decides whether ADS closes the gate at all. "paused" stands
---     tracking down; "marker" and "tracked" keep the gate open and hand the
---     decision to init.lua, which feeds poses relative to the one the sights
---     came up on. isAdsActive() is what tells init.lua the sights are up while
---     the gate is still open, so it has to be true for the whole aim.
-local ads_mode = "paused"
-st.settings = {
-    get = function(_, key)
-        if key == "ads_mode" then return ads_mode end
-        return true  -- enabled / position_enabled
-    end,
-}
-
-live.upper_body = PSM_UPPERBODY_AIM
-spinPastCacheTtl()
-assert_false(st:isTrackingAllowed(), "paused mode blocks on ADS")
-assert_eq(st:getReason(), State.REASON.ADS, "paused mode reason is ads")
-assert_true(st:isAdsActive(), "paused mode still reports ADS active")
-
-ads_mode = "marker"
-spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "marker mode keeps the gate open on ADS")
-assert_eq(st:getReason(), State.REASON.ALLOWED, "marker mode reason is allowed")
-assert_true(st:isAdsActive(), "marker mode reports ADS active")
-
-ads_mode = "tracked"
-spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "tracked mode keeps the gate open on ADS")
-assert_eq(st:getReason(), State.REASON.ALLOWED, "tracked mode reason is allowed")
-assert_true(st:isAdsActive(), "tracked mode reports ADS active")
+assert_true(st:isTrackingAllowed(), "ADS leaves tracking on")
+assert_eq(st:getReason(), State.REASON.ALLOWED, "and the reason stays allowed")
+assert_true(st:isAdsActive(), "ADS is reported while the sights are up")
 
 live.upper_body = 0
 spinPastCacheTtl()
 assert_true(st:isTrackingAllowed(), "lowering the weapon stays allowed")
 assert_false(st:isAdsActive(), "lowering the weapon clears the ADS flag")
 
--- 13. With an ADS transition wired, "paused" holds the gate OPEN for the length
---     of the fade and closes it only once the head pose has actually gone. A
---     gate that shut on the first aiming frame cut the pose in one frame, which
---     is the jolt the fade exists to remove. Without a fade wired (every case
---     above) the branch keeps its pre-fade behaviour, which is what lets the
---     rest of this file construct a State with no init.lua around it.
-local sights_up = false
-st:setAdsFade({ isSightsUp = function() return sights_up end })
-
-ads_mode = "paused"
+-- 10. The ADS edge observers latch nothing, so an OnExit that never arrives
+--     cannot strand the flag on - the next poll of the state machine is the
+--     only thing that decides.
 live.upper_body = PSM_UPPERBODY_AIM
-spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "paused keeps the gate open while the pose fades out")
-assert_true(st:isAdsActive(), "and still reports the sights up, which is what drives the fade")
-
-sights_up = true
-spinPastCacheTtl()
-assert_false(st:isTrackingAllowed(), "paused closes the gate once the pose has gone")
-assert_eq(st:getReason(), State.REASON.ADS, "and the reason is still ads")
-
-sights_up = false
-spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "the gate reopens as soon as the sights start dropping")
-
--- The tracked modes never consult the fade for the gate: they keep it open for
--- the whole aim whatever the transition is doing.
-ads_mode = "tracked"
-sights_up = true
-spinPastCacheTtl()
-assert_true(st:isTrackingAllowed(), "tracked keeps the gate open at the sights-up end")
-
-st:setAdsFade(nil)
-ads_mode = "tracked"
+observers["AimingStateEvents.OnEnter"]()
+assert_true(st:isAdsActive(), "ADS enter edge is seen on the same frame")
 live.upper_body = 0
 spinPastCacheTtl()
+assert_false(st:isAdsActive(), "ADS heals within the cache TTL with no OnExit edge")
 
--- A menu returning early must not leave a stale ADS flag behind: init.lua
--- would otherwise hold a frozen pose through a suppression that already
--- peeled it.
-ads_mode = "tracked"
+-- 11. A menu returning early must not leave a stale ADS flag behind, and it
+--     reports its own reason.
 live.upper_body = PSM_UPPERBODY_AIM
 spinPastCacheTtl()
 assert_true(st:isAdsActive(), "ADS flag set before the menu opens")
 live.in_menu = true
 spinPastCacheTtl()
-assert_false(st:isTrackingAllowed(), "menu blocks while ADS in tracked mode")
+assert_false(st:isTrackingAllowed(), "menu open blocks while ADS")
+assert_eq(st:getReason(), State.REASON.MENU, "the menu names itself")
 assert_false(st:isAdsActive(), "menu clears the ADS flag")
 live.in_menu = false
 live.upper_body = 0
+spinPastCacheTtl()
+assert_true(st:isTrackingAllowed(), "back to gameplay")
 
 -- The chase-camera flag decides WHERE the head rotation goes, so it has to be
 -- false whenever tracking is suppressed as well: init.lua reads it to hand the

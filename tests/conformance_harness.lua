@@ -38,7 +38,7 @@ end
 -- Why each unit cannot run, in the words of what this port actually is.
 local UNSUPPORTED = {
     position_interpolator =
-        "position is passed through on packet frames only and never interpolated - see the assessment in modules/ads_pose.lua",
+        "position is passed through on packet frames only and never interpolated - see the note above the raw_x read in init.lua",
     position_processor =
         "the position pipeline works in the Cyberpunk camera frame, where the axes are permuted and two of them inverted, so its output is not comparable to the vector's pipeline-frame values axis for axis; tests/camera_position_test.lua covers it in its own frame",
     tracking_processor =

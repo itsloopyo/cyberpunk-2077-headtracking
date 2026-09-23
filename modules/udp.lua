@@ -29,13 +29,12 @@ local DATA_FRESHNESS_WINDOW_S = 0.5
 local reusable_data = { yaw = 0, pitch = 0, roll = 0, x = 0, y = 0, z = 0, seq = 0 }
 
 -- native_flags bit layout, mirrored in native/src/ScriptChannel.cpp. Bit 6 is
--- live status (connection locality); bits 3-5 and 7 are one-shot edges that
--- native sets when a chord/key transitions to down, and Lua clears on consume.
+-- live status (connection locality); bits 3-5 are one-shot edges that native
+-- sets when a chord/key transitions to down, and Lua clears on consume.
 local FLAG_TOGGLE_TRACKING   = 8   -- bit 3
 local FLAG_CYCLE_MODE        = 16  -- bit 4
 local FLAG_TOGGLE_YAW        = 32  -- bit 5
 local FLAG_REMOTE_CONNECTION = 64  -- bit 6, live status (not an edge)
-local FLAG_CYCLE_ADS_MODE    = 128 -- bit 7
 
 local function hasFlag(flags, bit)
     return (math.floor(flags / bit) % 2) >= 1
@@ -54,7 +53,6 @@ local chase_camera_active = false
 local native_toggle_tracking_requested = false
 local native_cycle_mode_requested = false
 local native_toggle_yaw_requested = false
-local native_cycle_ads_mode_requested = false
 
 -- Hoisted call trampolines. `pcall(function() ... end)` allocates a fresh
 -- closure per invocation and both of these run every frame, so the arguments
@@ -179,14 +177,6 @@ function TrackingInput:consumeNativeToggleYawRequested()
     return false
 end
 
-function TrackingInput:consumeNativeCycleAdsModeRequested()
-    if native_cycle_ads_mode_requested then
-        native_cycle_ads_mode_requested = false
-        return true
-    end
-    return false
-end
-
 function TrackingInput:secondsSinceLastPacket()
     if not last_successful_parse_time then return math.huge end
     return os.clock() - last_successful_parse_time
@@ -225,7 +215,6 @@ function TrackingInput:poll()
     if hasFlag(native_flags, FLAG_TOGGLE_TRACKING) then native_toggle_tracking_requested = true end
     if hasFlag(native_flags, FLAG_CYCLE_MODE)      then native_cycle_mode_requested      = true end
     if hasFlag(native_flags, FLAG_TOGGLE_YAW)      then native_toggle_yaw_requested      = true end
-    if hasFlag(native_flags, FLAG_CYCLE_ADS_MODE)  then native_cycle_ads_mode_requested  = true end
 
     -- NaN check. Everything else the native side already validated.
     if yaw ~= yaw or pitch ~= pitch or roll ~= roll then return nil end
