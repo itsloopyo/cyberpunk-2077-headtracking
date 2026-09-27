@@ -18,6 +18,7 @@ To decouple your shots from where your head is pointing, the mod switches **play
 - **Bullets are physical objects.** They can be seen in flight, and they interact with the world rather than teleporting to the target.
 - **Tech weapons are untouched.** Weapons that charge through cover keep their own behavior.
 - **NPCs still use hitscan.** Only the player is converted, so there is no added cost from every enemy in a firefight spawning projectiles.
+- **Leaning moves your shots while you aim down sights.** With the sights up, a head lean moves your weapon and the point your rounds leave from, so you can lean out and shoot past cover. At the hip a lean moves only the view, as before.
 - **23 unique or quest weapons stay on hitscan** (MA70, AirDrop variants, Nova Doom Doom, and Saratoga Maelstrom among them) and will not decouple.
 
 Everything is applied through TweakXL, so removing the mod restores stock behavior completely.
@@ -168,7 +169,11 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 
 ### Aiming down sights
 
-Head tracking stays on while you aim. The weapon stays where your mouse or controller points it, so with your head turned it sits off to one side with its sights still lined up, and your rounds land where those sights point. Leaning eases out while the sights are up, because it would move your eye off them. Head movement is scaled to the zoom, so a scope does not magnify it.
+Head tracking stays on while you aim. The weapon stays where your mouse or controller points it, so with your head turned it sits off to one side with its sights still lined up, and your rounds land where those sights point.
+
+Leaning carries on through the aim. As the sights come up, your arms and weapon move with your head, so the sights stay in front of your eye, and your rounds leave from where your eye is. Lean round a corner with the sights up and you can hit what you can see from there. Handing the lean from the camera to the weapon does not move the view. Head movement, the lean included, is scaled to the zoom so a scope does not magnify it, which means a high-magnification scope leans less.
+
+A lean stops about 10 cm short of walls and other level geometry, so it never puts the view inside them.
 
 ## In vehicles
 

@@ -4,11 +4,17 @@
 
 ### Changed
 
-- Raising the sights now eases the view onto the aim over 150ms instead of snapping
-  to it, and lowering them eases back over 250ms. All three ADS modes make the same
-  move, and the durations are the shared ones from cameraunlock-core. Tapping the aim
-  button turns the transition round from wherever it had reached rather than from the
-  end it was heading for, so a tap does not step the view
+- Leaning now carries on while you aim down sights. As the sights come up, the lean
+  moves from the camera to your arms and weapon, so the sights stay in front of your
+  eye and your rounds leave from where your eye is: lean round a corner with the
+  sights up and you can shoot what you can see from there. The hand-over takes 150ms
+  going in and 250ms coming out, and the hand-over itself does not move the view.
+  Tapping the aim button turns it round from wherever it had reached. The lean used
+  to ease out while the sights were up
+- A lean now stops about 10 cm short of walls and other level geometry, at the hip and
+  on the sights, instead of putting the view inside them. The allowance tightens at
+  once and opens back up over about 200ms, so stepping past a doorframe does not snap
+  the view. Contact is written to `HeadTracking.log`
 
 ### Added
 

@@ -5,9 +5,10 @@
 -- cameraunlock-core's cpp/include/cameraunlock/ads/ads_fade.h; the two
 -- durations are pinned to the core constants by tests/core_constants_test.lua.
 --
--- The transition a mod rides to ease its positional lean out while the sights
--- are up and back in when they come down (ads_blend.lua). Rotation never rides
--- it: head tracking carries straight on through the aim.
+-- The transition the lean rides as it changes hands: on the camera at the hip,
+-- on the rig with the sights up, so the weapon comes with the eye
+-- (Camera:applyPosition). Rotation never rides it: head tracking carries
+-- straight on through the aim.
 --
 -- This module owns the SHAPE of the transition and nothing else. It returns a
 -- scale, 1 at the hip and 0 with the sights up.

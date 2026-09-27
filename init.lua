@@ -68,7 +68,6 @@ local State = safeRequire("modules/state")
 local UI = safeRequire("modules/ui")
 local BuiltinCrosshair = safeRequire("modules/builtin_crosshair")
 local AdsFade = safeRequire("modules/ads_fade")
-local AdsBlend = safeRequire("modules/ads_blend")
 local Aim = safeRequire("modules/aim")
 local NativeSettingsIntegration = safeRequire("modules/nativesettings")
 local Perf = safeRequire("modules/perf")
@@ -289,8 +288,8 @@ local was_tracking_allowed = true
 -- cam.localOrientation and has to peel it back out before standing down.
 local was_chase_camera = false
 
--- Eases the lean out while the sights are up. See modules/ads_fade.lua and
--- modules/ads_blend.lua.
+-- Hands the lean from the camera to the rig as the sights come up. See
+-- modules/ads_fade.lua and Camera:applyPosition.
 local ads_fade = nil
 
 local function hotkeyDebounced(id)
@@ -422,7 +421,6 @@ registerForEvent("onInit", function()
 
     runInitStep("ads_fade", function()
         if not AdsFade then error("AdsFade module failed to load") end
-        if not AdsBlend then error("AdsBlend module failed to load") end
         ads_fade = AdsFade.new()
     end)
 
@@ -553,8 +551,9 @@ local function onUpdateImpl(deltaTime)
     end
     was_tracking_allowed = tracking_allowed
 
-    -- Aiming down sights leaves head tracking on; only the lean eases out, so
-    -- the eye stays on the sights (modules/ads_blend.lua). The sights come from
+    -- Aiming down sights leaves head tracking on and hands the lean from the
+    -- camera to the rig, so the weapon comes with the eye and stays on the
+    -- sights, and the round leaves from where the eye is. The sights come from
     -- the game's own aim state, and any suppression resets the transition so
     -- the next aim starts clean.
     local ads_scale = ads_fade:update(state:isAdsActive(), now)
@@ -653,12 +652,8 @@ local function onUpdateImpl(deltaTime)
     local raw_x, raw_y, raw_z
     if data then raw_x, raw_y, raw_z = data.x or 0, data.y or 0, data.z or 0 end
 
-    -- Off the aim the scale is 1 and the pose passes through untouched.
-    local blended = AdsBlend.blend(ads_scale,
-        { yaw = interp_yaw, pitch = interp_pitch, roll = interp_roll,
-          x = raw_x, y = raw_y, z = raw_z })
-    local pose_yaw, pose_pitch, pose_roll = blended.yaw, blended.pitch, blended.roll
-    local pose_x, pose_y, pose_z = blended.x, blended.y, blended.z
+    local pose_yaw, pose_pitch, pose_roll = interp_yaw, interp_pitch, interp_roll
+    local pose_x, pose_y, pose_z = raw_x, raw_y, raw_z
 
 
     if pose_yaw ~= nil then
@@ -677,7 +672,14 @@ local function onUpdateImpl(deltaTime)
         if chase_camera then
             camera:applyChaseCamPosition(pose_x, pose_y, pose_z, deltaTime)
         else
-            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime)
+            -- ads_scale is 1 at the hip and 0 with the sights up: the lean
+            -- rides the camera at the hip and the rig on the sights, and the
+            -- eye stays put while it changes hands. Mounted in a vehicle the
+            -- rig stays where the seat puts it, so on the sights the lean
+            -- eases out instead.
+            local mounted = Game.GetMountedVehicle(Game.GetPlayer()) ~= nil
+            local rig_share = mounted and 0.0 or (1.0 - ads_scale)
+            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime, ads_scale, rig_share)
         end
         perf:recordCameraUpdate()
     end

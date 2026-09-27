@@ -23,8 +23,28 @@ do
     end
 end
 
+local LeanClamp = require("modules/lean_clamp")
+
+-- How far off a surface the lean holds the eye, from the collision hit. The
+-- near plane measured at 1.5-3.5 cm against a Watson wall, whose rendered face
+-- sat 11 cm behind its collision proxy, so 10 cm clears the near plane with room
+-- to spare wherever the two coincide.
+local LEAN_SKIN = 0.10
+-- A 200ms time constant for the allowance reopening. Tightening is instant.
+local LEAN_RELEASE_SMOOTHING = 0.9
+
 local Camera = {}
 Camera.__index = Camera
+
+-- Into HeadTracking.log as well as the console, the same route init.lua's mlog
+-- takes, because a lean clamp that has stopped engaging is a "leaning puts me
+-- through walls" report and has to be answerable from that one file.
+local function hlog(msg)
+    print(msg)
+    if type(Game.HeadTrackingLog) == "function" then
+        pcall(Game.HeadTrackingLog, msg)
+    end
+end
 
 -- Count consecutive frames where the FPP camera component is nil while
 -- tracking is supposed to be allowed. This DOES happen during legitimate
@@ -303,6 +323,19 @@ function Camera.new(settings)
     self.pos_raw = { x = 0, y = 0, z = 0 }
     self.pos_has_value = false -- as rot_has_value, for the position smoother
     self.pos_applied = false   -- have we ever written a non-zero position?
+    -- The share of the lean carried by the rig root rather than the camera, in
+    -- the camera bone's frame, and whether the root holds an offset right now.
+    self.rig_local = { x = 0, y = 0, z = 0 }
+    self.rig_applied = false
+    -- What the rig root holds right now, in the root's own frame. The clean eye
+    -- is the camera bone less this, because the bone rides the root.
+    self.rig_written = { x = 0, y = 0, z = 0 }
+
+    self.lean_clamp = LeanClamp.new(LEAN_SKIN, LEAN_RELEASE_SMOOTHING)
+    self.lean_last_eye = nil
+    self.lean_was_contact = false
+    self.lean_was_failed = false
+    self.lean_last_log = 0
 
     -- Initialize cache from settings
     self:refreshSettingsCache()
@@ -363,6 +396,88 @@ local function getFPPCamera()
 
     local cam = player:GetFPPCameraComponent()
     return cam, player
+end
+
+-- The player's skeleton root. The FPP camera's bone, the arms, the attachment
+-- slots the held weapon sits in and the hit representation all hang off it, so
+-- offsetting it carries all of them together, and the projectile start point
+-- with them: a round leaves from a fixed offset to the camera wherever the root
+-- has moved it.
+local RIG_COMPONENT = "root"
+-- A component sitting on the camera bone at zero local offset and identity
+-- local orientation. Its world axes are the frame cam.localPosition is written
+-- in, without the head rotation the camera component itself carries. The mouse
+-- pitch lives on this bone, not on the camera's local orientation.
+local CAMERA_BONE_COMPONENT = "EnvTriggerActivator"
+
+-- The trace has to see the surface the lean comes to rest against, so it
+-- overreaches by the skin measured along the surface normal: skin / cos of the
+-- approach angle, the cosine floored so a grazing wall does not ask for an
+-- unbounded ray.
+local LEAN_COS_FLOOR = 0.25
+-- What blocks the eye. Static holds walls and props and Terrain the ground; the
+-- player's own collider answers in Shooting, which is why that one is not here.
+local LEAN_GROUPS = { "Static", "Terrain", "Dynamic", "Vehicle" }
+-- A clean eye that moves further than this between two frames has been
+-- teleported or cut to, and the allowance left by the old room's wall goes.
+local LEAN_CUT_DISTANCE = 1.0
+-- Wall-clock seconds between clamp samples in the log while a lean is held.
+local LEAN_LOG_INTERVAL_S = 10.0
+
+local function getRig(player)
+    return player:FindComponentByName(CName.new(RIG_COMPONENT))
+end
+
+local function getCameraBone(player)
+    return player:FindComponentByName(CName.new(CAMERA_BONE_COMPONENT))
+end
+
+local function dot3(a, b)
+    return a.x * b.x + a.y * b.y + a.z * b.z
+end
+
+--- An offset held in a component with these world axes, as a world vector.
+local function axesToWorld(m, x, y, z)
+    return {
+        x = x * m.X.x + y * m.Y.x + z * m.Z.x,
+        y = x * m.X.y + y * m.Y.y + z * m.Z.y,
+        z = x * m.X.z + y * m.Y.z + z * m.Z.z,
+    }
+end
+
+local function _callSpatialQueries()
+    return Game.GetSpatialQueriesSystem()
+end
+local function _callRaycast(sq, from, to, group)
+    return sq:SyncRaycastByCollisionGroup(from, to, CName.new(group), false, false)
+end
+
+--- The engine half of the lean clamp (modules/lean_clamp.lua owns the policy).
+--- A line from the clean eye along the lean, nearest hit over LEAN_GROUPS.
+local function leanQuery(start, dir, max_distance)
+    local okS, sq = pcall(_callSpatialQueries)
+    if not okS or not sq then return { queried = false } end
+    local reach = max_distance - LEAN_SKIN + LEAN_SKIN / LEAN_COS_FLOOR
+    local from = Vector4.new(start.x, start.y, start.z, 1.0)
+    local to = Vector4.new(start.x + dir.x * reach, start.y + dir.y * reach,
+                           start.z + dir.z * reach, 1.0)
+    local best = nil
+    for i = 1, #LEAN_GROUPS do
+        local ok, hit, res = pcall(_callRaycast, sq, from, to, LEAN_GROUPS[i])
+        if not ok then return { queried = false } end
+        if hit then
+            local p, n = res.position, res.normal
+            local dx, dy, dz = p.x - start.x, p.y - start.y, p.z - start.z
+            local along = dx * dir.x + dy * dir.y + dz * dir.z
+            local cos = math.abs(dir.x * n.x + dir.y * n.y + dir.z * n.z)
+            if cos < LEAN_COS_FLOOR then cos = LEAN_COS_FLOOR end
+            -- The policy subtracts the skin along the lean; the eye has to stay
+            -- a skin off the SURFACE, which along a slanted lean is skin / cos.
+            local distance = along - LEAN_SKIN / cos + LEAN_SKIN
+            if not best or distance < best then best = distance end
+        end
+    end
+    return { queried = true, blocked = best ~= nil, distance = best or 0 }
 end
 
 local function _readZoomTerms(cam)
@@ -925,9 +1040,57 @@ end
 --- is outstanding, and only the caller that owns the camera can answer that.
 function Camera:_clearPositionState()
     self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
+    self.rig_local.x, self.rig_local.y, self.rig_local.z = 0, 0, 0
+    self.lean_clamp:reset()
+    self.lean_last_eye = nil
     self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = 0, 0, 0
     self.pos_raw.x, self.pos_raw.y, self.pos_raw.z = 0, 0, 0
     self.pos_has_value = false
+end
+
+--- Put the rig root back where the game keeps it. Nothing else writes that
+--- position, so an offset left in it stays there through a menu, a vehicle and
+--- a loading screen alike.
+function Camera:_releaseRig(player)
+    if not self.rig_applied then return end
+    pcall(_callSetLocalPosition, getRig(player), Vector4.new(0, 0, 0, 1.0))
+    self.rig_written.x, self.rig_written.y, self.rig_written.z = 0, 0, 0
+    self.rig_applied = false
+end
+
+--- Cut a lean (x, y, z, in the camera bone's frame) down to what the level
+--- leaves room for, measured from the clean eye. Returns the scale to apply.
+function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime)
+    local rig_world = axesToWorld(rig_m, self.rig_written.x, self.rig_written.y, self.rig_written.z)
+    local eye = { x = bone_m.W.x - rig_world.x, y = bone_m.W.y - rig_world.y, z = bone_m.W.z - rig_world.z }
+    local last = self.lean_last_eye
+    if last then
+        local dx, dy, dz = eye.x - last.x, eye.y - last.y, eye.z - last.z
+        if dx * dx + dy * dy + dz * dz > LEAN_CUT_DISTANCE * LEAN_CUT_DISTANCE then
+            self.lean_clamp:reset()
+        end
+    end
+    self.lean_last_eye = eye
+
+    local desired = axesToWorld(bone_m, x, y, z)
+    local want = math.sqrt(dot3(desired, desired))
+    local out = self.lean_clamp:apply(eye, desired, deltaTime, leanQuery)
+    local got = math.sqrt(dot3(out, out))
+    local scale = want > 0 and got / want or 1.0
+
+    local contact = self.lean_clamp:inContact()
+    local failed = self.lean_clamp:lastQueryFailed()
+    local now = os.clock()
+    if contact ~= self.lean_was_contact or failed ~= self.lean_was_failed
+            or (want > 0.01 and now - self.lean_last_log >= LEAN_LOG_INTERVAL_S) then
+        hlog(string.format(
+            "[HeadTracking] lean clamp: contact=%s query_failed=%s asked=%.3fm allowed=%.3fm",
+            tostring(contact), tostring(failed), want, got))
+        self.lean_was_contact = contact
+        self.lean_was_failed = failed
+        self.lean_last_log = now
+    end
+    return scale
 end
 
 --- One-shot startup reset: forces cam.localOrientation to identity and
@@ -1044,6 +1207,10 @@ function Camera:suspend()
     if self.pos_applied then
         if cam then pcall(_callSetLocalPosition, cam, Vector4.new(0, 0, 0, 1.0)) end
         self.pos_applied = false
+    end
+    if self.rig_applied then
+        local player = Game.GetPlayer()
+        if player then self:_releaseRig(player) end
     end
     -- Outside the pos_applied branch: that flag is only ever set by
     -- applyPosition, so gating the state reset on it left the chase-camera path
@@ -1167,23 +1334,32 @@ function Camera:_smoothPosition(rx, ry, rz, deltaTime)
     return self:_clampPosition(self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z)
 end
 
---- Apply 6DOF head translation to the FPP camera.
+--- Apply 6DOF head translation to the FPP camera and the rig it hangs off.
 --- Inputs are raw OpenTrack cm values (lateral, vertical, longitudinal), or nil
 --- on a frame with no fresh packet - call this every frame, see _smoothPosition.
+---
+--- The lean is split between two carriers. On the camera it moves the eye and
+--- nothing else: the arms, the weapon and the round stay with the body. On the
+--- rig root it moves all of them, so the sights stay on the eye and the round
+--- leaves from where the eye is. The shares need not sum to 1, and 0 on both
+--- removes the lean.
 --- Pipeline: per-axis sensitivity -> exponential smoothing ->
 ---           cm to m -> axis remap -> asymmetric clamp -> SetLocalPosition.
 --- Cyberpunk local cam frame (smoke-test confirmed): +Z is up; we map
 ---   OT y (vertical, +up)   -> cam Z
 ---   OT x (lateral, +right) -> cam X
 ---   OT z (longitudinal, +fwd) -> cam Y
-function Camera:applyPosition(rx, ry, rz, deltaTime)
+--- @param camera_share number Fraction of the lean carried by the camera
+--- @param rig_share number Fraction of the lean carried by the rig root
+function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
     local c = self.cached_settings
     if not c.position_enabled then
+        local cam, player = getFPPCamera()
         if self.pos_applied then
-            local cam = getFPPCamera()
             if cam then pcall(_callSetLocalPosition, cam, Vector4.new(0, 0, 0, 1.0)) end
             self.pos_applied = false
         end
+        if player then self:_releaseRig(player) end
         self:_clearPositionState()
         return
     end
@@ -1191,7 +1367,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
         return
     end
 
-    local cam = getFPPCamera()
+    local cam, player = getFPPCamera()
     if not cam then return end
 
     local cam_x, cam_y, cam_z = self:_smoothPosition(rx, ry, rz, deltaTime)
@@ -1203,11 +1379,44 @@ function Camera:applyPosition(rx, ry, rz, deltaTime)
 
     local zoom = self.zoom_factor
     cam_x, cam_y, cam_z = cam_x * zoom, cam_y * zoom, cam_z * zoom
-    pcall(_callSetLocalPosition, cam, Vector4.new(cam_x, cam_y, cam_z, 1.0))
-    self.pos_local.x = cam_x
-    self.pos_local.y = cam_y
-    self.pos_local.z = cam_z
+
+    -- Both carriers move the eye to the same place, so the clamp cuts the whole
+    -- lean once and the shares divide what is left.
+    local rig = getRig(player)
+    local rig_m = rig:GetLocalToWorld()
+    local bone_m = getCameraBone(player):GetLocalToWorld()
+    local room = self:_clampLean(bone_m, rig_m, cam_x, cam_y, cam_z, deltaTime)
+    cam_x, cam_y, cam_z = cam_x * room, cam_y * room, cam_z * room
+
+    local eye_x, eye_y, eye_z = cam_x * camera_share, cam_y * camera_share, cam_z * camera_share
+    pcall(_callSetLocalPosition, cam, Vector4.new(eye_x, eye_y, eye_z, 1.0))
+    -- Only the camera's share opens a gap between the eye and the round's start
+    -- point. The rig's share moves both, so the aim hook and the reticle are
+    -- handed the camera's share alone.
+    self.pos_local.x = eye_x
+    self.pos_local.y = eye_y
+    self.pos_local.z = eye_z
     self.pos_applied = true
+
+    local bx, by, bz = cam_x * rig_share, cam_y * rig_share, cam_z * rig_share
+    self.rig_local.x, self.rig_local.y, self.rig_local.z = bx, by, bz
+    if rig_share > 0 then
+        -- Re-expressed in the root's frame, so the root moves the eye exactly
+        -- where the same offset on the camera would have. The bone is pitched
+        -- with the mouse and the root is not.
+        local d = axesToWorld(bone_m, bx, by, bz)
+        local ox, oy, oz = dot3(d, rig_m.X), dot3(d, rig_m.Y), dot3(d, rig_m.Z)
+        pcall(_callSetLocalPosition, rig, Vector4.new(ox, oy, oz, 1.0))
+        self.rig_written.x, self.rig_written.y, self.rig_written.z = ox, oy, oz
+        self.rig_applied = true
+    else
+        self:_releaseRig(player)
+    end
+end
+
+--- The rig root's share of the lean, in the camera bone's frame.
+function Camera:getRigPosition()
+    return self.rig_local.x, self.rig_local.y, self.rig_local.z
 end
 
 --- Chase-camera translation: the same processing as applyPosition, published

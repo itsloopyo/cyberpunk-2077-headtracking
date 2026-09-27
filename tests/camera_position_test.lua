@@ -27,6 +27,7 @@
 -- moved at the render rate.
 
 local Camera = assert(loadfile("modules/camera.lua"))()
+local LeanClamp = require("modules.lean_clamp")
 
 local EPS = 1e-9
 
@@ -55,6 +56,14 @@ local function bare_camera(overrides)
     cam.pos_local = { x = 0, y = 0, z = 0 }
     cam.pos_has_value = false
     cam.pos_applied = false
+    cam.rig_local = { x = 0, y = 0, z = 0 }
+    cam.rig_applied = false
+    cam.rig_written = { x = 0, y = 0, z = 0 }
+    cam.lean_clamp = LeanClamp.new(0.10, 0.9)
+    cam.lean_last_eye = nil
+    cam.lean_was_contact = false
+    cam.lean_was_failed = false
+    cam.lean_last_log = 0
     cam.is_remote_connection = false
     cam.cached_settings = {
         position_enabled = true,
@@ -283,21 +292,86 @@ end
 
 -- ------------------------------------------- the position-enabled toggle
 
+local function v3(x, y, z) return { x = x, y = y, z = z } end
+
+--- A player facing 30 degrees off world +Y, with the view pitched 35 degrees
+--- down. The camera bone carries the pitch and the rig root does not, which is
+--- what the game reports (GetLocalToWorld on EnvTriggerActivator and on root).
+local YAW, PITCH = math.rad(30), math.rad(-35)
+local ROOT_AXES = {
+    X = v3(math.cos(YAW), -math.sin(YAW), 0),
+    Y = v3(math.sin(YAW), math.cos(YAW), 0),
+    Z = v3(0, 0, 1),
+    W = v3(100, 200, 1.0),
+}
+local BONE_AXES = {
+    X = ROOT_AXES.X,
+    Y = v3(ROOT_AXES.Y.x * math.cos(PITCH), ROOT_AXES.Y.y * math.cos(PITCH), math.sin(PITCH)),
+    Z = v3(-ROOT_AXES.Y.x * math.sin(PITCH), -ROOT_AXES.Y.y * math.sin(PITCH), math.cos(PITCH)),
+    W = v3(100, 200, 2.7),
+}
+
+--- Where an offset written into a component with these axes puts the eye.
+local function to_world(axes, v)
+    return v3(v.x * axes.X.x + v.y * axes.Y.x + v.z * axes.Z.x,
+              v.x * axes.X.y + v.y * axes.Y.y + v.z * axes.Z.y,
+              v.x * axes.X.z + v.y * axes.Y.z + v.z * axes.Z.z)
+end
+
 --- CET globals applyPosition reaches for. The chase-camera path needs none of
---- this, which is why the two cases below are not written the same way.
+--- this, which is why the cases below are not written the same way.
+--- The level, as the raycast stub sees it: nil for open space, or a wall plane
+--- given by a point on it and its normal. Every group answers the same.
+local wall = nil
+local raycasts = 0
+
+local function raycast(from, to)
+    raycasts = raycasts + 1
+    if not wall then return false, nil end
+    local d = v3(to.x - from.x, to.y - from.y, to.z - from.z)
+    local denom = d.x * wall.n.x + d.y * wall.n.y + d.z * wall.n.z
+    if math.abs(denom) < 1e-12 then return false, nil end
+    local t = ((wall.p.x - from.x) * wall.n.x + (wall.p.y - from.y) * wall.n.y
+             + (wall.p.z - from.z) * wall.n.z) / denom
+    if t < 0 or t > 1 then return false, nil end
+    return true, { position = v3(from.x + d.x * t, from.y + d.y * t, from.z + d.z * t), normal = wall.n }
+end
+
 local function stub_cet()
+    wall = nil
+    raycasts = 0
     local written = {}
+    local rig_written = {}
     local component = {
         SetLocalPosition = function(_, v) written[#written + 1] = v end,
     }
+    local rig = {
+        SetLocalPosition = function(_, v) rig_written[#rig_written + 1] = v end,
+        GetLocalToWorld = function() return ROOT_AXES end,
+    }
+    local bone = {
+        GetLocalToWorld = function() return BONE_AXES end,
+    }
+    local by_name = { root = rig, EnvTriggerActivator = bone }
     Vector4 = { new = function(x, y, z, w) return { x = x, y = y, z = z, w = w } end }
-    Game = {
-        GetPlayer = function()
-            return { GetFPPCameraComponent = function() return component end }
+    CName = { new = function(name) return name end }
+    local player = {
+        GetFPPCameraComponent = function() return component end,
+        FindComponentByName = function(_, name)
+            return assert(by_name[name], "no stub component " .. tostring(name))
         end,
     }
-    return written
+    Game = {
+        GetPlayer = function() return player end,
+        HeadTrackingSetFppOrientation = function() end,
+        GetSpatialQueriesSystem = function()
+            return { SyncRaycastByCollisionGroup = function(_, from, to) return raycast(from, to) end }
+        end,
+    }
+    return written, rig_written
 end
+
+local function hip(cam, rx, ry, rz, dt) cam:applyPosition(rx, ry, rz, dt, 1.0, 0.0) end
 
 --- Lean hard enough that the smoother saturates at the lateral limit.
 local function lean_to_the_limit(cam, apply)
@@ -330,16 +404,16 @@ do
     -- camera component.
     local written = stub_cet()
     local cam = bare_camera()
-    lean_to_the_limit(cam, cam.applyPosition)
+    lean_to_the_limit(cam, hip)
     assert_true(cam.pos_applied, "the lean was written to the camera")
 
     cam.cached_settings.position_enabled = false
-    cam:applyPosition(0, 0, 0, DT)
+    hip(cam, 0, 0, 0, DT)
     assert_near(written[#written].x, 0, "position off writes the camera back to origin")
     assert_true(not cam.pos_applied, "position off clears the outstanding write")
 
     cam.cached_settings.position_enabled = true
-    cam:applyPosition(0, 0, 0, DT)
+    hip(cam, 0, 0, 0, DT)
     assert_near(cam.pos_local.x, 0, "head straight, so the first frame back is neutral")
     assert_near(written[#written].x, 0, "and nothing stale reaches the camera")
 end
@@ -364,6 +438,221 @@ do
     end
     assert_true(cam_toggle.pos_has_value == cam_suspend.pos_has_value,
         "toggle and suspend agree on pos_has_value")
+end
+
+
+-- ------------------------------------------- the lean between camera and rig
+
+do
+    -- At the hip the lean rides the camera alone and the rig is never touched:
+    -- the arms, the weapon and the round stay with the body, as they always
+    -- have.
+    local written, rig_written = stub_cet()
+    local cam = bare_camera()
+    hip(cam, 10, 0, 0, DT)
+    assert_near(written[#written].x, -0.10, "the camera carries the lean at the hip")
+    assert_true(#rig_written == 0, "the rig is not written at the hip")
+    assert_true(not cam.rig_applied, "and holds no offset")
+end
+
+do
+    -- On the sights the rig carries it all, so the weapon comes with the eye,
+    -- and the camera holds none of it. The aim hook and the reticle are handed
+    -- the camera's share, which is zero: eye and round have moved together.
+    local written, rig_written = stub_cet()
+    local cam = bare_camera()
+    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0)
+    assert_near(written[#written].x, 0, "the camera holds none of the lean on the sights")
+    assert_near(cam.pos_local.x, 0, "so nothing opens a gap between eye and round")
+    local rig = rig_written[#rig_written]
+    assert_near(rig.x, -0.10, "a lateral lean is lateral in both frames", 1e-12)
+    assert_near(rig.y, 0, "with no forward part", 1e-12)
+    assert_near(rig.z, 0, "and no vertical part", 1e-12)
+    assert_true(cam.rig_applied, "the rig holds the offset")
+    local bx = cam:getRigPosition()
+    assert_near(bx, -0.10, "the rig's share is reported in the camera bone's frame")
+end
+
+do
+    -- The camera bone is pitched with the mouse and the root is not, so a
+    -- forward lean on the rig has to be re-expressed or the eye goes somewhere
+    -- else. Whatever the split, the eye lands where the whole lean on the camera
+    -- would have put it - which is what keeps the view still while the lean
+    -- changes hands on the way into the sights.
+    local cases = { { 1.0, 0.0 }, { 0.75, 0.25 }, { 0.4, 0.6 }, { 0.0, 1.0 } }
+    local expected = nil
+    for _, shares in ipairs(cases) do
+        local written, rig_written = stub_cet()
+        local cam = bare_camera()
+        cam:applyPosition(8, 5, -20, DT, shares[1], shares[2])
+        local eye = to_world(BONE_AXES, written[#written])
+        local r = rig_written and rig_written[#rig_written]
+        if r then
+            local rw = to_world(ROOT_AXES, r)
+            eye = v3(eye.x + rw.x, eye.y + rw.y, eye.z + rw.z)
+        end
+        if not expected then
+            expected = eye
+        else
+            local label = string.format("camera %.2f / rig %.2f", shares[1], shares[2])
+            assert_near(eye.x, expected.x, label .. ": eye x unchanged", 1e-12)
+            assert_near(eye.y, expected.y, label .. ": eye y unchanged", 1e-12)
+            assert_near(eye.z, expected.z, label .. ": eye z unchanged", 1e-12)
+        end
+    end
+    assert_true(math.abs(expected.z) > 0.05,
+        "control: the pitched bone does put a forward lean partly into world z")
+end
+
+do
+    -- The rig keeps an offset until something takes it back out: the game does
+    -- not reset it. Dropping the rig's share, turning position off and
+    -- suspending all have to write it back to the origin.
+    local written, rig_written = stub_cet()
+    local cam = bare_camera()
+    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0)
+    hip(cam, 10, 0, 0, DT)
+    assert_near(rig_written[#rig_written].x, 0, "leaving the sights puts the rig back")
+    assert_true(not cam.rig_applied, "and clears the outstanding write")
+    local count = #rig_written
+    hip(cam, 10, 0, 0, DT)
+    assert_true(#rig_written == count, "an idle rig is not rewritten every frame")
+
+    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0)
+    cam.cached_settings.position_enabled = false
+    cam:applyPosition(0, 0, 0, DT, 0.0, 1.0)
+    assert_near(rig_written[#rig_written].x, 0, "position off puts the rig back")
+    assert_true(not cam.rig_applied, "position off clears the rig's write")
+
+    cam.cached_settings.position_enabled = true
+    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0)
+    cam.last_head_quat = nil
+    cam:suspend()
+    assert_near(rig_written[#rig_written].x, 0, "suspend puts the rig back")
+    assert_true(not cam.rig_applied, "suspend clears the rig's write")
+    assert_near(cam.rig_local.x, 0, "and the rig's share")
+end
+
+-- ------------------------------------------------- the lean against the level
+
+--- Distance from the eye after a lean to the wall plane, along its normal.
+local function standoff(eye_world)
+    local p, n = wall.p, wall.n
+    return (eye_world.x - p.x) * n.x + (eye_world.y - p.y) * n.y + (eye_world.z - p.z) * n.z
+end
+
+--- Where the stubbed game would put the eye after one applyPosition.
+local function eye_after(written, rig_written)
+    local c = to_world(BONE_AXES, written[#written])
+    local r = rig_written and rig_written[#rig_written]
+    local rw = r and to_world(ROOT_AXES, r) or v3(0, 0, 0)
+    return v3(BONE_AXES.W.x + c.x + rw.x, BONE_AXES.W.y + c.y + rw.y, BONE_AXES.W.z + c.z + rw.z)
+end
+
+do
+    -- Open space: the lean is untouched, and the query did run.
+    local written = stub_cet()
+    local cam = bare_camera()
+    hip(cam, 20, 0, 0, DT)
+    assert_near(written[#written].x, -0.20, "open space leaves the lean alone")
+    assert_true(raycasts > 0, "the level was queried")
+    assert_true(not cam.lean_clamp:inContact(), "and no contact is reported")
+end
+
+do
+    -- A wall 0.15 m to the side along the lean: the eye stops a skin off it, on
+    -- the camera at the hip and on the rig on the sights alike.
+    for _, shares in ipairs({ { 1.0, 0.0 }, { 0.0, 1.0 }, { 0.5, 0.5 } }) do
+        local written, rig_written = stub_cet()
+        local cam = bare_camera()
+        local lean_dir = to_world(BONE_AXES, v3(-1, 0, 0))
+        wall = { p = v3(BONE_AXES.W.x + lean_dir.x * 0.15, BONE_AXES.W.y + lean_dir.y * 0.15,
+                        BONE_AXES.W.z + lean_dir.z * 0.15),
+                 n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
+        cam:applyPosition(20, 0, 0, DT, shares[1], shares[2])
+        local label = string.format("camera %.1f / rig %.1f", shares[1], shares[2])
+        assert_near(standoff(eye_after(written, rig_written)), 0.10, label .. ": held a skin off the wall", 1e-9)
+        assert_true(cam.lean_clamp:inContact(), label .. ": contact is reported")
+    end
+end
+
+do
+    -- A wall met at 60 degrees: the standoff is measured off the surface, not
+    -- along the lean, so the eye must stop further back than a skin along it.
+    local written = stub_cet()
+    local cam = bare_camera()
+    local lean_dir = to_world(BONE_AXES, v3(-1, 0, 0))
+    local up = v3(0, 0, 1)
+    -- A normal 60 degrees off the lean, still facing the eye.
+    local c, sn = math.cos(math.rad(60)), math.sin(math.rad(60))
+    local n = v3(-lean_dir.x * c + up.x * sn, -lean_dir.y * c + up.y * sn, -lean_dir.z * c + up.z * sn)
+    wall = { p = v3(BONE_AXES.W.x + lean_dir.x * 0.25, BONE_AXES.W.y + lean_dir.y * 0.25,
+                    BONE_AXES.W.z + lean_dir.z * 0.25), n = n }
+    hip(cam, 30, 0, 0, DT)
+    assert_near(standoff(eye_after(written)), 0.10, "a slanted wall still gets a full skin", 1e-9)
+end
+
+do
+    -- The clean eye is the bone less the rig's own offset. With the rig already
+    -- holding a lean, the query has to start where the eye would be without it,
+    -- or the clamp measures from a point that is already against the wall.
+    local written, rig_written = stub_cet()
+    local cam = bare_camera()
+    cam:applyPosition(20, 0, 0, DT, 0.0, 1.0)
+    local held = rig_written[#rig_written]
+    assert_near(cam.rig_written.x, held.x, "the rig's offset is remembered in its own frame")
+    local lean_dir = to_world(BONE_AXES, v3(-1, 0, 0))
+    wall = { p = v3(BONE_AXES.W.x + lean_dir.x * 0.25, BONE_AXES.W.y + lean_dir.y * 0.25,
+                    BONE_AXES.W.z + lean_dir.z * 0.25),
+             n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
+    -- The game moves the bone with the root; the stub's bone does not move, so
+    -- move it by hand the way the root moved it.
+    local rw = to_world(ROOT_AXES, held)
+    local saved = BONE_AXES.W
+    BONE_AXES.W = v3(saved.x + rw.x, saved.y + rw.y, saved.z + rw.z)
+    cam:applyPosition(20, 0, 0, DT, 0.0, 1.0)
+    local eye = eye_after(written, rig_written)
+    BONE_AXES.W = saved
+    local ex = v3(eye.x - rw.x, eye.y - rw.y, eye.z - rw.z)
+    assert_near(standoff(ex), 0.10, "measured from the clean eye, the lean stops a skin off the wall", 1e-9)
+end
+
+do
+    -- A teleport drops the old room's allowance rather than easing out of it.
+    local written = stub_cet()
+    local cam = bare_camera()
+    local lean_dir = to_world(BONE_AXES, v3(-1, 0, 0))
+    wall = { p = v3(BONE_AXES.W.x + lean_dir.x * 0.15, BONE_AXES.W.y + lean_dir.y * 0.15,
+                    BONE_AXES.W.z + lean_dir.z * 0.15),
+             n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
+    hip(cam, 20, 0, 0, DT)
+    assert_true(cam.lean_clamp:inContact(), "held off the wall before the teleport")
+    wall = nil
+    local saved = BONE_AXES.W
+    BONE_AXES.W = v3(saved.x + 50, saved.y, saved.z)
+    hip(cam, 20, 0, 0, DT)
+    BONE_AXES.W = saved
+    assert_near(written[#written].x, -0.20, "the first frame after a teleport takes the full lean")
+end
+
+do
+    -- The constructor, not bare_camera, is what the game runs. A constant the
+    -- constructor reads but the file declares further down resolves to an
+    -- undefined global there, which only a real construction shows: every
+    -- other case in this file builds its own clamp.
+    local settings = {
+        get = function() return nil end,
+        observe = function() return function() end end,
+    }
+    local cam = Camera.new(settings)
+    stub_cet()
+    local lean_dir = to_world(BONE_AXES, v3(-1, 0, 0))
+    wall = { p = v3(BONE_AXES.W.x + lean_dir.x * 0.15, BONE_AXES.W.y + lean_dir.y * 0.15,
+                    BONE_AXES.W.z + lean_dir.z * 0.15),
+             n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
+    cam.cached_settings.position_enabled = true
+    cam:applyPosition(20, 0, 0, DT, 1.0, 0.0)
+    assert_true(cam.lean_clamp:inContact(), "a constructed camera clamps the lean")
 end
 
 print("== Camera smoothing OK ==")
