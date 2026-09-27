@@ -11,6 +11,12 @@
   going in and 250ms coming out, and the hand-over itself does not move the view.
   Tapping the aim button turns it round from wherever it had reached. The lean used
   to ease out while the sights were up
+- The game's "what is under the crosshair" now follows your aim instead of your
+  head. The red lock rectangle in a sniper scope lit up for whatever the middle of
+  the screen was over, so with your head turned it framed nothing while the scope
+  sat on a target, and lit for someone the scope was not pointed at. It now lights
+  for what the scope is on, at any head angle and while leaning, and the other
+  crosshair target readouts follow it
 - A lean now stops about 10 cm short of walls and other level geometry, at the hip and
   on the sights, instead of putting the view inside them. The allowance tightens at
   once and opens back up over about 200ms, so stepping past a doorframe does not snap

@@ -69,6 +69,28 @@ struct OffsetTable {
     // camera renders from its own component and ignores every write to the
     // player's FPP camera.
     uintptr_t CameraPublishFn;
+    // The targeting system's per-player update, +0x4B9D84(record, camera). It
+    // copies the rendered camera - head rotation included - into the record's
+    // view orientation and frustum, which every "what is under the crosshair"
+    // query then measures against: the scope's lock indicator, the UI's
+    // visible target, GetObjectClosestToCrosshair. TargetingFrustumHook turns
+    // that view back onto the clean aim once the update has run.
+    uintptr_t TargetingRecordUpdate;
+    // The engine's direction -> (roll, pitch, yaw) conversion, +0x396F30(dir,
+    // out), which the update uses to derive the crosshair angles every
+    // crosshair query is measured from.
+    uintptr_t DirectionToAngles;
+    // The UI targeting job's range and obstruction query, +0x3FB4C8(this, ray,
+    // angles, ...), and the return address of the one call we correct: the
+    // job that fills UI_TargetingInfo builds that ray from the rendered camera.
+    uintptr_t UiTargetRayQuery;
+    uintptr_t UiTargetRayQueryReturn;
+    // The camera interface's transform getter, +0x4E8D68(this, out, owner):
+    // position, then orientation at out+0x10. The crosshair raycast that picks
+    // UI_TargetingInfo.CurrentVisibleTarget asks it for the camera each frame,
+    // from the call whose return address is below.
+    uintptr_t CameraTransformFn;
+    uintptr_t CrosshairRaycastCameraReturn;
 };
 
 struct BuildProfile {

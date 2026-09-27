@@ -175,6 +175,8 @@ Leaning carries on through the aim. As the sights come up, your arms and weapon 
 
 A lean stops about 10 cm short of walls and other level geometry, so it never puts the view inside them.
 
+What the game treats as under your crosshair follows your aim, not your head, so a scope's target indicator lights for what the scope is pointed at.
+
 ## In vehicles
 
 First-person driving tracks your head exactly like being on foot.

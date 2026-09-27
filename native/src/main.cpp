@@ -10,6 +10,7 @@
 #include "AimProviderHook.hpp"
 #include "RicochetPreviewHook.hpp"
 #include "AimGetterHook.hpp"
+#include "TargetingFrustumHook.hpp"
 #include "ChaseCameraHook.hpp"
 #include "builds/build_registry.hpp"
 
@@ -79,6 +80,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         }
 
         AimGetterHook_Start(aSdk, aHandle);
+        TargetingFrustumHook_Start(aSdk, aHandle);
 
         break;
 
@@ -90,6 +92,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         // way out of the address space.
         NativeRunningHook_Stop(aSdk, aHandle);
 
+        TargetingFrustumHook_Stop(aSdk, aHandle);
         AimGetterHook_Stop(aSdk, aHandle);
         RicochetPreviewHook_Stop(aSdk, aHandle);
         AimProviderHook_Stop();
