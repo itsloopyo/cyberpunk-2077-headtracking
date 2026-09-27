@@ -2,14 +2,13 @@
 
 ![Cyberpunk 2077 running with this mod](https://raw.githubusercontent.com/itsloopyo/cyberpunk-2077-headtracking/main/assets/readme-clip.gif)
 
-An unofficial head tracking mod for Cyberpunk 2077 that moves the view with your head while your mouse or controller keeps aiming, driven by OpenTrack over UDP, with no VR headset required.
+An unofficial head tracking mod for Cyberpunk 2077 that moves the view with your head while your mouse or controller keeps aiming, driven by a webcam, phone, or any OpenTrack compatible tracker, with no VR headset required.
 
 ## Features
 
 - **Decoupled look and aim** - head tracking moves the camera; your mouse or controller still controls aim
 - **6DOF positional tracking** - lean into corners and peek around cover with your head position
 - **Works with any OpenTrack compatible tracker** - free options available for PC, iOS and Android
-- **Head tracking stays on down the sights** - aim down sights and keep looking around: the weapon stays on your aim, you can still sight down it wherever it sits on screen, and head movement is scaled to the zoom so a scope does not magnify it
 
 ## Gameplay Changes
 
@@ -30,7 +29,7 @@ Everything is applied through TweakXL, so removing the mod restores stock behavi
 ## Requirements
 
 - [Cyberpunk 2077](https://store.steampowered.com/app/1091500/Cyberpunk_2077/) v2.x (Steam, GOG, or Epic).
-- An OpenTrack-compatible head tracker: [OpenTrack](https://github.com/opentrack/opentrack) with a webcam or VR headset, or a phone app that speaks the OpenTrack UDP protocol (see [Phone App Setup](#phone-app-setup) for which apps can send straight to the mod and which need OpenTrack in the chain).
+- An OpenTrack-compatible head tracker: [OpenTrack](https://github.com/opentrack/opentrack) with a webcam or VR headset, or a phone app that speaks the OpenTrack UDP protocol (see [Phone](#phone) for which apps can send straight to the mod and which need OpenTrack in the chain).
 - Windows 10 or 11, 64-bit.
 
 ## Installation
@@ -266,7 +265,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 **Jittery or unstable tracking.**
 - Raise the smoothing parameter that matches your tracker: `remote_smoothing` for a phone or other device on the network, `local_smoothing` for a tracker running on this PC. 0.3 to 0.5 is a heavy but usable setting.
 - If a phone tracker is sending straight to port `4242` and it does not filter heavily on-device, relay it through OpenTrack with a low-pass filter instead.
-- High-FPS displays show micro-jitter more readily. There is no internal minimum any more, so if a local tracker looks jittery at the default `local_smoothing` of 0.0, raise it.
+- High-FPS displays show micro-jitter more readily. `local_smoothing` defaults to 0.0, so if a local tracker looks jittery, raise it.
 
 **The weapon is off to one side when I aim down sights.**
 - Your head is turned: the weapon stays on your aim and you are looking past it. Turn back to it, or move your aim to where you are looking.
