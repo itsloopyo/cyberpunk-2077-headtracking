@@ -22,6 +22,15 @@
   once and opens back up over about 200ms, so stepping past a doorframe does not snap
   the view. Contact is written to `HeadTracking.log`
 
+### Fixed
+
+- With a scope up and your head turned, the scope no longer drifts off what you are
+  aiming at. The game draws the weapon more magnified than the world while a scope
+  is up, so a head turn swung the scope further across the screen than the scene
+  behind it, and its dot sat off to one side of where the round went. The weapon is
+  now turned back by the difference, so the centre of the scope shows what the round
+  will hit
+
 ### Added
 
 - True free look with the sights up, toggled on `Insert` / `Ctrl+Shift+U` or the

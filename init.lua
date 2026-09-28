@@ -683,6 +683,7 @@ local function onUpdateImpl(deltaTime)
             local mounted = Game.GetMountedVehicle(Game.GetPlayer()) ~= nil
             local rig_share = mounted and 0.0 or (1.0 - ads_scale)
             camera:applyPosition(pose_x, pose_y, pose_z, deltaTime, ads_scale, rig_share)
+            camera:applyWeaponView()
         end
         perf:recordCameraUpdate()
     end

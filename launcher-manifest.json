@@ -31,6 +31,7 @@
     { "source": "modules/builtin_crosshair.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/builtin_crosshair.lua" },
     { "source": "modules/ads_fade.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/ads_fade.lua" },
     { "source": "modules/lean_clamp.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/lean_clamp.lua" },
+    { "source": "modules/weapon_view.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/weapon_view.lua" },
     { "source": "modules/camera.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/camera.lua" },
     { "source": "modules/debuglog.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/debuglog.lua" },
     { "source": "modules/GameUI.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/GameUI.lua" },

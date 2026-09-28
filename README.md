@@ -176,6 +176,8 @@ Leaning carries on through the aim. As the sights come up, your arms and weapon 
 
 By default leaning never takes your eye off the sights. `Insert` / `Ctrl+Shift+U` switches to **true free look**: the weapon stays put and your head moves freely around it, so to see down the sights you have to put your head behind them, as you would in VR. It is hard, and it is off by default. The mod saves the mode you pick, so it holds the next time you start the game.
 
+With your head turned, the centre of a scope still shows what the round will hit. The game draws the weapon more magnified than the world while a scope is up, which would otherwise swing the scope further across the screen than the scene behind it, so the mod turns the weapon back by the difference.
+
 A lean stops about 10 cm short of walls and other level geometry, so it never puts the view inside them.
 
 What the game treats as under your crosshair follows your aim, not your head, so a scope's target indicator lights for what the scope is pointed at.
