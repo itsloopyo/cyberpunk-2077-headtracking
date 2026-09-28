@@ -72,22 +72,6 @@ if ($Version -eq 'nightly') {
 
 Import-Module (Join-Path $projectRoot 'cameraunlock-core/powershell/ReleaseWorkflow.psm1') -Force
 
-# Mirrors New-ChangelogFromCommits' insertion so a -Force maintenance entry
-# lands in the same place with the same shape.
-function Add-MaintenanceChangelogEntry {
-    param([string]$Path, [string]$NewVersion)
-    $date = Get-Date -Format 'yyyy-MM-dd'
-    $entry = "## [$NewVersion] - $date`n`n### Changed`n`n- Maintenance release (no user-facing changes).`n`n"
-    $changelog = Get-Content $Path -Raw
-    if ($changelog -match '(?s)(# Changelog.*?)(## \[)') {
-        $changelog = $changelog -replace '(?s)(# Changelog.*?\n\n)', "`$1$entry"
-    } else {
-        $changelog = $changelog -replace '(?s)(# Changelog.*?\n)', "`$1$entry"
-    }
-    $changelog = $changelog.TrimEnd() + "`n"
-    Set-Content $Path $changelog -NoNewline
-}
-
 Write-Host ''
 Write-Host '========================================' -ForegroundColor Yellow
 Write-Host '  HeadTracking Release' -ForegroundColor Yellow
@@ -128,31 +112,19 @@ Write-Host "  [OK] On main, tree clean, tag $tagName free" -ForegroundColor Gree
 # no tag.
 Write-Info 'Step 3/8: Generating CHANGELOG.md from commits...'
 $changelogPath = Join-Path $projectRoot 'CHANGELOG.md'
-$hasExistingTags = git tag -l 2>$null
-if (-not $hasExistingTags) {
-    # First release - ensure a baseline CHANGELOG exists
-    if (-not (Test-Path $changelogPath)) {
-        $date = Get-Date -Format 'yyyy-MM-dd'
-        "# Changelog`n`n## [$Version] - $date`n`nFirst release.`n" | Set-Content $changelogPath
-        Write-Host "  [OK] Wrote initial CHANGELOG.md" -ForegroundColor Green
+try {
+    $result = New-ChangelogFromCommits -ChangelogPath $changelogPath -Version $Version -Maintenance:$Force
+    if ($result.AlreadyExists) {
+        Write-Host "  [OK] Changelog already has [$Version] (kept)" -ForegroundColor Green
+    } else {
+        Write-Host ("  [OK] Changelog updated: {0} feat / {1} fix / {2} change" -f $result.Features, $result.Fixes, $result.Changes) -ForegroundColor Green
     }
-} else {
-    try {
-        $result = New-ChangelogFromCommits -ChangelogPath $changelogPath -Version $Version
-        if ($result.AlreadyExists) {
-            Write-Host "  [OK] Changelog already has [$Version] (kept)" -ForegroundColor Green
-        } else {
-            Write-Host ("  [OK] Changelog updated: {0} feat / {1} fix / {2} change" -f $result.Features, $result.Fixes, $result.Changes) -ForegroundColor Green
-        }
-    } catch {
-        if (-not $Force) {
-            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host 'No user-facing changes to release. Re-run with -Force for a maintenance release.' -ForegroundColor Yellow
-            exit 1
-        }
-        Write-Host 'No user-facing commits since last tag - writing maintenance entry (-Force).' -ForegroundColor Yellow
-        Add-MaintenanceChangelogEntry -Path $changelogPath -NewVersion $Version
+} catch {
+    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+    if (-not $Force) {
+        Write-Host 'No user-facing changes to release. Re-run with -Force for a maintenance release.' -ForegroundColor Yellow
     }
+    exit 1
 }
 
 # ---- Step 4: Update version in the canonical source -----------------------
