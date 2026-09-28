@@ -24,6 +24,12 @@
 
 ### Added
 
+- True free look with the sights up, toggled on `Insert` / `Ctrl+Shift+U` or the
+  "True Free Look" switch in the settings panel, and saved to `config.json` as
+  `TrueFreeLook`. The weapon stays put and your head moves freely around it, so to
+  see down the sights you have to put your head behind them. Off by default, which
+  keeps leaning on the sights as before
+
 - head tracking in the vehicle chase camera, on by default (`chase_camera_tracking`, or the switch in the settings panel). Driving in third person used to leave the view frozen because that camera ignores every write to the player's first-person camera. Two rough edges remain: only the near scene rotates, and the game's camera motion blur smears the world unless you turn Motion Blur off
 
 - `red4ext/logs/HeadTrackingAim.log` now starts fresh on every game

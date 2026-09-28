@@ -343,6 +343,16 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
+    self.widgetRefs["TrueFreeLook"] = ns.addSwitch(
+        "/HeadTracking/Position",
+        "True Free Look",
+        "Off: leaning while aiming down sights keeps your eye on the sights, and the weapon moves with your head. On: the weapon stays where it is and your head moves freely around it, so to see down the sights you have to put your head behind them. Hotkey: Insert / Ctrl+Shift+U.",
+        self.settings:get("TrueFreeLook"),
+        self.settings:getDefaults().TrueFreeLook,
+        function(state)
+            self.settings:set("TrueFreeLook", state)
+        end
+    )
     -- Z limits are asymmetric because leaning in has far more travel than
     -- pulling back, which stops the camera clipping through the player model.
     local POSITION_WIDGETS = {

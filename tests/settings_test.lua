@@ -372,8 +372,24 @@ bg.path = old_path
 assert_true(bg:load(), "a config carrying ads_mode loads")
 assert_eq(bg:get("clamp_yaw"), 100, "fixture was actually read")
 assert_eq(bg:get("ads_mode"), nil, "the stale ads_mode is not carried")
+assert_eq(bg:get("TrueFreeLook"), false, "an old ads_mode never turns true free look on")
 os.remove(old_path)
 os.remove(old_path .. ".bak")
+
+-- True free look starts off, and the toggle's write survives a reload.
+assert_eq(Settings.new():getDefaults().TrueFreeLook, false, "TrueFreeLook defaults to false")
+local fl_path = "true_free_look_config.json"
+local fl = Settings.new()
+fl.path = fl_path
+fl:load()
+assert_eq(fl:get("TrueFreeLook"), false, "a fresh config starts sights locked")
+fl:set("TrueFreeLook", true)
+local fl2 = Settings.new()
+fl2.path = fl_path
+assert_true(fl2:load(), "the saved config reloads")
+assert_eq(fl2:get("TrueFreeLook"), true, "the toggle is saved to config.json")
+os.remove(fl_path)
+os.remove(fl_path .. ".bak")
 
 -- (9) The mode the master switch restores is PERSISTED, so End -> quit ->
 -- relaunch -> End returns to the mode the player was in rather than forcing

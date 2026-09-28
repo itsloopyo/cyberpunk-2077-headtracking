@@ -154,11 +154,12 @@ view sits off to one side, centre it in the tracker.
 
 Two equivalent binding sets, so use whichever your keyboard has. Both sets are always active: a nav-cluster key and its chord fire the same action, and pressing either triggers it once.
 
-| Action              | Nav-cluster | Chord           |
-|---------------------|-------------|-----------------|
-| Toggle tracking     | `End`       | `Ctrl+Shift+Y`  |
-| Cycle tracking mode | `Page Up`   | `Ctrl+Shift+G`  |
-| Toggle yaw mode     | `Page Down` | `Ctrl+Shift+H`  |
+| Action                | Nav-cluster | Chord           |
+|-----------------------|-------------|-----------------|
+| Toggle tracking       | `End`       | `Ctrl+Shift+Y`  |
+| Cycle tracking mode   | `Page Up`   | `Ctrl+Shift+G`  |
+| Toggle yaw mode       | `Page Down` | `Ctrl+Shift+H`  |
+| Toggle true free look | `Insert`    | `Ctrl+Shift+U`  |
 
 `Page Up` / `Ctrl+Shift+G` cycles tracking mode:
 
@@ -172,6 +173,8 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 Head tracking stays on while you aim. The weapon stays where your mouse or controller points it, so with your head turned it sits off to one side with its sights still lined up, and your rounds land where those sights point.
 
 Leaning carries on through the aim. As the sights come up, your arms and weapon move with your head, so the sights stay in front of your eye, and your rounds leave from where your eye is. Lean round a corner with the sights up and you can hit what you can see from there. Handing the lean from the camera to the weapon does not move the view. Head movement, the lean included, is scaled to the zoom so a scope does not magnify it, which means a high-magnification scope leans less.
+
+By default leaning never takes your eye off the sights. `Insert` / `Ctrl+Shift+U` switches to **true free look**: the weapon stays put and your head moves freely around it, so to see down the sights you have to put your head behind them, as you would in VR. It is hard, and it is off by default. The mod saves the mode you pick, so it holds the next time you start the game.
 
 A lean stops about 10 cm short of walls and other level geometry, so it never puts the view inside them.
 
@@ -227,6 +230,8 @@ Native Settings is the only framework this mod registers with. If you use a diff
 
   "yaw_mode": "world",
 
+  "TrueFreeLook": false,
+
   "saved_tracking_mode": "both"
 }
 ```
@@ -240,6 +245,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 - `crosshair_enabled`: moves the game's own reticle to the true aim point during normal play. It uses Cyberpunk's live camera projection, including the exact scope projection, rather than an estimated field of view.
 - `position_enabled` and `position_limit_*`: enable 6DOF translation and set Cyberpunk-specific camera travel limits in metres. Positional sensitivity belongs in the tracker.
 - `saved_tracking_mode`: not a setting - it is where the mod remembers which tracking mode to restore when tracking is switched back on, whether that is you pressing `End` or the mod bringing tracking up on the next launch after you quit with it off. Rewritten every time you switch tracking off. Leave it alone.
+- `TrueFreeLook`: `false` keeps your eye on the sights while you lean with them up; `true` leaves the weapon where it is and your head free around it. Toggle live with `Insert` / `Ctrl+Shift+U`. The choice is saved, so it survives a restart.
 - `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`. The choice is saved, so it survives a restart.
 
 ## Troubleshooting
@@ -276,6 +282,9 @@ JSON has no comment syntax, so the settings worth touching are described here in
 
 **The weapon is off to one side when I aim down sights.**
 - Your head is turned: the weapon stays on your aim and you are looking past it. Turn back to it, or move your aim to where you are looking.
+
+**I can't see down the sights, they are misaligned.**
+- You are in true free look and your head is leaned off them. Move your head back behind them, or press `Insert` / `Ctrl+Shift+U` to return to sights locked.
 
 **Wrong rotation axis (camera moves the wrong way).**
 - Invert the offending axis in OpenTrack under **Output > Mapping** rather than in the mod. The mod has no inversion setting on purpose.

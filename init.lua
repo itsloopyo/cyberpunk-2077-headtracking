@@ -311,7 +311,7 @@ end
 
 -- Forward declarations so the onUpdate dispatch resolves the upvalue at call.
 local handleToggleTracking, handleCycleMode,
-      handleToggleYawMode
+      handleToggleYawMode, handleToggleTrueFreeLook
 
 -- Lifecycle: Called when mod initializes.
 -- Each step is wrapped so that on failure we capture WHICH step failed and
@@ -537,6 +537,7 @@ local function onUpdateImpl(deltaTime)
     if udp:consumeNativeToggleTrackingRequested() then handleToggleTracking() end
     if udp:consumeNativeCycleModeRequested()      then handleCycleMode()      end
     if udp:consumeNativeToggleYawRequested()      then handleToggleYawMode()  end
+    if udp:consumeNativeToggleFreeLookRequested() then handleToggleTrueFreeLook() end
 
     local tracking_allowed = state:isTrackingAllowed()
     -- Read alongside the verdict it belongs to, not at the point of use, so the
@@ -555,8 +556,10 @@ local function onUpdateImpl(deltaTime)
     -- camera to the rig, so the weapon comes with the eye and stays on the
     -- sights, and the round leaves from where the eye is. The sights come from
     -- the game's own aim state, and any suppression resets the transition so
-    -- the next aim starts clean.
-    local ads_scale = ads_fade:update(state:isAdsActive(), now)
+    -- the next aim starts clean. In true free look the lean stays on the camera
+    -- and the weapon stays put; toggling mid-aim rides the same fade.
+    local ads_scale = ads_fade:update(
+        state:isAdsActive() and not settings:get("TrueFreeLook"), now)
     if not tracking_allowed then
         ads_fade:reset()
         ads_scale = 1.0
@@ -874,6 +877,19 @@ end
 -- PageDown / Ctrl+Shift+H are polled natively in ScriptChannel.cpp. CET registerHotkey
 -- dispatch crashes before entering Lua on this game build, so do not bind
 -- PageDown here.
+
+-- Insert / Ctrl+Shift+U - Sights locked <-> true free look, saved to config.json.
+-- Polled natively in ScriptChannel.cpp, like the rest.
+function handleToggleTrueFreeLook()
+    if hotkeyDebounced("ToggleTrueFreeLook") then return end
+    if not settings or not ui then return end
+
+    local on = not settings:get("TrueFreeLook")
+    settings:set("TrueFreeLook", on)
+
+    ui:showSuccess(on and "True free look: ON" or "True free look: OFF (sights locked)", 2.0)
+    mlog("[HeadTracking] TrueFreeLook -> " .. tostring(on))
+end
 
 -- Public API for the CET console. Reachable as
 --   GetMod("HeadTracking").DiagVerbose(true)

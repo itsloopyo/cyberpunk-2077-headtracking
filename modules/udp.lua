@@ -35,6 +35,7 @@ local FLAG_TOGGLE_TRACKING   = 8   -- bit 3
 local FLAG_CYCLE_MODE        = 16  -- bit 4
 local FLAG_TOGGLE_YAW        = 32  -- bit 5
 local FLAG_REMOTE_CONNECTION = 64  -- bit 6, live status (not an edge)
+local FLAG_TOGGLE_FREE_LOOK  = 128 -- bit 7
 
 local function hasFlag(flags, bit)
     return (math.floor(flags / bit) % 2) >= 1
@@ -53,6 +54,7 @@ local chase_camera_active = false
 local native_toggle_tracking_requested = false
 local native_cycle_mode_requested = false
 local native_toggle_yaw_requested = false
+local native_toggle_free_look_requested = false
 
 -- Hoisted call trampolines. `pcall(function() ... end)` allocates a fresh
 -- closure per invocation and both of these run every frame, so the arguments
@@ -177,6 +179,14 @@ function TrackingInput:consumeNativeToggleYawRequested()
     return false
 end
 
+function TrackingInput:consumeNativeToggleFreeLookRequested()
+    if native_toggle_free_look_requested then
+        native_toggle_free_look_requested = false
+        return true
+    end
+    return false
+end
+
 function TrackingInput:secondsSinceLastPacket()
     if not last_successful_parse_time then return math.huge end
     return os.clock() - last_successful_parse_time
@@ -215,6 +225,7 @@ function TrackingInput:poll()
     if hasFlag(native_flags, FLAG_TOGGLE_TRACKING) then native_toggle_tracking_requested = true end
     if hasFlag(native_flags, FLAG_CYCLE_MODE)      then native_cycle_mode_requested      = true end
     if hasFlag(native_flags, FLAG_TOGGLE_YAW)      then native_toggle_yaw_requested      = true end
+    if hasFlag(native_flags, FLAG_TOGGLE_FREE_LOOK) then native_toggle_free_look_requested = true end
 
     -- NaN check. Everything else the native side already validated.
     if yaw ~= yaw or pitch ~= pitch or roll ~= roll then return nil end

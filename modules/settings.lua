@@ -47,6 +47,10 @@ local VALIDATION_RULES = {
     -- Tracking mode the master switch restores. See SAVED_TRACKING_MODE_VALUES.
     saved_tracking_mode = { type = "string" },
     chase_camera_tracking = { type = "boolean" },
+    -- Aiming down sights: false keeps the eye on the sights (the lean moves the
+    -- weapon with it), true leaves the weapon where it is and the head free.
+    -- Spelled as every mod spells it, whatever this file's own convention.
+    TrueFreeLook = { type = "boolean" },
 }
 
 -- Keys that used to hold the single smoothing value, in the order they are
@@ -219,6 +223,8 @@ function Settings.new()
         -- static-geometry velocity from an un-rotated camera, so it smears the
         -- whole world. Turn Motion Blur off in the game's graphics settings.
         chase_camera_tracking = true,
+        -- Sights locked by default. Insert / Ctrl+Shift+U toggles it and saves.
+        TrueFreeLook = false,
     }
 
     -- Current values (populated by load())
