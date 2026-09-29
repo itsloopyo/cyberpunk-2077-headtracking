@@ -24,6 +24,7 @@ do
 end
 
 local LeanClamp = require("modules/lean_clamp")
+local LeanLineSweep = require("modules/lean_line_sweep")
 local WeaponView = require("modules/weapon_view")
 
 -- How far off a surface the lean holds the eye, from the collision hit. The
@@ -421,13 +422,12 @@ local RIG_COMPONENT = "root"
 -- pitch lives on this bone, not on the camera's local orientation.
 local CAMERA_BONE_COMPONENT = "EnvTriggerActivator"
 
--- The trace has to see the surface the lean comes to rest against, so it
--- overreaches by the skin measured along the surface normal: skin / cos of the
--- approach angle, the cosine floored so a grazing wall does not ask for an
--- unbounded ray.
-local LEAN_COS_FLOOR = 0.25
 -- What blocks the eye. Static holds walls and props and Terrain the ground; the
--- player's own collider answers in Shooting, which is why that one is not here.
+-- player's own collider answers in Shooting, which is why that one is not here
+-- (QueryFilter.ALL() hits it at zero distance from the eye). The four go into
+-- one query filter, so each ray is one cast: measured in game, the merged
+-- filter's nearest hit matched the per-group minimum in all of 144 directions,
+-- at the 7.5us one group costs.
 local LEAN_GROUPS = { "Static", "Terrain", "Dynamic", "Vehicle" }
 -- A clean eye that moves further than this between two frames has been
 -- teleported or cut to, and the allowance left by the old room's wall goes.
@@ -467,40 +467,83 @@ local function axesToWorld(m, x, y, z)
     }
 end
 
+-- Bitwise OR of two unsigned 64-bit masks. CET's LuaJIT exposes them as uint64
+-- cdata and has no bit library, so this walks the bits with integer division,
+-- which is exact on uint64.
+local function or64(a, b)
+    local out, place = a - a, a - a + 1
+    while a > 0 or b > 0 do
+        if a % 2 == 1 or b % 2 == 1 then out = out + place end
+        a = (a - a % 2) / 2
+        b = (b - b % 2) / 2
+        place = place * 2
+    end
+    return out
+end
+
+-- Built on first use: QueryFilter is a game type. CET returns AddGroup's out
+-- param as a fresh filter holding that group alone, so the groups are merged by
+-- their masks. Any failure here throws: without the filter there is no clamp.
+local lean_filter = nil
+local function leanFilter()
+    if lean_filter == nil then
+        local f = QueryFilter.ZERO()
+        for i = 1, #LEAN_GROUPS do
+            local g = QueryFilter.AddGroup(cname(LEAN_GROUPS[i]))
+            f.mask1 = or64(f.mask1, g.mask1)
+            f.mask2 = or64(f.mask2, g.mask2)
+        end
+        lean_filter = f
+    end
+    return lean_filter
+end
+
 local function _callSpatialQueries()
     return Game.GetSpatialQueriesSystem()
 end
-local function _callRaycast(sq, from, to, group)
-    return sq:SyncRaycastByCollisionGroup(from, to, cname(group), false, false)
+local function _callRaycast(sq, from, to, filter)
+    return sq:SyncRaycastByQueryFilter(from, to, filter, false, false)
 end
 
---- The engine half of the lean clamp (modules/lean_clamp.lua owns the policy).
---- A line from the clean eye along the lean, nearest hit over LEAN_GROUPS.
-local function leanQuery(start, dir, max_distance)
-    local okS, sq = pcall(_callSpatialQueries)
-    if not okS or not sq then return { queried = false } end
-    local reach = max_distance - LEAN_SKIN + LEAN_SKIN / LEAN_COS_FLOOR
-    local from = Vector4.new(start.x, start.y, start.z, 1.0)
-    local to = Vector4.new(start.x + dir.x * reach, start.y + dir.y * reach,
-                           start.z + dir.z * reach, 1.0)
-    local best = nil
-    for i = 1, #LEAN_GROUPS do
-        local ok, hit, res = pcall(_callRaycast, sq, from, to, LEAN_GROUPS[i])
-        if not ok then return { queried = false } end
-        if hit then
-            local p, n = res.position, res.normal
-            local dx, dy, dz = p.x - start.x, p.y - start.y, p.z - start.z
-            local along = dx * dir.x + dy * dir.y + dz * dir.z
-            local cos = math.abs(dir.x * n.x + dir.y * n.y + dir.z * n.z)
-            if cos < LEAN_COS_FLOOR then cos = LEAN_COS_FLOOR end
-            -- The policy subtracts the skin along the lean; the eye has to stay
-            -- a skin off the SURFACE, which along a slanted lean is skin / cos.
-            local distance = along - LEAN_SKIN / cos + LEAN_SKIN
-            if not best or distance < best then best = distance end
-        end
-    end
-    return { queried = true, blocked = best ~= nil, distance = best or 0 }
+local function _callChaseCameraPose()
+    return Game.HeadTrackingChaseCameraPose()
 end
+
+--- Rotate (x, y, z) by the unit quaternion (i, j, k, r).
+local function quatRotate(i, j, k, r, x, y, z)
+    local tx = 2 * (j * z - k * y)
+    local ty = 2 * (k * x - i * z)
+    local tz = 2 * (i * y - j * x)
+    return x + r * tx + (j * tz - k * ty),
+           y + r * ty + (k * tx - i * tz),
+           z + r * tz + (i * ty - j * tx)
+end
+
+-- Reused across casts: the raycast takes them by value.
+local cast_from, cast_to = nil, nil
+
+--- The engine's line cast for the lean sweep: nearest hit over LEAN_GROUPS.
+local function leanCast(sx, sy, sz, dx, dy, dz, length)
+    local okS, sq = pcall(_callSpatialQueries)
+    if not okS or not sq then return false end
+    if cast_from == nil then
+        cast_from = Vector4.new(0, 0, 0, 1.0)
+        cast_to = Vector4.new(0, 0, 0, 1.0)
+    end
+    cast_from.x, cast_from.y, cast_from.z = sx, sy, sz
+    cast_to.x, cast_to.y, cast_to.z = sx + dx * length, sy + dy * length, sz + dz * length
+    local ok, hit, res = pcall(_callRaycast, sq, cast_from, cast_to, leanFilter())
+    if not ok then return false end
+    if not hit then return true, false, 0, 0, 0, 0 end
+    local p, n = res.position, res.normal
+    local along = (p.x - sx) * dx + (p.y - sy) * dy + (p.z - sz) * dz
+    return true, true, along, n.x, n.y, n.z
+end
+
+--- The engine half of the lean clamp (modules/lean_clamp.lua owns the policy):
+--- a sphere of the skin's radius swept from the clean eye along the lean, out
+--- of line casts (modules/lean_line_sweep.lua).
+local leanQuery = LeanLineSweep.query(leanCast, LEAN_SKIN)
 
 local function _readZoomTerms(cam)
     return cam.zoom, cam.zoomOverrideWeight, cam.zoomOverrideValue
@@ -1052,6 +1095,12 @@ end
 function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime)
     local rig_world = axesToWorld(rig_m, self.rig_written.x, self.rig_written.y, self.rig_written.z)
     local eye = { x = bone_m.W.x - rig_world.x, y = bone_m.W.y - rig_world.y, z = bone_m.W.z - rig_world.z }
+    return self:_clampAt(eye, axesToWorld(bone_m, x, y, z), deltaTime)
+end
+
+--- Cut a world-space lean `desired` from the clean eye `eye` down to what the
+--- level leaves room for. Returns the scale to apply to the lean.
+function Camera:_clampAt(eye, desired, deltaTime)
     local last = self.lean_last_eye
     if last then
         local dx, dy, dz = eye.x - last.x, eye.y - last.y, eye.z - last.z
@@ -1061,7 +1110,6 @@ function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime)
     end
     self.lean_last_eye = eye
 
-    local desired = axesToWorld(bone_m, x, y, z)
     local want = math.sqrt(dot3(desired, desired))
     local out = self.lean_clamp:apply(eye, desired, deltaTime, leanQuery)
     local got = math.sqrt(dot3(out, out))
@@ -1556,9 +1604,26 @@ function Camera:applyChaseCamPosition(rx, ry, rz, deltaTime)
         return
     end
 
-    self.pos_local.x = cam_x
-    self.pos_local.y = cam_y
-    self.pos_local.z = cam_z
+    -- The native hook applies the lean in the chase camera's clean frame, from
+    -- its clean position, and publishes both for exactly this: the same sweep
+    -- the first-person lean gets, from where the chase camera really is. With
+    -- no pose to sweep from there is no safe lean, so it is held at zero.
+    local ok, has, px, py, pz, qi, qj, qk, qr = pcall(_callChaseCameraPose)
+    if not ok or not has then
+        if not self._chase_pose_missing_logged then
+            self._chase_pose_missing_logged = true
+            hlog("[HeadTracking] chase camera pose not published yet - its lean is held at zero")
+        end
+        self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
+        return
+    end
+    self._chase_pose_missing_logged = false
+    local wx, wy, wz = quatRotate(qi, qj, qk, qr, cam_x, cam_y, cam_z)
+    local room = self:_clampAt({ x = px, y = py, z = pz }, { x = wx, y = wy, z = wz }, deltaTime)
+
+    self.pos_local.x = cam_x * room
+    self.pos_local.y = cam_y * room
+    self.pos_local.z = cam_z * room
 end
 
 function Camera:getAppliedPosition()

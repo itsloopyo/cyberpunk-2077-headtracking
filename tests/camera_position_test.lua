@@ -329,6 +329,9 @@ end
 --- given by a point on it and its normal. Every group answers the same.
 local wall = nil
 local raycasts = 0
+-- The chase camera's clean pose as the native hook publishes it, or nil for
+-- none published yet.
+local chase_pose = nil
 
 local function raycast(from, to)
     raycasts = raycasts + 1
@@ -345,6 +348,7 @@ end
 local function stub_cet()
     wall = nil
     raycasts = 0
+    chase_pose = { p = v3(100, 200, 10), q = { i = 0, j = 0, k = 0, r = 1 } }
     local written = {}
     local rig_written = {}
     local component = {
@@ -366,11 +370,28 @@ local function stub_cet()
             return assert(by_name[name], "no stub component " .. tostring(name))
         end,
     }
+    local group_bits = { Static = 4, Terrain = 128, Dynamic = 8, Vehicle = 16 }
+    QueryFilter = {
+        ZERO = function() return { mask1 = 0, mask2 = 0 } end,
+        AddGroup = function(name)
+            return { mask1 = 0, mask2 = assert(group_bits[name], "no stub group " .. tostring(name)) }
+        end,
+    }
     Game = {
         GetPlayer = function() return player end,
         HeadTrackingSetFppOrientation = function() end,
+        HeadTrackingChaseCameraPose = function()
+            if not chase_pose then return false end
+            local p, q = chase_pose.p, chase_pose.q
+            return true, p.x, p.y, p.z, q.i, q.j, q.k, q.r
+        end,
         GetSpatialQueriesSystem = function()
-            return { SyncRaycastByCollisionGroup = function(_, from, to) return raycast(from, to) end }
+            return {
+                SyncRaycastByQueryFilter = function(_, from, to, filter)
+                    assert(filter.mask2 == 4 + 128 + 8 + 16, "the lean casts against all four groups at once")
+                    return raycast(from, to)
+                end,
+            }
         end,
     }
     return written, rig_written
@@ -390,6 +411,7 @@ do
     -- back on with the head straight then replayed most of that lean on the very
     -- first frame, because the smoother resumed from the old value instead of
     -- snapping to the new sample.
+    stub_cet()
     local cam = bare_camera()
     lean_to_the_limit(cam, cam.applyChaseCamPosition)
 
@@ -426,6 +448,7 @@ end
 do
     -- suspend() and the toggle have to leave the same state behind, or the two
     -- resume paths disagree about whether the smoother is primed.
+    stub_cet()
     local cam_toggle = bare_camera()
     lean_to_the_limit(cam_toggle, cam_toggle.applyChaseCamPosition)
     cam_toggle.cached_settings.position_enabled = false
@@ -445,6 +468,27 @@ do
         "toggle and suspend agree on pos_has_value")
 end
 
+
+-- ----------------------------------------------- the chase camera's lean
+
+do
+    -- The chase camera's lean is swept from its own clean pose, in its own
+    -- frame. Turned 90 degrees about Z, a lean along its local +X runs along
+    -- world +Y, so a wall 0.15 m along world +Y holds it a skin off.
+    stub_cet()
+    local s = math.sqrt(0.5)
+    chase_pose.q = { i = 0, j = 0, k = s, r = s }
+    local cam = bare_camera()
+    wall = { p = v3(100, 200.15, 10), n = v3(0, -1, 0) }
+    cam:applyChaseCamPosition(-20, 0, 0, DT)
+    assert_near(cam.pos_local.x, 0.05, "held a skin off a wall along the camera's own right", 1e-9)
+    assert_true(cam.lean_clamp:inContact(), "contact is reported")
+
+    wall = nil
+    chase_pose = nil
+    cam:applyChaseCamPosition(-20, 0, 0, DT)
+    assert_near(cam.pos_local.x, 0, "no published pose, no lean")
+end
 
 -- ------------------------------------------- the lean between camera and rig
 
