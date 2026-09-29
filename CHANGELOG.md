@@ -22,6 +22,19 @@
 
 ### Fixed
 
+- Head motion is now smooth when the game runs faster than the tracker
+  sends. Every frame was being treated as a new tracker sample, so the
+  in-between frames repeated the last pose and the view stepped at the
+  tracker's rate, with a small overshoot on a long frame
+- End, Page Up, Page Down and Insert now work before the tracker has sent
+  anything. A press made before the first tracker packet was dropped
+- In position-only mode (Page Up) rounds no longer land off the crosshair by
+  the angle your head was turned when rotation went off
+- Leaning in position-only mode now follows the scope's zoom instead of
+  keeping whatever zoom was in force when rotation went off
+- Hit and kill markers are placed on the aim point from the moment they
+  appear, instead of showing at the centre of the screen for a frame first
+- A failed hit-marker update no longer stops the crosshair following the aim
 - Fixed the game crashing a few seconds after a save finished loading. While a
   save loads the game uses a temporary first-person camera and swaps in the real
   one as play starts. The native plugin kept pointing at the temporary one after
