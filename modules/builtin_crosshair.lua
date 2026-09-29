@@ -506,8 +506,16 @@ end
 -- alone re-enters Lua through our own TargetingSystem Override, which pulls
 -- three more camera-system reads behind it.
 function BuiltinCrosshair:_writeHitMarkersAtAim(dx, dy, valid)
+    self._hm_dx, self._hm_dy, self._hm_valid = dx, dy, valid
     if not self._shove_hitmarker or not self._hit_marker_tracking_allowed then return end
     if valid then self:_writeHitMarkers(dx, dy) end
+end
+
+-- The marker controller re-centres its children when it spawns or animates a
+-- marker, between two ticks. Re-applying the offset this frame's tick computed
+-- keeps a fresh marker from flashing at screen centre for a frame.
+function BuiltinCrosshair:_rewriteHitMarkers()
+    self:_writeHitMarkersAtAim(self._hm_dx, self._hm_dy, self._hm_valid)
 end
 
 -- Wipe every per-widget gate store. The gate compares the widget's current root
@@ -1439,22 +1447,22 @@ function BuiltinCrosshair:_installObservers()
     end
     tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'OnDamageAdded',
         function()
-            this_self:_writeHitMarkersAtAim()
+            this_self:_rewriteHitMarkers()
         end)
     tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'OnKillAdded', function()
-        this_self:_writeHitMarkersAtAim()
+        this_self:_rewriteHitMarkers()
     end)
     tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'PlayAnimation', function()
-        this_self:_writeHitMarkersAtAim()
+        this_self:_rewriteHitMarkers()
     end)
     tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'OnSway', function()
-        this_self:_writeHitMarkersAtAim()
+        this_self:_rewriteHitMarkers()
     end)
     tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'UpdateWidgetPosition', function()
-        this_self:_writeHitMarkersAtAim()
+        this_self:_rewriteHitMarkers()
     end)
     tryBind('ObserveAfter', 'TargetHitIndicatorGameController', 'OnNormalizeAndSaveSwayEvent', function()
-        this_self:_writeHitMarkersAtAim()
+        this_self:_rewriteHitMarkers()
     end)
 
     -- Crosshair controllers are captured at OnInitialize, which only fires when
@@ -1494,6 +1502,13 @@ function BuiltinCrosshair:_installObservers()
         end)
         tryBind('Observe', cls, 'OnUninitialize', function(this)
             this_self:_untrack(this)
+            -- The adopted entry cannot be matched by handle, so it goes by
+            -- class. If this class is still live elsewhere the recapture
+            -- observers adopt it again within a second.
+            if this_self._adopted[cls] ~= nil then
+                this_self._adopted[cls] = nil
+                this_self._entries_dirty = true
+            end
         end)
         -- No OnUpdate observer. CET's scripting.log says the method exists on
         -- none of these classes, base or concrete:
@@ -2380,9 +2395,9 @@ function BuiltinCrosshair:tick(tracking_allowed)
 
     local dx, dy, valid = self:_computeOffset(screen_w, screen_h)
 
-    self:_writeHitMarkersAtAim(dx, dy, valid)
     if #self:_entries() == 0 then
         self._stat.ticks_with_zero_ctrls = self._stat.ticks_with_zero_ctrls + 1
+        self:_writeHitMarkersAtAim(dx, dy, valid)
         return
     end
 
@@ -2408,6 +2423,9 @@ function BuiltinCrosshair:tick(tracking_allowed)
     -- offset back off them.
     self:_writeSmartTargets(dx, dy)
     if self._shove_nameplate then self:_writeNameplates(dx, dy) end
+    -- Last: _writeHitMarkers raises on a failed widget write, and the reticle
+    -- must not stop following the aim because a hit marker went bad.
+    self:_writeHitMarkersAtAim(dx, dy, valid)
 end
 
 --- Arm the smart-bracket probe for `seconds` of gameplay. Off by default.
