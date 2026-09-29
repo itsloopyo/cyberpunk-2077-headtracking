@@ -435,12 +435,23 @@ local LEAN_CUT_DISTANCE = 1.0
 -- Wall-clock seconds between clamp samples in the log while a lean is held.
 local LEAN_LOG_INTERVAL_S = 10.0
 
+-- CNames are built once each; these lookups run every frame.
+local cnames = {}
+local function cname(s)
+    local c = cnames[s]
+    if c == nil then
+        c = CName.new(s)
+        cnames[s] = c
+    end
+    return c
+end
+
 local function getRig(player)
-    return player:FindComponentByName(CName.new(RIG_COMPONENT))
+    return player:FindComponentByName(cname(RIG_COMPONENT))
 end
 
 local function getCameraBone(player)
-    return player:FindComponentByName(CName.new(CAMERA_BONE_COMPONENT))
+    return player:FindComponentByName(cname(CAMERA_BONE_COMPONENT))
 end
 
 local function dot3(a, b)
@@ -460,7 +471,7 @@ local function _callSpatialQueries()
     return Game.GetSpatialQueriesSystem()
 end
 local function _callRaycast(sq, from, to, group)
-    return sq:SyncRaycastByCollisionGroup(from, to, CName.new(group), false, false)
+    return sq:SyncRaycastByCollisionGroup(from, to, cname(group), false, false)
 end
 
 --- The engine half of the lean clamp (modules/lean_clamp.lua owns the policy).
@@ -517,8 +528,8 @@ end
 -- meshes bound straight to the entity root beside them (its muzzle brake).
 -- Turning only the Receiver left the muzzle brake behind.
 local function _collectWeaponParts(weapon)
-    local placed = CName.new("entIPlacedComponent")
-    local animated = CName.new("entAnimatedComponent")
+    local placed = cname("entIPlacedComponent")
+    local animated = cname("entAnimatedComponent")
     local parts = {}
     for _, c in ipairs(weapon:GetComponents()) do
         if c:IsA(placed) then
@@ -849,115 +860,43 @@ function Camera:apply(yaw, pitch, roll, deltaTime)
     if yaw_mode == "local" then
         head_quat = EulerAngles.new(self.smooth_roll, self.smooth_pitch, self.smooth_yaw):ToQuat()
     else
-        local okP, pw = pcall(_callGetWorldOrientation, player)
-        local parent_world = nil
-        if okP and pw and isValidNumber(pw.i) and isValidNumber(pw.j)
-                     and isValidNumber(pw.k) and isValidNumber(pw.r) then
-            parent_world = quatNormalize(pw)
-        end
-
-        -- Prefer the camera-system world orientation as the "clean world"
-        -- reference: on this build, mouse pitch lives downstream of
-        -- cam.localOrientation, so deriving clean_world from parent_world *
-        -- clean_local loses it (clean_local is pitch-free), and the yaw axis
-        -- collapses back onto local-Z, making world and local modes look
-        -- identical. The active camera world transform DOES carry mouse pitch;
-        -- peel our last-applied head quat (right-multiplied into the local
-        -- orientation, so right-peeled in world space too since world = parent
-        -- * local) to recover the true clean world orientation.
-        local cam_world_now = getActiveCameraWorldOrientation()
-        local world_is_true = cam_world_now ~= nil
-        local clean_world = nil
-        if cam_world_now then
-            if engine_kept_our_write then
-                clean_world = quatNormalize(quatMul(cam_world_now, quaternionInverse(self.last_head_quat)))
-            else
-                clean_world = cam_world_now
-            end
-        elseif parent_world then
-            -- Fallback (no camera-system transform available): synthesize from
-            -- parent_world * clean_local. Loses mouse pitch on this build, which
-            -- collapses the yaw axis back onto local-Z and makes world mode
-            -- indistinguishable from local. Say so once rather than leaving the
-            -- user toggling a switch that does nothing.
-            clean_world = quatNormalize(quatMul(parent_world, clean_quat))
-            if not self._world_degraded_logged then
-                self._world_degraded_logged = true
-                -- print, not dlog: DebugLog is disabled by default, and a mode
-                -- that silently does nothing is exactly what must not be quiet.
-                print("[HeadTracking] WORLD yaw mode DEGRADED to camera-local: " ..
-                      tostring(world_orient_fail_reason or "camera-system orientation unavailable") ..
-                      " - horizon lock inactive")
-            end
-        end
-
-        -- clean_world is the synthetic parent*clean and carries no mouse pitch,
-        -- because getActiveCameraWorldOrientation() never returns anything:
-        -- GetActiveCameraWorldTransform takes an out-parameter and we call it
-        -- with none, so it errors every frame. Fixing that call is the tidier
-        -- route, but the forward vector is a simpler reference and is already
-        -- proven, so take the view pitch from there.
+        -- Only the PITCH of the clean view orientation W matters: world yaw is a
+        -- rotation about world Z and so is the yaw part of W, and rotations about
+        -- the same axis commute, so W's yaw cancels out of W^-1 * Qyaw * W. The
+        -- reference is one scalar, read off the rendered camera forward.
         --
-        -- Only the PITCH of the clean view orientation matters here: world yaw
-        -- is a rotation about world Z and so is the yaw part of W, and rotations
-        -- about the same axis commute, so the yaw cancels out of
-        -- W^-1 * Qyaw * W entirely. That reduces the reference we need from a
-        -- full orientation to one scalar.
+        -- The rendered forward is W * head * f0 with head = W^-1 * Qyaw * W *
+        -- Qpr, which is Qyaw * W * Qpr * f0. Qyaw turns about world Z and leaves
+        -- the forward's height alone, so the rendered pitch is W's pitch plus
+        -- the pitch Qpr applied - the head pitch itself, NOT the Euler pitch of
+        -- the whole head quat, which picks up a share of the world yaw as soon
+        -- as W is pitched. Nothing to peel when the engine threw our write away.
         local view_pitch = nil
         local fwd = getActiveCameraForward()
         if fwd then
-            local okz, z = pcall(function() return fwd.z end)
-            if okz and isValidNumber(z) then
+            local z = fwd.z
+            if isValidNumber(z) then
                 if z > 1.0 then z = 1.0 elseif z < -1.0 then z = -1.0 end
-                local rendered_pitch = math.deg(math.asin(z))
-                -- fwd includes the head rotation we applied last frame; peel it
-                -- so the reference is the CLEAN (mouse-only) view pitch.
-                local hp = 0
-                if self.last_head_quat then
-                    local p = quatToPYR(self.last_head_quat)
-                    if isValidNumber(p) then hp = p end
-                end
-                view_pitch = rendered_pitch - hp
+                local applied = (engine_kept_our_write and self._applied_head_pitch) or 0
+                view_pitch = math.deg(math.asin(z)) - applied
             end
         end
 
-        if view_pitch or clean_world then
+        if view_pitch then
             if not self._world_active_logged then
                 self._world_active_logged = true
-                print(string.format(
-                    "[HeadTracking] WORLD yaw mode ACTIVE (pitch reference: %s)",
-                    view_pitch and "camera forward vector"
-                        or (world_is_true and "camera-system orientation" or "NONE - degraded")))
+                print("[HeadTracking] WORLD yaw mode ACTIVE (pitch reference: camera forward vector)")
             end
-
-            -- head must satisfy  W * head = Qyaw_world * W * Qpitchroll_local,
-            -- so head = W^-1 * Qyaw_world * W * Qpitchroll_local: the SAME W on
-            -- both sides of the yaw.
-            --
-            -- Conjugating with parent_world * clean_quat on the left while using
-            -- clean_world on the right (what this did before) mixes a pitch-free
-            -- orientation with a pitched one. A conjugation with mismatched
-            -- factors does not move the yaw axis onto world vertical at all, so
-            -- head yaw stayed on the camera-local axis and world mode was
-            -- indistinguishable from local no matter how the lookup went.
-            -- Pitch-only reference when we have it: W reduces to Qpitch, and
-            -- composeWorldModeQuat conjugates the world yaw by exactly that.
-            local W = clean_world
-            if view_pitch then
-                W = EulerAngles.new(0, view_pitch, 0):ToQuat()
-            end
-            head_quat = composeWorldModeQuat(W,
+            head_quat = composeWorldModeQuat(EulerAngles.new(0, view_pitch, 0):ToQuat(),
                 self.smooth_roll, self.smooth_pitch, self.smooth_yaw)
         else
-            -- Neither the camera system nor the player gave a world orientation,
-            -- so the only reference left is the clean LOCAL one. Conjugating by
-            -- that puts the yaw axis back on camera-local, which is local mode
-            -- in all but name. Report it once rather than pretending.
+            -- Conjugating by the clean LOCAL orientation puts the yaw axis back
+            -- on camera-local, which is local mode in all but name. Report it
+            -- once rather than pretending.
             if not self._world_degraded_logged then
                 self._world_degraded_logged = true
-                print("[HeadTracking] WORLD yaw mode DEGRADED (no world orientation available): " ..
-                      tostring(world_orient_fail_reason or "player world orientation unavailable") ..
-                      " - horizon lock inactive")
+                print("[HeadTracking] WORLD yaw mode DEGRADED: the camera forward vector is " ..
+                      "unreadable - horizon lock inactive")
             end
             head_quat = composeWorldModeQuat(clean_quat,
                 self.smooth_roll, self.smooth_pitch, self.smooth_yaw)
@@ -1067,6 +1006,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime)
         -- Remember what we applied so next frame can undo it; and stash
         -- the clean base for aim decoupling to consult.
         self.last_head_quat = head_quat
+        self._applied_head_pitch = self.smooth_pitch
         self.last_clean_local_quat = clean_quat
         self._last_written_final_quat = { i = fi, j = fj, k = fk, r = fr }
     end
@@ -1101,7 +1041,8 @@ end
 --- a loading screen alike.
 function Camera:_releaseRig(player)
     if not self.rig_applied then return end
-    pcall(_callSetLocalPosition, getRig(player), Vector4.new(0, 0, 0, 1.0))
+    local rig = getRig(player)
+    if rig then pcall(_callSetLocalPosition, rig, Vector4.new(0, 0, 0, 1.0)) end
     self.rig_written.x, self.rig_written.y, self.rig_written.z = 0, 0, 0
     self.rig_applied = false
 end
@@ -1171,6 +1112,11 @@ function Camera:applyWeaponView()
         self:_releaseWeaponView()
         return
     end
+    local bone = getCameraBone(player)
+    if bone == nil then
+        self:_releaseWeaponView()
+        return
+    end
     local id = weapon:GetEntityID()
     if self.weapon_view_id == nil or id.hash ~= self.weapon_view_id.hash then
         self:_releaseWeaponView()
@@ -1205,7 +1151,7 @@ function Camera:applyWeaponView()
     end
 
     local cm = cam:GetLocalToWorld()
-    local bm = getCameraBone(player):GetLocalToWorld()
+    local bm = bone:GetLocalToWorld()
     local fwd = bm.Y
     local l = math.sqrt(dot3(fwd, fwd))
     local aim = { x = fwd.x / l, y = fwd.y / l, z = fwd.z / l }
@@ -1215,8 +1161,9 @@ function Camera:applyWeaponView()
     local pos, quat = WeaponView.toLocal(turn, eye, weapon_pos, weapon:GetWorldOrientation())
     local pos4 = Vector4.new(pos.x, pos.y, pos.z, 1.0)
     local quat4 = Quaternion.new(quat.i, quat.j, quat.k, quat.r)
-    for _, c in ipairs(_collectWeaponParts(weapon)) do
-        pcall(_callSetLocalTransform, c, pos4, quat4)
+    local parts = _collectWeaponParts(weapon)
+    for i = 1, #parts do
+        pcall(_callSetLocalTransform, parts[i], pos4, quat4)
     end
     self.weapon_view_applied = true
 end
@@ -1527,8 +1474,25 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
     -- Both carriers move the eye to the same place, so the clamp cuts the whole
     -- lean once and the shares divide what is left.
     local rig = getRig(player)
+    local bone = getCameraBone(player)
+    if rig == nil or bone == nil then
+        -- The lean is measured and clamped in these two components' frames, so
+        -- without them there is no safe place to put it.
+        if not self._rig_missing_logged then
+            self._rig_missing_logged = true
+            hlog(string.format("[HeadTracking] positional tracking paused: player has no %s component",
+                rig == nil and RIG_COMPONENT or CAMERA_BONE_COMPONENT))
+        end
+        if self.pos_applied then
+            pcall(_callSetLocalPosition, cam, Vector4.new(0, 0, 0, 1.0))
+            self.pos_applied = false
+        end
+        self:_clearPositionState()
+        return
+    end
+    self._rig_missing_logged = false
     local rig_m = rig:GetLocalToWorld()
-    local bone_m = getCameraBone(player):GetLocalToWorld()
+    local bone_m = bone:GetLocalToWorld()
     local room = self:_clampLean(bone_m, rig_m, cam_x, cam_y, cam_z, deltaTime)
     cam_x, cam_y, cam_z = cam_x * room, cam_y * room, cam_z * room
 
