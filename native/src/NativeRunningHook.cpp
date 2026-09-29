@@ -306,10 +306,16 @@ static int ScanOrientationOffset(void* cam, float qi, float qj, float qk, float 
 //       ScanOrientationOffset() helper (still present) can re-find it.
 static constexpr int kFPPCamOrientationOffset = 0xD0;
 static int s_camOrientationOffset = kFPPCamOrientationOffset;  // pre-seeded baseline
-// Cached cam instance pointer. Null until first successful ResolveCamInstance.
-static RED4ext::IScriptable* s_camInstance = nullptr;
 
 bool OnUpdate(RED4ext::CGameApplication*) {
+    // Every tick, before anything reads it: a load destroys the FPP camera, and
+    // while it runs there is no player to resolve a new one from. A pointer kept
+    // from before the load then points at freed memory, and the re-stamp below
+    // wrote the head rotation into it for the first frames after tracking
+    // resumed, which crashed the game a few seconds later in whatever system had
+    // reused the memory (the crowd system, most often).
+    ::g_camInstance = ResolveCamInstance();
+
     // Provider vtables can only be patched once the RTTI registry is up, which
     // is long after plugin load - this retries until it takes, then just mirrors
     // counters.
@@ -352,25 +358,6 @@ bool OnUpdate(RED4ext::CGameApplication*) {
             g_headPos[1] = 0.0f;
             g_headPos[2] = 0.0f;
             g_aimDistance = 0.0f;
-        }
-
-        // Resolve the cam instance pointer periodically even without a
-        // Needed so `g_camInstance` is populated as
-        // soon as the player is in gameplay - otherwise the Frida
-        // watchpoint tools can't find the cam pointer until the user
-        // has fired at least once, which defeats the point of watching
-        // the first hitscan read.
-        //
-        // ResolveCamInstance walks the CRTTI chain every time; it's
-        // cheap but not free, so rate-limit to once per ~30 ticks
-        // (~250ms at 120Hz).
-        {
-            static uint32_t s_resolveCounter = 0;
-            if (::g_camInstance == nullptr || (++s_resolveCounter % 30) == 0) {
-                if (auto* cam = ResolveCamInstance()) {
-                    ::g_camInstance = cam;
-                }
-            }
         }
 
         // Click ring-dump REMOVED 2026-05-08. The pre-render hook

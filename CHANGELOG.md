@@ -22,6 +22,12 @@
 
 ### Fixed
 
+- Fixed the game crashing a few seconds after a save finished loading. The
+  native plugin kept a pointer to the first-person camera from before the load,
+  after the load had destroyed that camera, and wrote the head rotation into it
+  for the first frames of tracking. That memory by then belonged to something
+  else in the game, which crashed when it next used it. The camera is now looked
+  up fresh every frame
 - With a scope up and your head turned, the scope no longer drifts off what you are
   aiming at. The game draws the weapon more magnified than the world while a scope
   is up, so a head turn swung the scope further across the screen than the scene
