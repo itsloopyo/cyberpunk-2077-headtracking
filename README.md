@@ -178,7 +178,7 @@ By default leaning never takes your eye off the sights. `Insert` / `Ctrl+Shift+U
 
 With your head turned, the centre of a scope still shows what the round will hit. The game draws the weapon more magnified than the world while a scope is up, which would otherwise swing the scope further across the screen than the scene behind it, so the mod turns the weapon back by the difference.
 
-A lean stops about 10 cm short of walls and other level geometry, so it never puts the view inside them.
+A lean is checked against the level with a 10 cm sphere around the eye, so it stops about 10 cm short of walls, door frames, table edges and other level geometry instead of putting the view inside them.
 
 A scope's target indicator lights for what the scope is pointed at, not for what your head is facing.
 
@@ -191,7 +191,7 @@ The outside chase camera tracks your head too. Turn it off with "Chase Camera Tr
 - The near scene follows your head; the distant scene stays fixed on the screen. Third-person driving renders through more than one view, and only one of them currently carries the head rotation.
 - The game's camera motion blur smears the whole world, because it works out how fast static geometry is moving from a camera that has not been rotated. **Turn Motion Blur off** in Graphics.
 
-6DOF translation reaches the chase camera too, by a different route. On foot the offset goes into the first-person camera's local position; here it is published to the native plugin, which shifts the chase camera's own world position by it, turned by the camera's orientation from before the head rotation was composed in, so leaning goes with the vehicle rather than with where your head is pointing. `position_enabled` switches translation off for both cameras.
+6DOF translation reaches the chase camera too, by a different route. On foot the offset goes into the first-person camera's local position; here it is published to the native plugin, which shifts the chase camera's own world position by it, turned by the camera's orientation from before the head rotation was composed in, so leaning goes with the vehicle rather than with where your head is pointing. The lean there gets the same 10 cm check against the level, from the chase camera's own position. `position_enabled` switches translation off for both cameras.
 
 Head yaw there pans and tilts about the camera's own axes, so it behaves like local yaw mode whichever yaw mode you have selected.
 

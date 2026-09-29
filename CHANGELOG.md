@@ -16,9 +16,13 @@
   head turned it framed nothing while the scope sat on a target, and lit for
   someone the scope was not pointed at. It now lights for what the scope is on
 - A lean now stops about 10 cm short of walls and other level geometry, at the hip and
-  on the sights, instead of putting the view inside them. The allowance tightens at
-  once and opens back up over about 200ms, so stepping past a doorframe does not snap
-  the view. Contact is written to `HeadTracking.log`
+  on the sights, instead of putting the view inside them. The check sweeps a 10 cm
+  sphere around the eye rather than one line, so the edge of a door frame or a table
+  just beside the lean stops it too. The allowance tightens at once and opens back up
+  over about 200ms, so stepping past a doorframe does not snap the view. Contact is
+  written to `HeadTracking.log`
+- The chase camera's lean gets the same check, from the chase camera's own position.
+  It had none, so leaning there could put the camera inside a wall
 
 ### Fixed
 
@@ -35,6 +39,17 @@
 - Hit and kill markers are placed on the aim point from the moment they
   appear, instead of showing at the centre of the screen for a frame first
 - A failed hit-marker update no longer stops the crosshair following the aim
+- The crosshair is projected through the depth of the surface under the aim that
+  frame. It used to ease toward a new depth, so for a moment after the aim moved
+  onto a nearer or further surface while leaning, it sat off the impact point
+- World yaw mode keeps head yaw level with the horizon with the view pitched up or
+  down. The view's pitch was misread by part of the head's yaw, which tilted the
+  axis head yaw turns about, by 14.5 degrees at 45 degrees of pitch and 60 of yaw
+- Turning the chase camera's head tracking off, or leaving the car, puts the chase
+  camera back where the game has it instead of occasionally leaving the last head
+  pose in it
+- Notifications show in the top-right corner at any resolution. They were drawn at
+  a fixed position that was off screen below about 1850 pixels wide
 - Fixed the game crashing a few seconds after a save finished loading. While a
   save loads the game uses a temporary first-person camera and swaps in the real
   one as play starts. The native plugin kept pointing at the temporary one after
