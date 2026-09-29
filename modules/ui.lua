@@ -18,6 +18,7 @@ UI.__index = UI
 local NOTIFICATION_PADDING = 10
 local NOTIFICATION_WIDTH = 250
 local NOTIFICATION_CORNER_Y = 60   -- Distance from top
+local NOTIFICATION_MARGIN_RIGHT = 20
 local FADE_IN_DURATION = 0.15      -- Seconds to fade in
 local FADE_OUT_DURATION = 0.5      -- Seconds to fade out
 local MAX_NOTIFICATIONS = 5        -- Maximum simultaneous notifications
@@ -214,19 +215,16 @@ end
 --- Must be called every frame for animations to work
 function UI:draw()
     local now = os_clock()
-    local active = {}
+    local active = self.notifications
 
-    -- Filter out expired notifications and collect active ones
-    for _, notif in ipairs(self.notifications) do
-        local elapsed = now - notif.start_time
-        if elapsed < notif.duration then
-            table.insert(active, notif)
-        else
+    -- Drop expired notifications in place: this runs every rendered frame and
+    -- almost always has nothing to show, so it allocates nothing.
+    for i = #active, 1, -1 do
+        if now - active[i].start_time >= active[i].duration then
+            table.remove(active, i)
             self.stats.total_expired = self.stats.total_expired + 1
         end
     end
-
-    self.notifications = active
 
     -- Draw debug overlay if enabled
     if self.debug_enabled then
@@ -238,10 +236,9 @@ function UI:draw()
         return
     end
 
-    -- Position notifications in top-right area
-    -- Use a reasonable fixed position since GetMainViewport isn't available in CET
-    -- Window will auto-size and user can see it regardless of resolution
-    local window_x = 1600  -- Works for 1080p+ resolutions (right side of screen)
+    -- Top-right corner of whatever resolution the game runs at.
+    local screen_w = GetDisplayResolution()
+    local window_x = screen_w - NOTIFICATION_WIDTH - NOTIFICATION_MARGIN_RIGHT
     local window_y = NOTIFICATION_CORNER_Y
 
     ImGui.SetNextWindowPos(window_x, window_y)

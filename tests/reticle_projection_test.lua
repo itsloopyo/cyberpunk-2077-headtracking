@@ -124,7 +124,6 @@ Vector2 = {
 
 local driver = setmetatable({
     _aim_distance = nil,
-    _aim_distance_sample_t = nil,
     _aim_distance_error_logged = false,
 }, BuiltinCrosshair)
 
@@ -137,16 +136,12 @@ assert_eq(sampled_crosshair_calls, 0, "distance does not consume spread sample")
 now = 1.01
 next_distance = 10
 distance = driver:_getAimDistance({}, true)
-if distance <= 2 or distance >= 10 then
-    error("FAIL changed hit distance was not smoothed", 2)
-end
+assert_near(distance, 10, "a changed hit distance is used the frame it is measured")
 assert_eq(raycasts, 2, "second-frame sample raycast count")
 
 now = 1.04
 distance = driver:_getAimDistance({}, true)
-if distance <= 2 or distance >= 10 then
-    error("FAIL changed hit distance was not smoothed", 2)
-end
+assert_near(distance, 10, "and held while the surface is the same")
 assert_eq(raycasts, 3, "third-frame sample raycast count")
 
 now = 1.06
@@ -158,7 +153,7 @@ now = 1.08
 next_distance = nil
 distance = driver:_getAimDistance({}, true)
 assert_eq(distance, nil, "miss projects at infinity immediately")
-assert_eq(driver._aim_distance, nil, "miss clears smoothed hit distance")
+assert_eq(driver._aim_distance, nil, "miss clears the hit distance")
 
 now = 1.12
 driver:_getAimDistance({}, false)

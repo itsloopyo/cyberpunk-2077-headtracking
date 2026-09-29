@@ -619,6 +619,8 @@ local function onUpdateImpl(deltaTime)
 
     perf:updateStart()
 
+    local mounted = Game.GetMountedVehicle(Game.GetPlayer()) ~= nil
+
     -- Poll for the latest tracking sample. The poll returns nil on frames
     -- with no fresh UDP packet, but the interpolator runs every frame:
     -- it bridges the tracker rate (e.g. 60 Hz) to the render rate (e.g.
@@ -687,7 +689,6 @@ local function onUpdateImpl(deltaTime)
             -- eye stays put while it changes hands. Mounted in a vehicle the
             -- rig stays where the seat puts it, so on the sights the lean
             -- eases out instead.
-            local mounted = Game.GetMountedVehicle(Game.GetPlayer()) ~= nil
             local rig_share = mounted and 0.0 or (1.0 - ads_scale)
             camera:applyPosition(pose_x, pose_y, pose_z, deltaTime, ads_scale, rig_share)
             camera:applyWeaponView()
@@ -728,7 +729,7 @@ local function onUpdateImpl(deltaTime)
     -- is clean, so compensating the reticle drags it off the aim point while
     -- the camera sits still. Stand the driver down there.
     local view_is_head_tracked = chase_camera or not state:isChaseCameraActive()
-    if crosshair then crosshair:tick(view_is_head_tracked) end
+    if crosshair then crosshair:tick(view_is_head_tracked, mounted) end
 
     if should_diag then
         local stats = udp:getStats()

@@ -19,7 +19,6 @@ BuiltinCrosshair.__index = BuiltinCrosshair
 local math_rad = math.rad
 local math_tan = math.tan
 local math_abs = math.abs
-local math_exp = math.exp
 local math_sqrt = math.sqrt
 
 -- Hoisted pcall trampolines. The per-frame tick path calls
@@ -31,6 +30,11 @@ local function _readCamFov(cam) return cam.fov end
 local function _getRootWidget(ctrl) return ctrl:GetRootWidget() end
 local function _getRootCompoundWidget(ctrl) return ctrl:GetRootCompoundWidget() end
 local function _rootSetMargin(root, m) root:SetMargin(m) end
+local function _getMargin(w)
+    local m = w:GetMargin()
+    return m.left, m.top
+end
+local function _getParentWidget(w) return w:GetParentWidget() end
 local function _widgetSetTranslation(w, x, y) w:SetTranslation(x, y) end
 local function _widgetGetController(w) return w:GetController() end
 local function _getNumChildren(root) return root:GetNumChildren() end
@@ -99,7 +103,6 @@ local GATE_STALE_SECONDS = 0.15
 local GATE_STUCK_SECONDS = 1.0
 local GATE_STUCK_INTENDED_PX = 40.0
 local AIM_RAY_LENGTH_M = 1000.0
-local AIM_DISTANCE_SMOOTH_SPEED = 18.0
 local LOCK_CHILD_TRANSLATION_PX = 8.0
 -- The child-translation lock heuristic latches ANY visible descendant displaced
 -- past LOCK_CHILD_TRANSLATION_PX as an "engine lock-on" and pins the reticle to
@@ -297,7 +300,6 @@ function BuiltinCrosshair.new(settings, camera)
     self._last_dx = 0
     self._last_dy = 0
     self._aim_distance = nil
-    self._aim_distance_sample_t = nil
     self._aim_distance_error_logged = false
     self._hit_marker_tracking_allowed = false
 
@@ -542,6 +544,7 @@ function BuiltinCrosshair:_resetGateState()
     self._smart_buckets = nil
     self._smart_probe = nil
     self._smart_rescan_t = nil
+    self._smart_cancel_x, self._smart_cancel_y = nil, nil
     self._last_dx = 0
     self._last_dy = 0
 end
@@ -593,8 +596,9 @@ local function _clearHold(store)
 end
 
 local function _engineDriving(root, store, compute_child, want_l, want_t)
-    local l, t = 0, 0
-    pcall(function() local m = root:GetMargin(); l, t = m.left or 0, m.top or 0 end)
+    local ok_m, l, t = pcall(_getMargin, root)
+    if not ok_m then l, t = 0, 0 end
+    l, t = l or 0, t or 0
 
     local child_mag = 0
     if compute_child then
@@ -1531,13 +1535,10 @@ end
 function BuiltinCrosshair:_getAimDistance(player)
     if not Game then return nil end
 
-    local now = os.clock()
-
     local targeting = Game.GetTargetingSystem and Game.GetTargetingSystem()
     local spatial = Game.GetSpatialQueriesSystem and Game.GetSpatialQueriesSystem()
     if not player or not targeting or not spatial then
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
 
@@ -1549,7 +1550,6 @@ function BuiltinCrosshair:_getAimDistance(player)
                 tostring(from))
         end
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
 
@@ -1557,7 +1557,6 @@ function BuiltinCrosshair:_getAimDistance(player)
     local ok_sway, sway = pcall(_getNormalizedWeaponSway)
     if not camera_system or not ok_sway or not sway then
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
     local projected = camera_system:ProjectPoint(Vector4.new(
@@ -1569,14 +1568,12 @@ function BuiltinCrosshair:_getAimDistance(player)
     local sway_y = sway.Y or sway.y
     if not projected or type(sway_x) ~= "number" or type(sway_y) ~= "number" then
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
     local aim_point = camera_system:UnprojectPoint(
         Vector2.new(projected.x + sway_x, projected.y - sway_y))
     if not aim_point then
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
     local aim_x = aim_point.x - from.x
@@ -1586,7 +1583,6 @@ function BuiltinCrosshair:_getAimDistance(player)
         aim_x * aim_x + aim_y * aim_y + aim_z * aim_z)
     if forward_length <= 0 or forward_length ~= forward_length then
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
     local ray_x = aim_x / forward_length
@@ -1608,14 +1604,12 @@ function BuiltinCrosshair:_getAimDistance(player)
                 tostring(hit))
         end
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
 
     local hit_position = hit and result and result.position
     if not hit_position then
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
 
@@ -1625,20 +1619,13 @@ function BuiltinCrosshair:_getAimDistance(player)
     local hit_distance = math.sqrt(hit_x * hit_x + hit_y * hit_y + hit_z * hit_z)
     if hit_distance <= 0 or hit_distance ~= hit_distance then
         self._aim_distance = nil
-        self._aim_distance_sample_t = nil
         return nil
     end
 
-    local previous = self._aim_distance
-    local previous_t = self._aim_distance_sample_t
-    if not previous or not previous_t then
-        self._aim_distance = hit_distance
-    else
-        local dt = now - previous_t
-        local alpha = 1.0 - math_exp(-AIM_DISTANCE_SMOOTH_SPEED * dt)
-        self._aim_distance = previous + (hit_distance - previous) * alpha
-    end
-    self._aim_distance_sample_t = now
+    -- The live depth, never smoothed: a reticle projected through a lagging
+    -- depth agrees with the impact at one range only and splits from it on
+    -- either side of it while the depth catches up.
+    self._aim_distance = hit_distance
     self._aim_distance_error_logged = false
     return self._aim_distance
 end
@@ -1834,12 +1821,9 @@ function BuiltinCrosshair:_writeOne(entry, dx, dy, seen)
         -- then never written again and rides the head: a reticle that starts
         -- drifting the moment it touches the edge and does not recover. Reading
         -- back costs one GetMargin per write and makes the comparison honest.
-        local got_l, got_t = dx, dy
-        pcall(function()
-            local m = root:GetMargin()
-            got_l, got_t = m.left or dx, m.top or dy
-        end)
-        entry._lw.l, entry._lw.t = got_l, got_t
+        local ok_g, got_l, got_t = pcall(_getMargin, root)
+        if not ok_g then got_l, got_t = dx, dy end
+        entry._lw.l, entry._lw.t = got_l or dx, got_t or dy
     else
         entry.set_margin_ok = false
         self._stat.last_error = "SetMargin: " .. tostring(err_m)
@@ -1956,7 +1940,10 @@ function BuiltinCrosshair:_writeBrackets(dx, dy)
             local ok_m, err_m = pcall(_rootSetMargin, list[i],
                 inkMargin.new({ left = mx, top = my, right = 0, bottom = 0 }))
             if ok_m then
-                store.l, store.t = mx, my
+                -- What landed, not what was asked: see _writeOne.
+                local ok_g, got_l, got_t = pcall(_getMargin, list[i])
+                if not ok_g then got_l, got_t = mx, my end
+                store.l, store.t = got_l or mx, got_t or my
             elseif not self._brackets_margin_err_logged then
                 self._brackets_margin_err_logged = true
                 dlog("[HeadTracking:Reticle] brackets SetMargin FAILED: " .. tostring(err_m))
@@ -2115,11 +2102,11 @@ end
 local function _inheritedShoveCount(w, dx, dy)
     local n, node = 0, w
     for _ = 1, SMART_WALK_DEPTH do
-        local parent = nil
-        pcall(function() parent = node:GetParentWidget() end)
-        if parent == nil then break end
-        local l, t = 0, 0
-        pcall(function() local m = parent:GetMargin(); l, t = m.left or 0, m.top or 0 end)
+        local ok_p, parent = pcall(_getParentWidget, node)
+        if not ok_p or parent == nil then break end
+        local ok_m, l, t = pcall(_getMargin, parent)
+        if not ok_m then l, t = 0, 0 end
+        l, t = l or 0, t or 0
         if math_abs(l - dx) < GATE_MATCH_EPS and math_abs(t - dy) < GATE_MATCH_EPS then
             n = n + 1
         end
@@ -2188,14 +2175,25 @@ function BuiltinCrosshair:_writeSmartTargets(dx, dy)
         slog("channel decided: cancelling our shove via " .. self._smart_chan)
     end
 
-    -- Zero shove reaching the brackets means nothing to cancel; writing -0
-    -- would still be correct, but skipping keeps the idle path free.
-    local inherited = _inheritedShoveCount(list[1], dx, dy)
+    -- A shove under the match tolerance cannot be told apart from an ancestor
+    -- nobody moved, so every untouched ancestor at (0, 0) would count and the
+    -- brackets would be pushed several times a sub-pixel offset the wrong way.
+    -- Below it there is nothing to cancel.
+    local inherited = 0
+    if math_abs(dx) >= GATE_MATCH_EPS or math_abs(dy) >= GATE_MATCH_EPS then
+        inherited = _inheritedShoveCount(list[1], dx, dy)
+    end
     self._smart_inherited = inherited
-    if inherited == 0 then return end
 
     local sx = -dx * inherited * self.smart_scale
     local sy = -dy * inherited * self.smart_scale
+    -- Nothing to cancel and nothing of ours left on the brackets: the idle
+    -- path writes nothing. A cancellation that just stopped is written back to
+    -- zero once, or the brackets keep the last one.
+    if inherited == 0 and (self._smart_cancel_x or 0) == 0 and (self._smart_cancel_y or 0) == 0 then
+        return
+    end
+    self._smart_cancel_x, self._smart_cancel_y = sx, sy
     for i = 1, #list do
         if self._smart_chan == 'translation' then
             pcall(_widgetSetTranslation, list[i], sx, sy)
@@ -2352,7 +2350,10 @@ function BuiltinCrosshair:_resetAll()
     if self._shove_nameplate then self:_writeNameplates(0, 0) end
 end
 
-function BuiltinCrosshair:tick(tracking_allowed)
+--- @param tracking_allowed boolean
+--- @param mounted boolean|nil In a vehicle: the in-car bracket reticle exists only
+---   there, and its widgets outlive the drive, so on foot they are left alone.
+function BuiltinCrosshair:tick(tracking_allowed, mounted)
     self._hit_marker_tracking_allowed = self.enabled and tracking_allowed
     if self._np_probe_frames > 0 then
         pcall(function() self:_probeNameplatesTick() end)
@@ -2417,7 +2418,13 @@ function BuiltinCrosshair:tick(tracking_allowed)
     -- frame is left untouched, and each one sitting idle at centre is shoved to
     -- body-forward. No global nameplate-count proxy - a stray pedestrian's
     -- nameplate no longer suppresses the free-aim compensation.
-    self:_writeBrackets(dx, dy)
+    if mounted then
+        self:_writeBrackets(dx, dy)
+        self._brackets_shoved = true
+    elseif self._brackets_shoved then
+        self:_writeBrackets(0, 0)
+        self._brackets_shoved = false
+    end
     -- Smart-weapon target brackets ride under a root we just shoved, and the
     -- engine has already projected each one onto its own target. Take our
     -- offset back off them.
