@@ -65,7 +65,6 @@ local function bare_camera(overrides)
     cam.lean_was_failed = false
     cam.lean_last_log = 0
     cam.weapon_view_id = nil
-    cam.weapon_view_parts = {}
     cam.weapon_view_applied = false
     cam.weapon_view_logged = false
     cam.weapon_view_last_log = -10
@@ -719,7 +718,11 @@ local function stub_weapon_view(held)
     Vector4 = { new = function(x, y, z, w) return { x = x, y = y, z = z, w = w } end }
     Quaternion = { new = function(i, j, k, r) return { i = i, j = j, k = k, r = r } end }
     CName = { new = function(name) return name end }
-    Game = { GetPlayer = function() return player end, HeadTrackingSetFppOrientation = function() end }
+    Game = {
+        GetPlayer = function() return player end,
+        HeadTrackingSetFppOrientation = function() end,
+        FindEntityByID = function(id) return held.alive[id.hash] end,
+    }
     GameObject = { GetActiveWeapon = function() return held.weapon end }
     return cam
 end
@@ -730,10 +733,26 @@ local function scope_up(cam)
 end
 
 local function last(p) return p.writes[#p.writes] end
+
+local function holding(held, w) held.weapon = w; held.alive[w.GetEntityID().hash] = w end
+
+--- True if any value reachable from the camera's own fields is one of the parts.
+local function holds_a_part(cam, w)
+    local parts = {}
+    for _, p in pairs(w.parts) do parts[p] = true end
+    for _, v in pairs(cam) do
+        if parts[v] then return true end
+        if type(v) == "table" then
+            for _, x in pairs(v) do if parts[x] then return true end end
+        end
+    end
+    return false
+end
 local function is_identity(w) return w.pos.x == 0 and w.pos.y == 0 and w.pos.z == 0 and w.quat.r == 1 end
 
 do
-    local held = { weapon = weapon(1) }
+    local held = { alive = {} }
+    holding(held, weapon(1))
     local fpp = stub_weapon_view(held)
     local cam = bare_camera()
 
@@ -750,6 +769,8 @@ do
     assert_true(#parts.muzzle.writes == 1, "and so is the mesh bound to the entity root")
     assert_true(#parts.barrel.writes == 0, "a part bound to another part rides it and is left alone")
     assert_true(#parts.projectile.writes == 0, "the projectile spawn is not a part and is never moved")
+    assert_true(not holds_a_part(cam, held.weapon),
+        "no component handle is kept between frames, so none outlives its weapon")
 
     cam:suspend()
     assert_true(is_identity(last(parts.receiver)) and is_identity(last(parts.muzzle)),
@@ -757,13 +778,14 @@ do
 end
 
 do
-    local held = { weapon = weapon(1) }
+    local held = { alive = {} }
+    holding(held, weapon(1))
     local fpp = stub_weapon_view(held)
     local cam = bare_camera()
     scope_up(fpp)
     cam:applyWeaponView()
     local old = held.weapon
-    held.weapon = weapon(2)
+    holding(held, weapon(2))
     cam:applyWeaponView()
     assert_true(is_identity(last(old.parts.receiver)), "swapping weapons restores the one put away")
     assert_true(#held.weapon.parts.receiver.writes == 1, "and turns the one drawn")
@@ -779,6 +801,25 @@ do
     scope_up(fpp)
     cam:applyWeaponView()
     assert_true(not cam.weapon_view_applied, "with nothing in hand there is nothing to turn")
+end
+
+do
+    -- A load destroys the weapon while it holds a turn. Nothing of it may be
+    -- touched afterwards.
+    local held = { alive = {} }
+    holding(held, weapon(3))
+    local fpp = stub_weapon_view(held)
+    local cam = bare_camera()
+    scope_up(fpp)
+    cam:applyWeaponView()
+    local gone = held.weapon
+    local n = #gone.parts.receiver.writes
+    held.alive[3] = nil
+    holding(held, weapon(4))
+    cam:applyWeaponView()
+    assert_true(#gone.parts.receiver.writes == n, "a destroyed weapon's parts are never written")
+    cam:suspend()
+    assert_true(#gone.parts.receiver.writes == n, "not even on suspend")
 end
 
 print("== Camera smoothing OK ==")

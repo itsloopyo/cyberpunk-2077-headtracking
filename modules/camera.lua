@@ -342,7 +342,6 @@ function Camera.new(settings)
 
     -- The weapon the parts below belong to, and whether they hold a turn.
     self.weapon_view_id = nil
-    self.weapon_view_parts = {}
     self.weapon_view_applied = false
     self.weapon_view_logged = false
     self.weapon_view_last_log = -WEAPON_VIEW_LOG_INTERVAL_S
@@ -500,6 +499,10 @@ end
 
 local function _callGetActiveWeapon(player)
     return GameObject.GetActiveWeapon(player)
+end
+
+local function _callFindEntity(id)
+    return Game.FindEntityByID(id)
 end
 
 local function _callSetLocalTransform(component, pos, quat)
@@ -1138,13 +1141,21 @@ end
 
 --- Put the weapon's parts back where the weapon keeps them. Like the rig, a
 --- turn left in them stays through a menu or a holster.
+---
+--- The weapon is found again by its ID rather than kept: a component handle
+--- held across frames outlives the entity when a load destroys it, and
+--- releasing it afterwards crashed the game a few seconds into gameplay. A
+--- weapon that no longer exists has nothing left to put back.
 function Camera:_releaseWeaponView()
     self.weapon_view_logged = false
     if not self.weapon_view_applied then return end
-    for _, c in ipairs(self.weapon_view_parts) do
-        pcall(_callSetLocalTransform, c, Vector4.new(0, 0, 0, 1.0), Quaternion.new(0, 0, 0, 1))
-    end
     self.weapon_view_applied = false
+    local ok, weapon = pcall(_callFindEntity, self.weapon_view_id)
+    if not ok or weapon == nil then return end
+    local origin, identity = Vector4.new(0, 0, 0, 1.0), Quaternion.new(0, 0, 0, 1)
+    for _, c in ipairs(_collectWeaponParts(weapon)) do
+        pcall(_callSetLocalTransform, c, origin, identity)
+    end
 end
 
 --- Turn the held weapon so the weapon pass draws its sight line where the world
@@ -1156,15 +1167,12 @@ function Camera:applyWeaponView()
     local okW, weapon = pcall(_callGetActiveWeapon, player)
     if not okW or weapon == nil then
         self:_releaseWeaponView()
-        self.weapon_view_id = nil
-        self.weapon_view_parts = {}
         return
     end
-    local id = weapon:GetEntityID().hash
-    if id ~= self.weapon_view_id then
+    local id = weapon:GetEntityID()
+    if self.weapon_view_id == nil or id.hash ~= self.weapon_view_id.hash then
         self:_releaseWeaponView()
         self.weapon_view_id = id
-        self.weapon_view_parts = _collectWeaponParts(weapon)
     end
 
     local okZ, zoom, weight, value = pcall(_readZoomTerms, cam)
@@ -1190,7 +1198,7 @@ function Camera:applyWeaponView()
         self.weapon_view_logged = true
         hlog(string.format(
             "[HeadTracking] weapon view: world zoom=%.4f weapon zoom=%.4f ratio=%.4f parts=%d",
-            world_zoom, weapon_zoom, ratio, #self.weapon_view_parts))
+            world_zoom, weapon_zoom, ratio, #_collectWeaponParts(weapon)))
         self.weapon_view_last_log = now
     end
 
@@ -1205,7 +1213,7 @@ function Camera:applyWeaponView()
     local pos, quat = WeaponView.toLocal(turn, eye, weapon_pos, weapon:GetWorldOrientation())
     local pos4 = Vector4.new(pos.x, pos.y, pos.z, 1.0)
     local quat4 = Quaternion.new(quat.i, quat.j, quat.k, quat.r)
-    for _, c in ipairs(self.weapon_view_parts) do
+    for _, c in ipairs(_collectWeaponParts(weapon)) do
         pcall(_callSetLocalTransform, c, pos4, quat4)
     end
     self.weapon_view_applied = true
