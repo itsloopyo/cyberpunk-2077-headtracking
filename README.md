@@ -180,7 +180,7 @@ With your head turned, the centre of a scope still shows what the round will hit
 
 A lean stops about 10 cm short of walls and other level geometry, so it never puts the view inside them.
 
-What the game treats as under your crosshair follows your aim, not your head, so a scope's target indicator lights for what the scope is pointed at.
+A scope's target indicator lights for what the scope is pointed at, not for what your head is facing.
 
 ## In vehicles
 

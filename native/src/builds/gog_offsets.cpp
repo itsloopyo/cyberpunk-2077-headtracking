@@ -24,9 +24,6 @@ extern const BuildProfile kGogProfile_20250827 = {
         0x4E8B6F,  // SmartGunCameraCallB
         0x127404,  // CameraPublishFn
         0x4B9D84,  // TargetingRecordUpdate
-        0x396F30,  // DirectionToAngles
-        0x3FB4C8,  // UiTargetRayQuery
-        0x3FA0CD,  // UiTargetRayQueryReturn
         0x4E8D68,  // CameraTransformFn
         0x3F90F7,  // CrosshairRaycastCameraReturn
     },

@@ -696,6 +696,8 @@ local function onUpdateImpl(deltaTime)
     -- so flipping the flag first keeps the resume frame from publishing a live
     -- head rotation still labelled "tracking off".
     aim:setEnabled(true)
+    -- The native crosshair raycast correction only runs with the sights up.
+    aim:setADS(state:isAdsActive())
     local rotation = camera:getSmoothedRotation()
     local position_x, position_y, position_z = camera:getAppliedPosition()
     local aim_distance

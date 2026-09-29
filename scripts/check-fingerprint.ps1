@@ -142,9 +142,6 @@ extern const BuildProfile kStoreProfile_$profileDate = {
         0x000000,  // SmartGunCameraCallB
         0x000000,  // CameraPublishFn
         0x000000,  // TargetingRecordUpdate
-        0x000000,  // DirectionToAngles
-        0x000000,  // UiTargetRayQuery
-        0x000000,  // UiTargetRayQueryReturn
         0x000000,  // CameraTransformFn
         0x000000,  // CrosshairRaycastCameraReturn
     },
