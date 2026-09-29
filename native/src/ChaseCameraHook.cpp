@@ -48,6 +48,7 @@ std::atomic<uint32_t> s_faults{0};
 // never drives in third person never gets a detour on the camera publish.
 const RED4ext::v1::Sdk* s_sdk = nullptr;
 RED4ext::v1::PluginHandle s_handle = nullptr;
+bool s_gaveUp = false;
 
 // What we last wrote, and the engine's own value it was composed from. The
 // engine rebuilds the pose most frames, but when it leaves ours in place the
@@ -210,7 +211,11 @@ bool ChaseCameraHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandl
 }
 
 void ChaseCameraHook_EnsureInstalled() {
-    if (s_hooked.load(std::memory_order_acquire) || !s_sdk) return;
+    if (s_hooked.load(std::memory_order_acquire) || s_gaveUp || !s_sdk) return;
+    // One attempt. This runs on every state push while the chase camera is up,
+    // and a target that fails to resolve or attach once will fail the same way
+    // on every frame after it, logging each time.
+    s_gaveUp = true;
 
     if (!builds::HasActiveProfile()) {
         LogInfo("[ChaseCam] no matching build profile - the camera publish is not hooked");
@@ -240,6 +245,7 @@ void ChaseCameraHook_EnsureInstalled() {
 }
 
 void ChaseCameraHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle) {
+    s_sdk = nullptr;
     if (!s_hooked.exchange(false, std::memory_order_acq_rel)) return;
     if (sdk && s_target) {
         sdk->hooking->Detach(handle, s_target);

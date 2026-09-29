@@ -568,7 +568,8 @@ function Aim:init()
             local pos, fwd = wrappedMethod(instigator)
             discoTap("TargetingSystem:GetCrosshairData", fwd)
             return pos, compensateForward(fwd)
-        end
+        end,
+        2
     )
 
     print("[HeadTracking:AIM] GetCrosshairData Override registered")
@@ -593,7 +594,8 @@ function Aim:init()
             local pos, fwd = wrappedMethod(instigator)
             discoTap("TargetingSystem:GetDefaultCrosshairData", fwd)
             return pos, compensateForward(fwd)
-        end
+        end,
+        2
     )
     print("[HeadTracking:AIM] GetDefaultCrosshairData Override registered")
 

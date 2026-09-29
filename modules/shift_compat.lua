@@ -73,7 +73,15 @@ local function resolve(log)
     -- installed, and it looks identical from the outside: head tracking dies
     -- and nothing says why. Say it once. Absent Shift stays silent, which is
     -- almost every install.
-    if type(mod.api) ~= "table" or type(mod.api.SuppressWeaponPreset) ~= "function" then
+    -- All four are checked here: apply() runs at the top of every frame, and a
+    -- Shift build missing any one of them would otherwise throw there each
+    -- frame and take the rest of the update down with it.
+    local m = mod.api
+    if type(m) ~= "table"
+        or type(m.SuppressWeaponPreset) ~= "function"
+        or type(m.SuppressVehiclePreset) ~= "function"
+        or type(m.SuppressImmersiveCamera) ~= "function"
+        or type(m.ResetCamera) ~= "function" then
         if not unusable_logged then
             unusable_logged = true
             local out = log or print

@@ -121,6 +121,10 @@ void EmitThunk(uint8_t* code, uint64_t* counter, uint64_t* orig) {
 // State
 // ---------------------------------------------------------------------------
 std::atomic<bool>     s_installed{false};
+// Set when the classes are registered but none could be instrumented, and at
+// unload. Install() is otherwise retried every frame, and each failed attempt
+// creates up to three script instances and logs a warning per class.
+std::atomic<bool>     s_disabled{false};
 uintptr_t             s_vtables[kClassCount] = {0, 0, 0};
 void*                 s_aimOrig[kClassCount] = {nullptr, nullptr, nullptr};
 
@@ -437,9 +441,11 @@ bool Install() {
         if (InstallClass(rtti, c)) ++ok;
     }
     if (ok == 0) {
-        LogError("[AimProvider] no provider class instrumented");
+        LogError("[AimProvider] no provider class instrumented - the projectile aim "
+                 "peel is off for this session");
         VirtualFree(s_page, 0, MEM_RELEASE);
         s_page = nullptr;
+        s_disabled.store(true, std::memory_order_release);
         return false;
     }
     LogInfo("[AimProvider] installed on %d/%d provider classes", ok, kClassCount);
@@ -536,6 +542,7 @@ void Heartbeat() {
 }  // namespace
 
 bool AimProviderHook_Tick() {
+    if (s_disabled.load(std::memory_order_acquire)) return false;
     if (!s_installed.load(std::memory_order_acquire)) {
         // RTTI comes up well after plugin load; retry until it does.
         if (!Install()) return false;
@@ -554,6 +561,7 @@ bool AimProviderHook_Tick() {
 }
 
 void AimProviderHook_Stop() {
+    s_disabled.store(true, std::memory_order_release);
     if (!s_installed.exchange(false, std::memory_order_acq_rel)) return;
 
     for (int c = 0; c < kClassCount; ++c) {

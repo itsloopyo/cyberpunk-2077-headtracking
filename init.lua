@@ -188,7 +188,11 @@ end
 -- non-reentrant on a single wrapper (each Override gets its own closure with
 -- its own args upvalue), so reusing the table is safe.
 local _unpackFn = table.unpack or unpack
-local function guardedVar(name, fn, isOverride)
+-- outParams: how many trailing callback arguments before wrappedMethod are
+-- OUT params. CET passes them to the Override callback but they must be left
+-- out when calling wrappedMethod, so the recovery call has to drop them too.
+local function guardedVar(name, fn, isOverride, outParams)
+    local wrappedLast = -1 - (outParams or 0)
     local args = {}
     local n = 0
     local function invoke() return fn(_unpackFn(args, 1, n)) end
@@ -204,7 +208,7 @@ local function guardedVar(name, fn, isOverride)
         if isOverride then
             local wrapped = args[n]
             if type(wrapped) == "function" then
-                local wok, wa, wb, wc, wd, we = pcall(wrapped, _unpackFn(args, 2, n - 1))
+                local wok, wa, wb, wc, wd, we = pcall(wrapped, _unpackFn(args, 2, n + wrappedLast))
                 if wok then return wa, wb, wc, wd, we end
                 _writeCrash(name .. ".wrapped", wa)
             end
@@ -229,8 +233,8 @@ do
 
     local rawOverride = Override
     if type(rawOverride) == "function" then
-        Override = function(class, method, fn)
-            return rawOverride(class, method, guardedVar("Override:" .. tostring(class) .. "." .. tostring(method), fn, true))
+        Override = function(class, method, fn, outParams)
+            return rawOverride(class, method, guardedVar("Override:" .. tostring(class) .. "." .. tostring(method), fn, true, outParams))
         end
     end
 end
@@ -704,7 +708,14 @@ local function onUpdateImpl(deltaTime)
     local rotation = camera:getSmoothedRotation()
     local position_x, position_y, position_z = camera:getAppliedPosition()
     local aim_distance
-    if crosshair then aim_distance = crosshair:getAimDistance() end
+    -- The distance only feeds the lean's parallax term, which every consumer
+    -- (compensateForward and both native aim peels) skips at a zero offset.
+    -- Skipping it here saves one to two 1000 m raycasts a frame in
+    -- rotation-only mode and whenever the head is centred.
+    if crosshair and math.abs(position_x) + math.abs(position_y)
+            + math.abs(position_z) > 0.00001 then
+        aim_distance = crosshair:getAimDistance()
+    end
     aim:update(rotation.yaw, rotation.pitch, rotation.roll,
                camera:getHeadQuat(),
                position_x, position_y, position_z, aim_distance)

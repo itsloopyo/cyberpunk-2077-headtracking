@@ -123,8 +123,16 @@ ReadResult ReadRecord(const uint8_t* rec) {
         float lean[3] = { 0.0f, 0.0f, 0.0f };
         if (std::isfinite(headPos[0] + headPos[1] + headPos[2])) Rotate(c, headPos, lean);
 
-        const uint32_t seq = s_snapSeq.load(std::memory_order_relaxed);
-        s_snapSeq.store(seq + 1, std::memory_order_release);
+        // Seqlock writer. The odd count is claimed by exchange so a second job
+        // thread updating a record at the same moment skips rather than
+        // interleaving its stores; the fence keeps the data stores below the
+        // odd count.
+        uint32_t seq = s_snapSeq.load(std::memory_order_relaxed);
+        if ((seq & 1u) ||
+            !s_snapSeq.compare_exchange_strong(seq, seq + 1, std::memory_order_relaxed)) {
+            return ReadResult::Skipped;
+        }
+        std::atomic_thread_fence(std::memory_order_release);
         for (int k = 0; k < 3; ++k) {
             s_snap.rendered[k] = fwd[k];
             s_snap.lean[k]     = lean[k];
@@ -186,7 +194,8 @@ bool CleanCameraTransform(uint8_t* xf) {
     const uint32_t before = s_snapSeq.load(std::memory_order_acquire);
     if (before & 1u) return false;
     for (int k = 0; k < 3; ++k) { rendered[k] = s_snap.rendered[k]; lean[k] = s_snap.lean[k]; }
-    if (s_snapSeq.load(std::memory_order_acquire) != before) return false;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (s_snapSeq.load(std::memory_order_relaxed) != before) return false;
     __try {
         float* q = reinterpret_cast<float*>(xf + kTransformOrientation);
         const float qLenSq = q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3];
