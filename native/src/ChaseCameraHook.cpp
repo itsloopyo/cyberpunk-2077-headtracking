@@ -13,6 +13,9 @@
 #include "ScriptChannel.hpp"
 #include "builds/build_registry.hpp"
 
+#include <RED4ext/Scripting/Functions.hpp>
+#include <RED4ext/Scripting/Utils.hpp>
+
 void LogInfo(const char* fmt, ...);
 void LogError(const char* fmt, ...);
 
@@ -67,6 +70,20 @@ Memory s_mem;
 float s_worldOrientation[4] = {0, 0, 0, 1};
 std::atomic<bool> s_worldOrientationValid{false};
 
+// The camera's CLEAN pose - before any head rotation or lean - for the script
+// half's lean clamp, which sweeps the level from here. Written from the publish
+// and read on the script thread, so it is a seqlock: an odd count is a write in
+// progress.
+struct CleanPose {
+    float position[3];
+    float orientation[4];
+};
+CleanPose s_cleanPose{};
+std::atomic<uint32_t> s_cleanPoseSeq{0};
+std::atomic<uint64_t> s_cleanPoseMs{0};
+// A pose older than this is from a camera that is no longer publishing.
+constexpr uint64_t kCleanPoseFreshMs = 250;
+
 bool IsUnitish(const float* q) {
     const float lenSq = q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3];
     return std::isfinite(lenSq) && lenSq > 0.5f && lenSq < 1.5f;
@@ -114,6 +131,54 @@ bool RotatePose(uint8_t* pose, const float* head, float* cleanOut) {
     return true;
 }
 
+// The engine rebuilds the pose most frames, but when it leaves ours in place a
+// lean or head rotation we have stopped applying would stay baked into the
+// camera, and the next lean would take the offset position as clean and add
+// itself on top. So whatever we last wrote and is still there goes back to the
+// engine's own value.
+void RestoreCleanPosition(uint8_t* pose) {
+    int32_t* axis = reinterpret_cast<int32_t*>(pose);
+    if (s_mem.posValid && axis[0] == s_mem.writtenPos[0] && axis[1] == s_mem.writtenPos[1] &&
+        axis[2] == s_mem.writtenPos[2]) {
+        axis[0] = s_mem.cleanPos[0];
+        axis[1] = s_mem.cleanPos[1];
+        axis[2] = s_mem.cleanPos[2];
+    }
+    s_mem.posValid = false;
+}
+
+void RestoreCleanPose(uint8_t* pose) {
+    float* q = reinterpret_cast<float*>(pose + 0x10);
+    if (s_mem.quatValid && SameQuat(q, s_mem.writtenQuat)) {
+        for (int i = 0; i < 4; ++i) q[i] = s_mem.cleanQuat[i];
+    }
+    s_mem.quatValid = false;
+    RestoreCleanPosition(pose);
+}
+
+// POD-only: runs under the caller's SEH.
+void PublishCleanPose(const uint8_t* pose) {
+    const int32_t* axis = reinterpret_cast<const int32_t*>(pose);
+    const float* q = reinterpret_cast<const float*>(pose + 0x10);
+    CleanPose c;
+    for (int i = 0; i < 3; ++i) {
+        const int32_t fixed = s_mem.posValid ? s_mem.cleanPos[i] : axis[i];
+        c.position[i] = static_cast<float>(fixed) / kFixedPointPerMetre;
+    }
+    for (int i = 0; i < 4; ++i) c.orientation[i] = s_mem.quatValid ? s_mem.cleanQuat[i] : q[i];
+    if (!IsUnitish(c.orientation)) return;
+
+    uint32_t seq = s_cleanPoseSeq.load(std::memory_order_relaxed);
+    if ((seq & 1u) ||
+        !s_cleanPoseSeq.compare_exchange_strong(seq, seq + 1, std::memory_order_relaxed)) {
+        return;
+    }
+    std::atomic_thread_fence(std::memory_order_release);
+    s_cleanPose = c;
+    s_cleanPoseSeq.store(seq + 2, std::memory_order_release);
+    s_cleanPoseMs.store(GetTickCount64(), std::memory_order_relaxed);
+}
+
 // Offsets the camera's world position by the head translation, rotated out of
 // camera-local space by the CLEAN orientation - so leaning follows the car's
 // heading rather than wherever the head happens to be pointing.
@@ -121,7 +186,7 @@ void TranslatePose(uint8_t* pose, const float* clean) {
     const float lx = g_headPos[0], ly = g_headPos[1], lz = g_headPos[2];
     if (!std::isfinite(lx) || !std::isfinite(ly) || !std::isfinite(lz)) return;
     if (std::fabs(lx) + std::fabs(ly) + std::fabs(lz) <= 0.0005f) {
-        s_mem.posValid = false;
+        RestoreCleanPosition(pose);
         return;
     }
 
@@ -159,19 +224,30 @@ void Hook_CameraPublish(void* self) {
         const float head[4] = {g_headQuat[0], g_headQuat[1], g_headQuat[2], g_headQuat[3]};
         const float delta = std::fabs(head[0]) + std::fabs(head[1]) + std::fabs(head[2]) +
                             std::fabs(1.0f - std::fabs(head[3]));
-        if (IsUnitish(head) && delta > kNeutralPose) {
-            __try {
-                uint8_t* pose = reinterpret_cast<uint8_t*>(self) + kPoseOffset;
-                float clean[4];
-                if (RotatePose(pose, head, clean)) {
-                    TranslatePose(pose, clean);
-                    s_injected.fetch_add(1, std::memory_order_relaxed);
-                }
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                s_faults.fetch_add(1, std::memory_order_relaxed);
-                s_mem.quatValid = false;
-                s_mem.posValid = false;
+        __try {
+            uint8_t* pose = reinterpret_cast<uint8_t*>(self) + kPoseOffset;
+            float clean[4];
+            if (IsUnitish(head) && delta > kNeutralPose && RotatePose(pose, head, clean)) {
+                TranslatePose(pose, clean);
+                s_injected.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                RestoreCleanPose(pose);
             }
+            PublishCleanPose(pose);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            s_faults.fetch_add(1, std::memory_order_relaxed);
+            s_mem.quatValid = false;
+            s_mem.posValid = false;
+        }
+    } else if (self && (s_mem.quatValid || s_mem.posValid)) {
+        // The gate closed with our pose possibly still in the camera (End, a
+        // menu, leaving the car). Hand it back once.
+        __try {
+            RestoreCleanPose(reinterpret_cast<uint8_t*>(self) + kPoseOffset);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            s_faults.fetch_add(1, std::memory_order_relaxed);
+            s_mem.quatValid = false;
+            s_mem.posValid = false;
         }
     }
 
@@ -254,6 +330,48 @@ void ChaseCameraHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle
     s_original = nullptr;
     s_worldOrientationValid.store(false, std::memory_order_release);
     LogInfo("[ChaseCam] camera publish detached");
+}
+
+namespace {
+
+void ChaseCameraPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, int64_t) {
+    float* out[7] = {};
+    for (int i = 0; i < 7; ++i) RED4ext::GetParameter(aFrame, &out[i]);
+    ++aFrame->code;  // ParamEnd
+
+    bool ok = false;
+    const uint64_t at = s_cleanPoseMs.load(std::memory_order_relaxed);
+    if (at != 0 && GetTickCount64() - at <= kCleanPoseFreshMs) {
+        const uint32_t before = s_cleanPoseSeq.load(std::memory_order_acquire);
+        if (!(before & 1u)) {
+            const CleanPose c = s_cleanPose;
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (s_cleanPoseSeq.load(std::memory_order_relaxed) == before) {
+                const float v[7] = {c.position[0],    c.position[1],    c.position[2],
+                                    c.orientation[0], c.orientation[1], c.orientation[2],
+                                    c.orientation[3]};
+                for (int i = 0; i < 7; ++i) {
+                    if (out[i]) *out[i] = v[i];
+                }
+                ok = true;
+            }
+        }
+    }
+    if (aOut) *aOut = ok;
+}
+
+}  // namespace
+
+void ChaseCameraHook_Register(RED4ext::CRTTISystem* rtti) {
+    if (!rtti) return;
+    auto* fn = RED4ext::CGlobalFunction::Create(
+        "HeadTrackingChaseCameraPose", "HeadTrackingChaseCameraPose", &ChaseCameraPose);
+    fn->flags.isNative = true;
+    for (const char* name : {"x", "y", "z", "qi", "qj", "qk", "qr"}) {
+        fn->AddParam("Float", name, true);
+    }
+    fn->SetReturnType("Bool");
+    rtti->RegisterFunction(fn);
 }
 
 bool ChaseCameraHook_WorldOrientation(float* out) {

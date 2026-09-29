@@ -289,6 +289,7 @@ void RegisterFunctions() {
     rtti->RegisterFunction(push);
 
     FppCameraWrite_Register(rtti);
+    ChaseCameraHook_Register(rtti);
 
     LogInfo("[ScriptChannel] registered the pose state functions");
 }

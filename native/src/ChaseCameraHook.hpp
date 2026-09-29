@@ -4,6 +4,7 @@
 
 #include <RED4ext/Api/v1/PluginHandle.hpp>
 #include <RED4ext/Api/v1/Sdk.hpp>
+#include <RED4ext/RED4ext.hpp>
 
 // Head tracking for the vehicle chase camera.
 //
@@ -44,3 +45,8 @@ void ChaseCameraHook_EnsureInstalled();
 // it as the head moves, the dot falls under the gate, and the peel switches
 // itself off for exactly the frames it is needed.
 bool ChaseCameraHook_WorldOrientation(float* out);
+
+// Registers HeadTrackingChaseCameraPose, which hands the script half the chase
+// camera's clean world pose (metres and a quaternion) for its lean clamp. False
+// when the chase camera has not published one in the last quarter second.
+void ChaseCameraHook_Register(RED4ext::CRTTISystem* rtti);
