@@ -230,7 +230,12 @@ function TrackingInput:poll()
 
     -- The native side hands back the latest pose on every poll; only a new
     -- sample counter means the tracker sent something since the last frame.
-    if not has_data or sample == last_sample then return nil end
+    if not has_data then return nil end
+    if type(sample) ~= "number" then
+        error("[HeadTracking] HeadTrackingPollPose returned no sample counter - the CET mod " ..
+              "and red4ext/plugins/HeadTrackingAim.dll are from different builds")
+    end
+    if sample == last_sample then return nil end
     last_sample = sample
 
     -- NaN check. Everything else the native side already validated.
