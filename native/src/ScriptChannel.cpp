@@ -111,6 +111,7 @@ void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, i
     float* pY = nullptr;
     float* pZ = nullptr;
     uint32_t* pFlags = nullptr;
+    uint32_t* pSample = nullptr;
     RED4ext::GetParameter(aFrame, &pYaw);
     RED4ext::GetParameter(aFrame, &pPitch);
     RED4ext::GetParameter(aFrame, &pRoll);
@@ -118,6 +119,7 @@ void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, i
     RED4ext::GetParameter(aFrame, &pY);
     RED4ext::GetParameter(aFrame, &pZ);
     RED4ext::GetParameter(aFrame, &pFlags);
+    RED4ext::GetParameter(aFrame, &pSample);
     ++aFrame->code; // ParamEnd
 
     UdpReceiver_PublishLatest();
@@ -141,6 +143,10 @@ void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, i
     if (pY)     *pY     = state.raw_y;
     if (pZ)     *pZ     = state.raw_z;
     if (pFlags) *pFlags = flags;
+    // The pose above is the latest one ever received and is returned on every
+    // poll, so this counter is the only way the caller can tell a new tracker
+    // sample from the one it already has.
+    if (pSample) *pSample = state.raw_frame;
 
     if (aOut) *aOut = state.raw_timestamp_ms != 0;
 }
@@ -258,6 +264,7 @@ void RegisterFunctions() {
     poll->AddParam("Float", "y", true);
     poll->AddParam("Float", "z", true);
     poll->AddParam("Uint32", "flags", true);
+    poll->AddParam("Uint32", "sample", true);
     poll->SetReturnType("Bool");
     rtti->RegisterFunction(poll);
 

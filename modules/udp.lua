@@ -6,7 +6,7 @@
 -- The plugin registers two global RTTI functions (native/src/ScriptChannel.cpp)
 -- and we call them straight out of CET as game functions:
 --
---   Game.HeadTrackingPollPose()  -> ok, yaw, pitch, roll, x, y, z, flags
+--   Game.HeadTrackingPollPose()  -> ok, yaw, pitch, roll, x, y, z, flags, sample
 --   Game.HeadTrackingPushState(yaw, pitch, roll, enabled, isAds,
 --                              qi, qj, qk, qr,
 --                              positionX, positionY, positionZ, aimDistance,
@@ -42,7 +42,7 @@ local function hasFlag(flags, bit)
 end
 
 local total_packets = 0
-local poll_count = 0
+local last_sample = nil
 local native_flags = 0
 local last_successful_parse_time = nil
 -- Whether the vehicle chase camera is what the player is looking through.
@@ -216,16 +216,22 @@ function TrackingInput:poll()
         pcall(_callPush)
     end
 
-    poll_count = poll_count + 1
+    local ok, has_data, yaw, pitch, roll, x, y, z, flags, sample = pcall(_callPoll)
+    if not ok then return nil end
 
-    local ok, has_data, yaw, pitch, roll, x, y, z, flags = pcall(_callPoll)
-    if not ok or not has_data then return nil end
-
+    -- Hotkey edges are consumed by the native side on every poll, so they are
+    -- read before the no-data return or a press made before the first tracker
+    -- packet is lost.
     native_flags = flags or 0
     if hasFlag(native_flags, FLAG_TOGGLE_TRACKING) then native_toggle_tracking_requested = true end
     if hasFlag(native_flags, FLAG_CYCLE_MODE)      then native_cycle_mode_requested      = true end
     if hasFlag(native_flags, FLAG_TOGGLE_YAW)      then native_toggle_yaw_requested      = true end
     if hasFlag(native_flags, FLAG_TOGGLE_FREE_LOOK) then native_toggle_free_look_requested = true end
+
+    -- The native side hands back the latest pose on every poll; only a new
+    -- sample counter means the tracker sent something since the last frame.
+    if not has_data or sample == last_sample then return nil end
+    last_sample = sample
 
     -- NaN check. Everything else the native side already validated.
     if yaw ~= yaw or pitch ~= pitch or roll ~= roll then return nil end
@@ -238,7 +244,7 @@ function TrackingInput:poll()
     reusable_data.x = x or 0
     reusable_data.y = y or 0
     reusable_data.z = z or 0
-    reusable_data.seq = poll_count
+    reusable_data.seq = sample
     last_successful_parse_time = os.clock()
     return reusable_data
 end
