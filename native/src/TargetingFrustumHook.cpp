@@ -25,9 +25,7 @@ namespace {
 //
 // The update copies these from the FPP camera after the CET half has composed
 // the head rotation into it, so they describe the rendered view. The record is
-// only read here. Other systems read it as what the player can see, and writing
-// the aim into any of it (crosshair, view or frustum) crashed the game a few
-// seconds after a load.
+// only read here: other systems read it as what the player can see.
 constexpr size_t kViewOrientation = 0x31110;  // Quaternion (i, j, k, r)
 constexpr size_t kFrustumPlanes   = 0x31130;  // 6 x (normal xyz, d)
 constexpr size_t kCrosshairFwd    = 0x31200;  // Vector4
@@ -210,12 +208,9 @@ bool CleanCameraTransform(uint8_t* xf) {
     }
 }
 
-// Only with the sights up. Stock, the raycast only ever finds what is at the
-// view centre, which is on screen; turned onto the aim at the hip it can pick an
-// NPC the view is not showing, and the crowd system spawns and removes exactly
-// those. At the hip it crashed the game a few seconds after a load (1 load in
-// 24), in the crowd system's teardown. With the sights up the aim is the scope,
-// which is on screen.
+// Only with the sights up, where the aim is the scope and on screen. Stock, the
+// raycast only ever finds what is at the view centre; turned onto the aim at the
+// hip it could pick something the view is not showing.
 void* __fastcall Hook_CameraTransform(void* self, void* out, void* owner) {
     void* ret = s_camXfOrig(self, out, owner);
     const uintptr_t ra = reinterpret_cast<uintptr_t>(_ReturnAddress());

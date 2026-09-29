@@ -16,8 +16,8 @@
 //
 // It tells the rendered camera from any other by the targeting record, which the
 // update fills from the rendered view: the record is read and never written.
-// Other systems read the record as what the player can see, and changing it
-// crashed the game a few seconds after a load. Other crosshair queries that go
-// through the record (GetObjectClosestToCrosshair and the like) follow the head.
+// Other systems read the record as what the player can see. Other crosshair
+// queries that go through the record (GetObjectClosestToCrosshair and the like)
+// follow the head.
 bool TargetingFrustumHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle);
 void TargetingFrustumHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle handle);
