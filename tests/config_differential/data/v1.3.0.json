@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "local_smoothing": 0.0,
+  "remote_smoothing": 0.15,
+  "clamp_yaw": 120.0,
+  "clamp_pitch": 80.0,
+  "clamp_roll": 45.0
+}
