@@ -52,6 +52,9 @@ uint64_t s_lastLiveLogMs = 0;
 bool     s_enterFired = false;
 uint64_t s_firstRunningMs = 0;
 uint64_t s_lastNoScriptWarnMs = 0;
+// The CET half pushes every frame, menus included, so a second without a push
+// means it is gone rather than hitching.
+constexpr uint64_t kScriptStaleMs = 1000;
 
 bool OnEnter(RED4ext::CGameApplication*) {
     s_enterFired = true;
@@ -204,14 +207,22 @@ static int ResolveCallChain() {
 // takes only pointers, so no unwinding is required. All the real objects
 // (ScriptGameInstance, Handle, CStack, Quaternion) stay in the caller.
 // Returns true on normal return, false on access violation or similar.
+static uint32_t s_executeFaults = 0;
 static bool SehExecute(RED4ext::CBaseFunction* fn, RED4ext::CStack* stack) {
     if (!fn || !stack) return false;
     __try {
         fn->Execute(stack);
+        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
     }
-    return true;
+    // A fault inside a script call is not routine: say so, rate-limited
+    // because this runs every frame.
+    if ((s_executeFaults++ % 600) == 0) {
+        LogError("[HeadTrackingAim] access fault inside a scripted camera lookup "
+                 "(fn=%p, %u so far) - no camera this frame, so nothing is written to it",
+                 (void*)fn, s_executeFaults);
+    }
+    return false;
 }
 
 // Walk the CRTTI chain to get a raw IScriptable* for the local player's
@@ -338,7 +349,11 @@ bool OnUpdate(RED4ext::CGameApplication*) {
         // a rotation nothing applied and throws the player's shots off by
         // whatever head angle they were holding when tracking stood down.
         // Identity here is what "nothing to peel" looks like to both.
-        if (w->enabled) {
+        //
+        // The same goes for a CET half that has stopped pushing altogether (a
+        // "reload all mods", or its update erroring out): its last state says
+        // enabled, but nothing is stamping the head into the camera any more.
+        if (w->enabled && ScriptChannel_MsSinceLastPush() < kScriptStaleMs) {
             g_headQuat[0] = w->quat_i;
             g_headQuat[1] = w->quat_j;
             g_headQuat[2] = w->quat_k;

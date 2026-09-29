@@ -180,7 +180,7 @@ local math_huge = math.huge
 --- @param n number The number to check
 --- @return boolean true if valid
 local function isValidNumber(n)
-    return n == n and n ~= math_huge and n ~= -math_huge
+    return type(n) == "number" and n == n and n ~= math_huge and n ~= -math_huge
 end
 
 --- Compute the inverse of a quaternion
@@ -301,6 +301,7 @@ function Camera.new(settings)
         clamp_pitch = 80.0,
         clamp_roll = 45.0,
         yaw_mode = "world",
+        enabled = true,
         position_enabled = false,
         position_limit_x = 0.30,
         position_limit_y_up = 0.20,
@@ -375,6 +376,7 @@ function Camera:refreshSettingsCache()
     self.cached_settings.clamp_pitch = s:get("clamp_pitch") or 80.0
     self.cached_settings.clamp_roll = s:get("clamp_roll") or 45.0
     self.cached_settings.yaw_mode = s:get("yaw_mode") or "world"
+    self.cached_settings.enabled = s:get("enabled") and true or false
     local pe = s:get("position_enabled")
     if pe == nil then pe = false end
     self.cached_settings.position_enabled = pe
@@ -1325,6 +1327,12 @@ function Camera:suspend()
         self.last_head_quat = nil
         self._last_written_final_quat = nil
     end
+    -- getHeadQuat() is what the native aim hooks peel off every shot. With the
+    -- rotation out of the camera there is nothing left for them to peel, and a
+    -- held quat here would throw every round off by the head angle for as long
+    -- as apply() stays off (position-only mode, most visibly).
+    self._computed_head_quat = nil
+    self._prev_head_quat = nil
 
     -- cam.localPosition is written absolute, so unlike the orientation it does
     -- not need a peel - but it also does not decay on its own. Left alone it
@@ -1481,12 +1489,14 @@ end
 function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
     local c = self.cached_settings
     if not c.position_enabled then
-        local cam, player = getFPPCamera()
-        if self.pos_applied then
-            if cam then pcall(_callSetLocalPosition, cam, Vector4.new(0, 0, 0, 1.0)) end
-            self.pos_applied = false
+        if self.pos_applied or self.rig_applied then
+            local cam, player = getFPPCamera()
+            if self.pos_applied then
+                if cam then pcall(_callSetLocalPosition, cam, Vector4.new(0, 0, 0, 1.0)) end
+                self.pos_applied = false
+            end
+            if player then self:_releaseRig(player) end
         end
-        if player then self:_releaseRig(player) end
         self:_clearPositionState()
         return
     end
@@ -1496,6 +1506,13 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
 
     local cam, player = getFPPCamera()
     if not cam then return end
+
+    -- apply() reads the zoom whenever rotation runs. In position-only mode
+    -- nothing else would, and the lean would keep whatever factor was in force
+    -- when rotation went off.
+    if not c.enabled then
+        self.zoom_factor = zoomFactor(cam) or 1
+    end
 
     local cam_x, cam_y, cam_z = self:_smoothPosition(rx, ry, rz, deltaTime)
 

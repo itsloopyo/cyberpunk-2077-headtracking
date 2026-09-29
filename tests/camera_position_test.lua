@@ -70,6 +70,7 @@ local function bare_camera(overrides)
     cam.weapon_view_last_log = -10
     cam.is_remote_connection = false
     cam.cached_settings = {
+        enabled = true,
         position_enabled = true,
         local_smoothing = 0.0,
         remote_smoothing = 0.15,
