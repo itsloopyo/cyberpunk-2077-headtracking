@@ -31,6 +31,7 @@ constexpr uint32_t kFlagRemoteConnection = 1u << 6;
 constexpr uint32_t kFlagToggleFreeLook   = 1u << 7;
 
 std::atomic<uint64_t> s_lastPushMs{0};
+uint64_t s_lastRejectLogMs = 0;
 std::atomic<bool> s_lastPushEnabled{false};
 std::atomic<bool> s_lastPushIsAds{false};
 std::atomic<float> s_lastPushHeadDegrees{0.0f};
@@ -173,25 +174,35 @@ void PushState(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, 
     RED4ext::GetParameter(aFrame, &chaseCamera);
     ++aFrame->code; // ParamEnd
 
-    s_lastPushMs.store(GetTickCount64(), std::memory_order_relaxed);
-
     // Script values cross a trust boundary: a malformed quat written into
-    // shared state reaches the hooks that multiply it into the camera.
-    if (!std::isfinite(yaw) || !std::isfinite(pitch) || !std::isfinite(roll) ||
-        !std::isfinite(qi) || !std::isfinite(qj) || !std::isfinite(qk) || !std::isfinite(qr) ||
-        !std::isfinite(positionX) || !std::isfinite(positionY) ||
-        !std::isfinite(positionZ) || !std::isfinite(aimDistance)) {
-        s_chaseCameraActive.store(false, std::memory_order_relaxed);
-        if (aOut) *aOut = false;
-        return;
-    }
+    // shared state reaches the hooks that multiply it into the camera. The
+    // bounds are SharedState's own, so nothing accepted here is later refused
+    // by Read() - which would freeze the tracker pose on its last good value
+    // without a word.
     const float magSq = qi * qi + qj * qj + qk * qk + qr * qr;
-    if (std::abs(yaw) > 720.0f || std::abs(pitch) > 720.0f || std::abs(roll) > 720.0f ||
-        magSq < 0.5f || magSq > 2.0f) {
+    const bool finiteAll =
+        std::isfinite(yaw) && std::isfinite(pitch) && std::isfinite(roll) &&
+        std::isfinite(qi) && std::isfinite(qj) && std::isfinite(qk) && std::isfinite(qr) &&
+        std::isfinite(positionX) && std::isfinite(positionY) &&
+        std::isfinite(positionZ) && std::isfinite(aimDistance);
+    if (!finiteAll ||
+        std::abs(yaw) > 720.0f || std::abs(pitch) > 720.0f || std::abs(roll) > 720.0f ||
+        magSq < 0.5f || magSq > 2.0f ||
+        std::abs(positionX) > kMaxPositionMetres || std::abs(positionY) > kMaxPositionMetres ||
+        std::abs(positionZ) > kMaxPositionMetres ||
+        aimDistance < 0.0f || aimDistance > kMaxAimDistanceMetres) {
         s_chaseCameraActive.store(false, std::memory_order_relaxed);
+        const uint64_t now = GetTickCount64();
+        if (now - s_lastRejectLogMs > 10000) {
+            s_lastRejectLogMs = now;
+            LogError("[ScriptChannel] refused a state push: yaw=%.2f pitch=%.2f roll=%.2f "
+                     "|q|^2=%.3f pos=(%.3f, %.3f, %.3f) aim=%.2f",
+                     yaw, pitch, roll, magSq, positionX, positionY, positionZ, aimDistance);
+        }
         if (aOut) *aOut = false;
         return;
     }
+    s_lastPushMs.store(GetTickCount64(), std::memory_order_relaxed);
 
     HeadTrackingState* w = g_sharedState.GetWritable();
     if (!w) {

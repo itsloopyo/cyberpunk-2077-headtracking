@@ -33,9 +33,9 @@ static bool IsSane(const HeadTrackingState& s) {
     // almost certainly a torn-read artefact, not a real head pose.
     if (std::abs(s.yaw) > 720.0f || std::abs(s.pitch) > 720.0f || std::abs(s.roll) > 720.0f) return false;
     if (std::abs(s.raw_yaw) > 720.0f || std::abs(s.raw_pitch) > 720.0f || std::abs(s.raw_roll) > 720.0f) return false;
-    if (std::abs(s.position_x) > 2.0f || std::abs(s.position_y) > 2.0f ||
-        std::abs(s.position_z) > 2.0f || s.aim_distance < 0.0f ||
-        s.aim_distance > 10000.0f) return false;
+    if (std::abs(s.position_x) > kMaxPositionMetres || std::abs(s.position_y) > kMaxPositionMetres ||
+        std::abs(s.position_z) > kMaxPositionMetres || s.aim_distance < 0.0f ||
+        s.aim_distance > kMaxAimDistanceMetres) return false;
     return true;
 }
 

@@ -754,6 +754,14 @@ bool AimGetterHook_CorrectPreviewDirection(float* direction) {
     float head[4];
     float camWorld[4];
     if (!ReadHead(head) || !ReadCamWorld(camWorld)) return false;
+    // Same ownership test as lever C: only a ray leaving along the rendered
+    // camera's forward is the player's shot. Any other ricochet ray reaching
+    // this call site carries no head rotation to peel.
+    const float fwdLocal[3] = {0.0f, 1.0f, 0.0f};
+    float camFwd[3];
+    RotateVec(camWorld, fwdLocal, camFwd);
+    const float dot = direction[0]*camFwd[0] + direction[1]*camFwd[1] + direction[2]*camFwd[2];
+    if (!(dot >= kDirMatchDot)) return false;
     if (!PeelWorldDirection(direction, head, camWorld)) return false;
     return ApplyPositionToWorldDirection(direction, head, camWorld);
 }

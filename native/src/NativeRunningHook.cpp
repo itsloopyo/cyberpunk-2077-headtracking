@@ -8,6 +8,8 @@
 #include "ScriptChannel.hpp"
 #include "FppCameraWrite.hpp"
 
+#include <atomic>
+
 #include <RED4ext/RED4ext.hpp>
 #include <RED4ext/GameStates.hpp>
 #include <RED4ext/Api/v1/GameState.hpp>
@@ -52,6 +54,7 @@ uint64_t s_lastLiveLogMs = 0;
 bool     s_enterFired = false;
 uint64_t s_firstRunningMs = 0;
 uint64_t s_lastNoScriptWarnMs = 0;
+std::atomic<bool> s_stopped{false};
 // The CET half pushes every frame, menus included, so a second without a push
 // means it is gone rather than hitching.
 constexpr uint64_t kScriptStaleMs = 1000;
@@ -319,6 +322,11 @@ static constexpr int kFPPCamOrientationOffset = 0xD0;
 static int s_camOrientationOffset = kFPPCamOrientationOffset;  // pre-seeded baseline
 
 bool OnUpdate(RED4ext::CGameApplication*) {
+    // RED4ext cannot remove a GameState callback, so after unload this is the
+    // only thing standing between a late tick and hooks re-installing
+    // themselves out of a DLL on its way out.
+    if (s_stopped.load(std::memory_order_acquire)) return false;
+
     // Every tick, before anything reads it, and null when there is none. The
     // engine replaces the FPP camera (a load does, and so does the spawn after
     // one), so a pointer kept from an earlier tick can point at freed memory,
@@ -490,10 +498,9 @@ bool NativeRunningHook_Start(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHan
 }
 
 void NativeRunningHook_Stop(const RED4ext::v1::Sdk*, RED4ext::v1::PluginHandle) {
-    // RED4ext has no GameState::Remove. The callback struct is static, so
-    // if the plugin is unloaded the pointer becomes invalid - but RED4ext
-    // only invokes GameState callbacks while the plugin is loaded, so
-    // this is effectively self-cleaning. No-op.
+    // RED4ext has no GameState::Remove, so the callback stays registered and
+    // is made inert instead.
+    s_stopped.store(true, std::memory_order_release);
 }
 
 // SEH-wrapped 4-float write. Lives in a separate function because the

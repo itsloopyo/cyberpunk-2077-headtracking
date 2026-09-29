@@ -35,11 +35,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         }
         LogInfo("[HeadTrackingAim] Shared memory initialized");
 
-        // Queue the script channel before anything else can need it. This only
-        // asks the RTTI system to call us back when it builds its registry, so
-        // it cannot fail here and has nothing to undo on an early return.
-        ScriptChannel_Register();
-
         // Start the UDP receiver BEFORE attaching hooks so that even if a
         // hook target is stale and the plugin refuses to load, we've already
         // told the user WHY via logs (UDP binding issues surface here, hook
@@ -53,6 +48,10 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
             g_sharedState.Shutdown();
             return false;
         }
+
+        // After the last early return: this hands the RTTI system pointers into
+        // this DLL, and a plugin that refuses to load must leave none behind.
+        ScriptChannel_Register();
 
         // Fingerprint the running EXE before a single detour goes in. On a
         // build we do not recognise the RVA-pinned hooks below stay dormant
@@ -85,7 +84,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         break;
 
     case RED4ext::v1::EMainReason::Unload:
-        // Unregister the per-frame Running callback FIRST. AimProviderHook
+        // Stop the per-frame Running callback FIRST. AimProviderHook
         // installs itself from OnUpdate and re-installs whenever it sees
         // itself uninstalled, so tearing hooks down while OnUpdate is still
         // firing left the game running our thunks out of a DLL that is on its

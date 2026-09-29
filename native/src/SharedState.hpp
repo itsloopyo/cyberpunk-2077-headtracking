@@ -103,6 +103,11 @@ struct HeadTrackingState {
 };
 
 // Shared memory name - must match CET Lua code
+// Bounds a pushed state must sit inside, both where it is accepted and where it
+// is read back. A lean is capped well under a metre and the aim ray at 1000 m.
+constexpr float kMaxPositionMetres = 2.0f;
+constexpr float kMaxAimDistanceMetres = 10000.0f;
+
 constexpr const char* SHARED_MEM_NAME = "HeadTrackingAimState";
 constexpr size_t SHARED_MEM_SIZE = sizeof(HeadTrackingState);
 
