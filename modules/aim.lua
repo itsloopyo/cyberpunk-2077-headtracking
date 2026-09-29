@@ -1,18 +1,13 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026 itsloopyo
 -- Aim Compensation Module
--- Communicates with RED4ext C++ plugin via shared memory for native aim compensation
 --
 -- When head tracking rotates the camera, bullets would normally land at the new
 -- screen center. The C++ plugin hooks native aim functions and rotates by the INVERSE
 -- of head tracking rotation, so bullets land at the original aim point.
 --
--- This Lua module writes state to shared memory; C++ plugin reads it.
-
--- FFI is only available after onInit. Defer all imports/cdefs until init().
-local ffi = nil
-local INVALID_HANDLE_VALUE = nil
-local cdef_done = false
+-- This module stages the state the plugin needs; modules/udp.lua pushes it
+-- through the plugin's HeadTrackingPushState script function every frame.
 
 local Aim = {}
 Aim.__index = Aim
@@ -57,264 +52,6 @@ local function discoTap(method, fwd)
     end
 end
 
--- Windows constants (cheap; FFI not required to define them).
-local PAGE_READWRITE = 0x04
-local FILE_MAP_ALL_ACCESS = 0xF001F
-local SHARED_MEM_NAME = "HeadTrackingAimState"
-
---- Lazily import FFI and register C declarations. CET only exposes the FFI
---- module after onInit fires, so this MUST NOT run at module-load time.
-local function ensureFfi()
-    if ffi then return true end
-
-    local ok, mod = pcall(require, "ffi")
-    if not ok or type(mod) ~= "table" then
-        return false, "FFI module not available (require returned " .. type(mod) .. ")"
-    end
-    ffi = mod
-
-    if not cdef_done then
-        -- MUST stay in lockstep with native/src/SharedState.hpp. Field
-        -- order, sizes and padding are both compilers' shared contract;
-        -- mismatches silently corrupt whoever reads the wrong offsets.
-        local cdef_ok, cdef_err = pcall(ffi.cdef, [[
-            typedef struct {
-                /* === Section 1: Lua -> native (processed pose) === */
-                float yaw;
-                float pitch;
-                float roll;
-                bool  enabled;
-                bool  is_ads;
-                uint8_t pad0[2];
-                uint32_t frame;
-                float ads_scale;
-                float quat_i, quat_j, quat_k, quat_r;
-                uint32_t applied_frame;
-
-                /* === Section 2: native -> Lua (raw UDP) === */
-                float raw_yaw;
-                float raw_pitch;
-                float raw_roll;
-                float raw_x;
-                float raw_y;
-                float raw_z;
-                uint32_t raw_frame;
-                uint64_t raw_timestamp_ms;
-
-                /* === Section 4: native -> Lua (Running::OnUpdate status) === */
-                uint32_t native_running_frame;
-
-
-                /* === Section 9: aim-provider decouple === */
-                uint32_t provider_hook_active;
-                uint32_t provider_mode;
-                uint32_t provider_calls;
-                uint32_t provider_overrides;
-
-                /* === Section 10: aim-getter decouple === */
-                uint32_t aim_getter_mode;
-                uint32_t aim_getter_calls_a;
-                uint32_t aim_getter_calls_c;
-                uint32_t aim_getter_overrides;
-
-                float position_x;
-                float position_y;
-                float position_z;
-                float aim_distance;
-            } HeadTrackingState;
-
-            void* CreateFileMappingA(void* hFile, void* lpAttr,
-                uint32_t flProtect, uint32_t dwMaxHigh, uint32_t dwMaxLow, const char* lpName);
-            void* OpenFileMappingA(uint32_t dwDesiredAccess, bool bInheritHandle, const char* lpName);
-            void* MapViewOfFile(void* hFileMappingObject, uint32_t dwDesiredAccess,
-                uint32_t dwFileOffsetHigh, uint32_t dwFileOffsetLow, size_t dwNumberOfBytesToMap);
-            bool UnmapViewOfFile(const void* lpBaseAddress);
-            bool CloseHandle(void* hObject);
-            uint32_t GetLastError();
-        ]])
-        if not cdef_ok then
-            -- "redefinition" is fine - udp.lua may have already cdef'd the same types.
-            local err = tostring(cdef_err)
-            if not err:find("redefinition", 1, true) and not err:find("redefined", 1, true) then
-                return false, "ffi.cdef failed: " .. err
-            end
-        end
-        cdef_done = true
-    end
-
-    -- The cdef above and native/src/SharedState.hpp describe the same bytes.
-    -- The native side pins its layout with a static_assert; this is the other
-    -- half of that contract. MapViewOfFile below maps the WHOLE section, so a
-    -- drifted cdef does not fail loudly - it silently reads and writes the
-    -- wrong offsets, and a larger struct runs off the end of the mapping.
-    local EXPECTED_STATE_SIZE = 136
-    local actual_size = ffi.sizeof("HeadTrackingState")
-    if actual_size ~= EXPECTED_STATE_SIZE then
-        -- Clear the module handle so the `if ffi then return true end`
-        -- fast path above cannot hand a later caller a success it never got.
-        ffi = nil
-        return false, string.format(
-            "HeadTrackingState layout mismatch: Lua cdef is %d bytes, native expects %d. " ..
-            "modules/aim.lua and native/src/SharedState.hpp are out of sync.",
-            actual_size, EXPECTED_STATE_SIZE)
-    end
-
-    INVALID_HANDLE_VALUE = ffi.cast("void*", -1)
-    return true
-end
-
--- Shared memory state
-local shared_mem = {
-    handle = nil,
-    state = nil,
-    frame_counter = 0,
-    initialized = false
-}
-
---- Initialize shared memory for C++ plugin communication
---- @return boolean success
-local function initSharedMemory()
-    if shared_mem.initialized then
-        return true
-    end
-
-    -- Try to open existing shared memory first (C++ plugin may have created it)
-    local handle = ffi.C.OpenFileMappingA(FILE_MAP_ALL_ACCESS, false, SHARED_MEM_NAME)
-
-    if handle == nil or handle == ffi.cast("void*", 0) then
-        -- Create new shared memory region
-        handle = ffi.C.CreateFileMappingA(
-            INVALID_HANDLE_VALUE,
-            nil,
-            PAGE_READWRITE,
-            0,
-            ffi.sizeof("HeadTrackingState"),
-            SHARED_MEM_NAME
-        )
-
-        if handle == nil or handle == ffi.cast("void*", 0) then
-            local err = ffi.C.GetLastError()
-            print(string.format("[HeadTracking:AIM] Failed to create shared memory, error=%d", err))
-            return false
-        end
-        print("[HeadTracking:AIM] Created shared memory region")
-    else
-        print("[HeadTracking:AIM] Opened existing shared memory region")
-    end
-
-    -- Map view of file
-    local state_ptr = ffi.C.MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, 0)
-
-    if state_ptr == nil or state_ptr == ffi.cast("void*", 0) then
-        local err = ffi.C.GetLastError()
-        print(string.format("[HeadTracking:AIM] Failed to map view of file, error=%d", err))
-        ffi.C.CloseHandle(handle)
-        return false
-    end
-
-    shared_mem.handle = handle
-    shared_mem.state = ffi.cast("HeadTrackingState*", state_ptr)
-    shared_mem.initialized = true
-
-    -- Initialize state to disabled. Keep the quat at identity (0,0,0,1) so
-    -- the C++ view-matrix hook sees "no data yet" and skips injection.
-    shared_mem.state.yaw = 0
-    shared_mem.state.pitch = 0
-    shared_mem.state.roll = 0
-    shared_mem.state.enabled = false
-    shared_mem.state.is_ads = false
-    shared_mem.state.frame = 0
-    shared_mem.state.ads_scale = 0.2
-    shared_mem.state.quat_i = 0
-    shared_mem.state.quat_j = 0
-    shared_mem.state.quat_k = 0
-    shared_mem.state.quat_r = 1
-    shared_mem.state.applied_frame = 0
-    shared_mem.state.position_x = 0
-    shared_mem.state.position_y = 0
-    shared_mem.state.position_z = 0
-    shared_mem.state.aim_distance = 0
-
-    print("[HeadTracking:AIM] Shared memory initialized successfully")
-    return true
-end
-
---- Shutdown shared memory
-local function shutdownSharedMemory()
-    if not shared_mem.initialized then
-        return
-    end
-
-    if shared_mem.state ~= nil then
-        ffi.C.UnmapViewOfFile(shared_mem.state)
-        shared_mem.state = nil
-    end
-
-    if shared_mem.handle ~= nil then
-        ffi.C.CloseHandle(shared_mem.handle)
-        shared_mem.handle = nil
-    end
-
-    shared_mem.initialized = false
-    print("[HeadTracking:AIM] Shared memory shutdown")
-end
-
---- Update shared memory with current state.
---- Writes the processed Euler pose + head quaternion so both the
---- aim-compensation hook (needs yaw/pitch) and the view-matrix hook
---- (needs the quat) see the same rotation.
---- @param yaw number Current yaw in degrees (processed, signed)
---- @param pitch number Current pitch in degrees (processed, signed)
---- @param enabled boolean Whether tracking is active this frame
---- @param is_ads boolean Whether aiming down sights
---- @param ads_scale number|nil ADS effect multiplier (default 0.2)
---- @param roll number|nil Current roll in degrees (optional, defaults to 0)
---- @param quat table|nil Head rotation quaternion {i,j,k,r}; if nil, keep last
-local function updateSharedMemory(yaw, pitch, enabled, is_ads, ads_scale, roll, quat)
-    if not shared_mem.initialized or shared_mem.state == nil then
-        return
-    end
-
-    shared_mem.state.yaw = yaw
-    shared_mem.state.pitch = pitch
-    shared_mem.state.roll = roll or 0
-    shared_mem.state.enabled = enabled
-    shared_mem.state.is_ads = is_ads or false
-    shared_mem.state.ads_scale = ads_scale or 0.2
-    shared_mem.state.position_x = aim_state.position_x
-    shared_mem.state.position_y = aim_state.position_y
-    shared_mem.state.position_z = aim_state.position_z
-    shared_mem.state.aim_distance = aim_state.aim_distance
-
-    if quat then
-        shared_mem.state.quat_i = quat.i or 0
-        shared_mem.state.quat_j = quat.j or 0
-        shared_mem.state.quat_k = quat.k or 0
-        shared_mem.state.quat_r = quat.r or 1
-        shared_mem.state.applied_frame = (shared_mem.state.applied_frame or 0) + 1
-    end
-
-    shared_mem.frame_counter = shared_mem.frame_counter + 1
-    shared_mem.state.frame = shared_mem.frame_counter
-end
-
-
-
---- Read the native Running::OnUpdate frame counter. Used to confirm the
---- RED4ext per-frame hook is actually firing (should tick at the game
---- frame rate if the plugin is loaded and the mechanism works).
---- @return number native_running_frame (0 if shm not available)
-local function readNativeRunningFrame()
-    if not shared_mem.initialized or shared_mem.state == nil then
-        return 0
-    end
-    return tonumber(shared_mem.state.native_running_frame) or 0
-end
-
-
-
-
-
 -- Module-level state shared with Override callback
 -- Must be outside the class for the Override closure to access it
 -- "No head rotation is applied." Sent to the native side while tracking is
@@ -335,7 +72,6 @@ local aim_state = {
     aim_distance = 0,
     head_quat = { i = 0, j = 0, k = 0, r = 1 },
     override_registered = false,
-    shared_mem_initialized = false,
     -- Tracking input. Set via Aim:setUdp() from init.lua so the
     udp = nil,
     -- OFF since the projectile restoration landed. Rounds now launch as
@@ -533,27 +269,6 @@ end
 --- Must be called once during mod initialization
 --- @return boolean success
 function Aim:init()
-    -- CET Override() does NOT require FFI - register the aim-decoupling
-    -- overrides first so they work even when the shared-memory path doesn't.
-    -- FFI is only needed by the C++ plugin's shared-state fallback, which
-    -- is redundant now that the Lua overrides catch the real aim path.
-
-    -- Try to bring up FFI for shared memory (best-effort, non-fatal).
-    local ffi_ok, ffi_err = ensureFfi()
-    if ffi_ok then
-        if not aim_state.shared_mem_initialized then
-            if initSharedMemory() then
-                aim_state.shared_mem_initialized = true
-                dlog("[HeadTracking:AIM] Shared memory communication ready for C++ plugin")
-            else
-                dlog("[HeadTracking:AIM] Shared memory init failed (non-fatal - Lua overrides still active)")
-            end
-        end
-    else
-        dlog("[HeadTracking:AIM] FFI unavailable (" .. tostring(ffi_err) .. ") - skipping shared-memory; CET overrides handle aim decoupling")
-    end
-
-    -- Register the CET Override hooks regardless of FFI state.
     if aim_state.override_registered then
         print("[HeadTracking:AIM] Override already registered")
         return true
@@ -635,9 +350,6 @@ function Aim:update(yaw, pitch, roll, quat, position_x, position_y, position_z, 
         aim_state.head_quat = quat
     end
 
-    updateSharedMemory(yaw, pitch, aim_state.enabled, aim_state.is_ads,
-                       aim_state.ads_scale, aim_state.smooth_roll,
-                       aim_state.head_quat)
     if aim_state.udp and aim_state.udp.setNativeState then
         aim_state.udp:setNativeState(yaw, pitch, aim_state.smooth_roll,
                                      aim_state.enabled, aim_state.is_ads,
@@ -647,22 +359,12 @@ function Aim:update(yaw, pitch, roll, quat, position_x, position_y, position_z, 
     end
 end
 
---- Enable or disable aim compensation.
---- Called every frame from init.lua's onUpdate (with `true` while tracking is
---- allowed, `false` while blocked). Aim:update has already pushed the live
---- pose into shared memory; if `enabled` is unchanged from last frame we
---- don't need to re-write the whole SHM struct - just early-return.
---- When the value DOES change we write the entire struct so the native
---- side picks up the new gate within one frame.
+--- Enable or disable aim compensation. Called every frame from init.lua's
+--- onUpdate, with `true` while tracking is allowed and `false` while blocked;
+--- the next Aim:update stages it for the native push.
 --- @param enabled boolean Whether aim compensation should be active
 function Aim:setEnabled(enabled)
-    if aim_state.enabled == enabled then
-        return  -- no-op fast path: avoids ~14 SHM field writes per frame
-    end
     aim_state.enabled = enabled
-    updateSharedMemory(aim_state.smooth_yaw, aim_state.smooth_pitch, enabled,
-                       aim_state.is_ads, aim_state.ads_scale,
-                       aim_state.smooth_roll, aim_state.head_quat)
 end
 
 --- Stage "tracking is off, nothing is applied" for the next native push.
@@ -687,9 +389,6 @@ function Aim:setADS(is_ads, scale)
     if scale then
         aim_state.ads_scale = scale
     end
-    updateSharedMemory(aim_state.smooth_yaw, aim_state.smooth_pitch, aim_state.enabled,
-                       aim_state.is_ads, aim_state.ads_scale,
-                       aim_state.smooth_roll, aim_state.head_quat)
 end
 
 
@@ -713,12 +412,6 @@ function Aim:summarizeDiscovery()
     if #parts == 0 then return end
     table.sort(parts)
     dlog("[HeadTracking:AIM] DISCOVERY counts: " .. table.concat(parts, " "))
-end
-
---- Read the native Running::OnUpdate frame counter for diagnostics.
---- @return number
-function Aim:nativeRunningFrame()
-    return readNativeRunningFrame()
 end
 
 
@@ -755,12 +448,6 @@ function Aim:isADS()
     return aim_state.is_ads
 end
 
---- Shutdown and cleanup
-function Aim:shutdown()
-    shutdownSharedMemory()
-    aim_state.shared_mem_initialized = false
-end
-
 --- Check if aim compensation is enabled
 --- @return boolean enabled
 function Aim:isEnabled()
@@ -768,7 +455,7 @@ function Aim:isEnabled()
 end
 
 --- Get the current state for debugging
---- @return table state {enabled, is_ads, ads_scale, smooth_yaw, smooth_pitch, override_registered, shared_mem_initialized, shared_mem_frame}
+--- @return table state {enabled, is_ads, ads_scale, smooth_yaw, smooth_pitch, override_registered}
 function Aim:getState()
     return {
         enabled = aim_state.enabled,
@@ -777,8 +464,6 @@ function Aim:getState()
         smooth_yaw = aim_state.smooth_yaw,
         smooth_pitch = aim_state.smooth_pitch,
         override_registered = aim_state.override_registered,
-        shared_mem_initialized = aim_state.shared_mem_initialized,
-        shared_mem_frame = shared_mem.frame_counter
     }
 end
 

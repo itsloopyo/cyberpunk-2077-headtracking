@@ -203,16 +203,22 @@ local function guardedVar(name, fn, isOverride, outParams)
         for i = 1, count do args[i] = select(i, ...) end
 
         local ok, a, b, c, d, e = xpcall(invoke, onErr)
-        if ok then return a, b, c, d, e end
-
-        if isOverride then
+        if not ok then
+            a, b, c, d, e = nil, nil, nil, nil, nil
             local wrapped = args[n]
-            if type(wrapped) == "function" then
+            if isOverride and type(wrapped) == "function" then
                 local wok, wa, wb, wc, wd, we = pcall(wrapped, _unpackFn(args, 2, n + wrappedLast))
-                if wok then return wa, wb, wc, wd, we end
-                _writeCrash(name .. ".wrapped", wa)
+                if wok then
+                    a, b, c, d, e = wa, wb, wc, wd, we
+                else
+                    _writeCrash(name .. ".wrapped", wa)
+                end
             end
         end
+        -- The arguments are game handles; a table that kept them between calls
+        -- would hold the last callback's objects alive across a load.
+        for i = 1, n do args[i] = nil end
+        return a, b, c, d, e
     end
 end
 
@@ -592,7 +598,7 @@ local function onUpdateImpl(deltaTime)
     if not tracking_allowed then
         if should_diag then
             dlog(string.format(
-                "[HeadTracking:DIAG] tracking BLOCKED reason=%s | enabled=%s | shm=%s | last_packet=%.1fs ago",
+                "[HeadTracking:DIAG] tracking BLOCKED reason=%s | enabled=%s | native=%s | last_packet=%.1fs ago",
                 tostring(tracking_reason),
                 tostring(settings:get("enabled")),
                 tostring(udp:isReady()),
@@ -733,16 +739,14 @@ local function onUpdateImpl(deltaTime)
 
     if should_diag then
         local stats = udp:getStats()
-        local native_frame = aim.nativeRunningFrame and aim:nativeRunningFrame() or 0
         dlog(string.format(
-            "[HeadTracking:DIAG] tracking ON | enabled=%s | shm=%s | fresh=%s | packets=%d | last=%.1fs ago | smoothed yaw=%.1f pitch=%.1f | native_frame=%d | camera=%s",
+            "[HeadTracking:DIAG] tracking ON | enabled=%s | native=%s | fresh=%s | packets=%d | last=%.1fs ago | smoothed yaw=%.1f pitch=%.1f | camera=%s",
             tostring(settings:get("enabled")),
             tostring(udp:isReady()),
             tostring(udp:isDataFresh()),
             stats.packet_count,
             udp:secondsSinceLastPacket(),
             rotation.yaw, rotation.pitch,
-            native_frame,
             chase_camera and "chase" or "fpp"
         ))
         diag_last_log_time = now
