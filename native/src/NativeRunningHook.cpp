@@ -308,12 +308,10 @@ static constexpr int kFPPCamOrientationOffset = 0xD0;
 static int s_camOrientationOffset = kFPPCamOrientationOffset;  // pre-seeded baseline
 
 bool OnUpdate(RED4ext::CGameApplication*) {
-    // Every tick, before anything reads it: a load destroys the FPP camera, and
-    // while it runs there is no player to resolve a new one from. A pointer kept
-    // from before the load then points at freed memory, and the re-stamp below
-    // wrote the head rotation into it for the first frames after tracking
-    // resumed, which crashed the game a few seconds later in whatever system had
-    // reused the memory (the crowd system, most often).
+    // Every tick, before anything reads it, and null when there is none. The
+    // engine replaces the FPP camera (a load does, and so does the spawn after
+    // one), so a pointer kept from an earlier tick can point at freed memory,
+    // and FppCameraWrite writes through this one.
     ::g_camInstance = ResolveCamInstance();
 
     // Provider vtables can only be patched once the RTTI registry is up, which

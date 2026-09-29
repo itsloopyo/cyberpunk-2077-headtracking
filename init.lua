@@ -440,6 +440,9 @@ registerForEvent("onInit", function()
             crosshair = BuiltinCrosshair.new(settings, camera)
         end)
         if ok then
+            local GameUI = require("modules/GameUI")
+            GameUI.Listen("LoadingStart", function() crosshair:dropHandles() end)
+            GameUI.Listen("SessionEnd", function() crosshair:dropHandles() end)
             mlog("[HeadTracking] Built-in crosshair driver initialized")
         else
             crosshair = nil

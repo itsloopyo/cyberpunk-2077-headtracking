@@ -422,6 +422,21 @@ function BuiltinCrosshair:_adopt(class, this)
     dlog(string.format("[HeadTracking:Reticle] adopted live controller (%s)", class))
 end
 
+--- Let go of every controller and widget handle. On a load and at session end
+--- the HUD they belong to is torn down, and a handle kept past that points at an
+--- object nothing else wants. OnInitialize and the recapture observers pick up
+--- the new HUD's controllers.
+function BuiltinCrosshair:dropHandles()
+    self:_resetGateState()
+    self.controllers = {}
+    self._adopted = {}
+    self.nameplates = {}
+    self.hit_markers = {}
+    self.dc_brackets = nil
+    self._entries_cache = nil
+    self._entries_dirty = true
+end
+
 --- Every controller entry we write to: the ones captured at OnInitialize plus
 --- the adopted live one per class. Cached, rebuilt only when the set changes,
 --- so the per-frame write path does not allocate.
