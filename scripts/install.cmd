@@ -16,9 +16,8 @@
 :: this script is the fallback, and it dispatches to deploy.ps1 because what it
 :: deploys is not a file copy. Three vendored loaders (CET, RED4ext, TweakXL) are
 :: extracted with an installed-version comparison and a replace prompt, the Lua
-:: tree lands under bin\x64\plugins\cyber_engine_tweaks\mods\, and CET's
-:: bindings.json is merged key by key with a backup and a rollback if the result
-:: does not parse. The script also takes a /upgrade-deps flag and probes the game
+:: tree lands under bin\x64\plugins\cyber_engine_tweaks\mods\, and mod
+:: settings are created by the mod at first launch. The script also takes a /upgrade-deps flag and probes the game
 :: folder for write access before it starts, because the Epic build installs under
 :: C:\Program Files. None of that is shared-body shaped.
 

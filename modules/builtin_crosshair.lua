@@ -295,7 +295,7 @@ function BuiltinCrosshair.new(settings, camera)
     self._gate_log_frames = 0
     self._lock_probe_frames = 0
 
-    self.enabled = settings:get("crosshair_enabled")
+    self.enabled = true
 
     self._last_dx = 0
     self._last_dy = 0
@@ -345,13 +345,6 @@ function BuiltinCrosshair.new(settings, camera)
         write_parent_translate_ok = 0,
         last_error = nil,
     }
-
-    settings:observe("*", function(key)
-        if key == "crosshair_enabled" then
-            self.enabled = settings:get("crosshair_enabled")
-            if not self.enabled then self:_resetAll() end
-        end
-    end)
 
     -- Observer install is wrapped: a sandbox restriction here must NOT
     -- prevent the constructor from returning, or head tracking dies.

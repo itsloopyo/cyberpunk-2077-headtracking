@@ -12,7 +12,7 @@
 ::
 :: Deliberately not a thin wrapper over cameraunlock-core's shared uninstall body.
 :: It dispatches to uninstall.ps1, which unmerges the mod's entries from CET's
-:: bindings.json and backs up config.json before removing the Lua tree. CET,
+:: bindings.json and preserves user settings while removing the Lua payload. CET,
 :: RED4ext and TweakXL are shared frameworks and are left intact even with
 :: /force. See install.cmd for the full reasoning.
 
@@ -22,6 +22,7 @@ set "MOD_DISPLAY_NAME=HeadTracking (Cyberpunk 2077)"
 set "MOD_INTERNAL_NAME=HeadTracking"
 set "STATE_FILE=.headtracking-state.json"
 set "FRAMEWORK_TYPE=None"
+set "PRESERVE_FILES=bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\CameraUnlock.ini bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\config.json"
 :: Game-relative files deployed outside the CET mod folder. The TweakXL yaml
 :: rewrites the bullet records, so leaving it behind keeps altering gameplay
 :: after an uninstall. No LEGACY_DLLS: no shipped file has ever been renamed

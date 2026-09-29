@@ -72,7 +72,6 @@ local Aim = safeRequire("modules/aim")
 local NativeSettingsIntegration = safeRequire("modules/nativesettings")
 local Perf = safeRequire("modules/perf")
 local DebugLog = safeRequire("modules/debuglog")
-local Hotkeys = safeRequire("modules/hotkeys")
 local PoseInterpolator = safeRequire("modules/poseinterpolator")
 local ShiftCompat = safeRequire("modules/shift_compat")
 
@@ -357,27 +356,13 @@ registerForEvent("onInit", function()
 
     runInitStep("settings", function()
         settings = Settings.new()
-        local loaded = settings:load()
-        mlog(loaded and "[HeadTracking] Settings loaded from config.json"
-                      or "[HeadTracking] Created default config.json")
+        settings:load()
+        mlog("[HeadTracking] Config: " .. settings.status)
         -- The few things a session starts in regardless of how the last one
         -- ended. Everything else, yaw_mode included, is persisted.
         -- See Settings:applyLaunchState.
         settings:applyLaunchState()
     end)
-
-    -- Seed any of our hotkey actions that aren't bound in CET's bindings.json.
-    -- Runs every launch (not just at install time) so a wiped or missing
-    -- bindings file heals itself. Never touches bindings the user has
-    -- deliberately set. Best-effort: a failure here (file permissions,
-    -- malformed JSON, CET dir layout we don't expect) must not abort mod
-    -- init, so we absorb the error locally.
-    if Hotkeys and Hotkeys.ensure then
-        local ok, err = pcall(Hotkeys.ensure)
-        if not ok then
-            mlog("[HeadTracking:Hotkeys] sanity check errored (non-fatal): " .. tostring(err))
-        end
-    end
 
     runInitStep("udp", function()
         udp = UDP.new()
@@ -398,6 +383,8 @@ registerForEvent("onInit", function()
     runInitStep("ui", function()
         ui = UI.new()
         ui:setState(state)
+        settings.onStatus = function(message) ui:showError(message, 8.0) end
+        if settings.message ~= "" then settings.onStatus(settings.message) end
         mlog("[HeadTracking] UI initialized")
     end)
 
@@ -478,6 +465,7 @@ end)
 -- Lifecycle: Called every frame
 local function onUpdateImpl(deltaTime)
     init_debug_frame = init_debug_frame + 1
+    if settings and settings:isInitialized() then settings:update() end
 
     -- onUpdate can fire once before onInit completes - tolerate that single
     -- race without masking later bugs. After onInit, all modules must exist.
@@ -768,6 +756,10 @@ registerForEvent("onDraw", guarded("onDraw", onDrawImpl))
 -- Lifecycle: Called on shutdown
 registerForEvent("onShutdown", function()
     mlog("[HeadTracking] Shutting down...")
+    if settings and settings:isInitialized() then
+        Game.HeadTrackingStopConfig()
+        settings:update()
+    end
 
     -- Give Shift its camera back before we go, or a user who unloads this mod
     -- is left with Shift permanently suppressed for the rest of the session.
@@ -788,10 +780,6 @@ registerForEvent("onShutdown", function()
 
     if udp then
         udp:close()
-    end
-
-    if settings then
-        settings:save()
     end
 
     mlog("[HeadTracking] Shutdown complete")
@@ -859,8 +847,7 @@ function handleCycleMode()
         next_rot, next_pos, label = true, true, "Tracking: 6DOF (full)"
     end
 
-    settings:set("enabled", next_rot)
-    settings:set("position_enabled", next_pos)
+    settings:setMode(next_rot, next_pos)
     if state then state:refresh() end
 
     -- When rotation flips off, peel any baked head rotation back out of

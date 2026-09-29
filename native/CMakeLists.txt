@@ -38,6 +38,9 @@ add_library(HeadTrackingAim SHARED
     src/ChaseCameraHook.cpp
     src/UdpReceiver.cpp
     src/ScriptChannel.cpp
+    src/Config.cpp
+    src/ConfigRuntime.cpp
+    src/legacy_config/LegacyConfig.cpp
     src/FppCameraWrite.cpp
     src/builds/build_registry.cpp
     src/builds/gog_offsets.cpp
@@ -45,6 +48,7 @@ add_library(HeadTrackingAim SHARED
 
 target_include_directories(HeadTrackingAim PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../vendor
 )
 
 target_link_libraries(HeadTrackingAim PRIVATE
@@ -68,3 +72,11 @@ set_target_properties(HeadTrackingAim PROPERTIES
     OUTPUT_NAME "HeadTrackingAim"
     PREFIX ""
 )
+
+add_executable(config_tests ../tests/config_tests.cpp src/Config.cpp src/legacy_config/LegacyConfig.cpp)
+target_include_directories(config_tests PRIVATE src ../vendor)
+target_link_libraries(config_tests PRIVATE cameraunlock)
+target_compile_definitions(config_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+
+add_executable(legacy_reader ../tests/config_differential/legacy_reader.cpp src/legacy_config/LegacyConfig.cpp)
+target_include_directories(legacy_reader PRIVATE src ../vendor)

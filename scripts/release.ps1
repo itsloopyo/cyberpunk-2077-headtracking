@@ -105,6 +105,10 @@ if (Test-GitTagExists -Tag $tagName) {
 }
 Write-Host "  [OK] On main, tree clean, tag $tagName free" -ForegroundColor Green
 
+Write-Info 'Running the full test suite...'
+pixi run test
+if ($LASTEXITCODE -ne 0) { Write-Fail 'pixi run test failed. No release files were changed.' }
+
 # ---- Step 3: Generate CHANGELOG.md ----------------------------------------
 # This is the gate that aborts when there are no user-facing commits, so run
 # it BEFORE mutating any version files or building - a failure here then

@@ -358,19 +358,19 @@ function NativeSettingsIntegration:registerSettings()
     local POSITION_WIDGETS = {
         { key = "position_limit_x", label = "Limit X (metres)",
           desc = "Furthest the camera moves sideways, in metres each way.",
-          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+          min = 0.0, max = 10.0, step = 0.01, fmt = "%.2f" },
         { key = "position_limit_y_up", label = "Limit Y up (metres)",
           desc = "Furthest the camera rises.",
-          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+          min = 0.0, max = 10.0, step = 0.01, fmt = "%.2f" },
         { key = "position_limit_y_down", label = "Limit Y down (metres)",
           desc = "Furthest the camera drops. Separate from the up limit so crouching down can be tighter than standing up.",
-          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+          min = 0.0, max = 10.0, step = 0.01, fmt = "%.2f" },
         { key = "position_limit_z_fwd", label = "Limit Z forward (metres)",
           desc = "Furthest the camera leans in.",
-          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+          min = 0.0, max = 10.0, step = 0.01, fmt = "%.2f" },
         { key = "position_limit_z_back", label = "Limit Z back (metres)",
           desc = "Furthest the camera pulls back. Deliberately tighter than the forward limit, so pulling back does not clip through V.",
-          min = 0.0, max = 0.5, step = 0.01, fmt = "%.2f" },
+          min = 0.0, max = 10.0, step = 0.01, fmt = "%.2f" },
     }
 
     for _, w in ipairs(POSITION_WIDGETS) do
@@ -385,25 +385,6 @@ function NativeSettingsIntegration:registerSettings()
             end
         )
     end
-
-    -- =====================================================================
-    -- CROSSHAIR SECTION
-    -- =====================================================================
-    ns.addSubcategory("/HeadTracking/Crosshair", "Crosshair Overlay")
-
-    -- Crosshair enabled
-    self.widgetRefs["crosshair_enabled"] = ns.addSwitch(
-        "/HeadTracking/Crosshair",
-        "Enable Crosshair",
-        "Move the game's built-in reticle to mark the true aim point when head tracking offsets the view.",
-        self.settings:get("crosshair_enabled"),
-        self.settings:getDefaults().crosshair_enabled,
-        function(state)
-            self.settings:set("crosshair_enabled", state)
-        end
-    )
-    -- Network section removed: UDP 4242 is owned by the native RED4ext plugin,
-    -- nothing here is user-configurable. Point OpenTrack at 127.0.0.1:4242.
 
     -- =====================================================================
     -- ACTIONS SECTION

@@ -25,11 +25,7 @@ local function assert_true(v, label)
     if not v then error("FAIL " .. label .. ": expected truthy, got " .. tostring(v), 2) end
 end
 
--- Minimal json stub: settings.load/save need one, this suite never inspects it.
-_G.json = {
-    encode = function() return "{}" end,
-    decode = function() return nil end,
-}
+local bridge = require("tests/mock_config_bridge")
 
 -- Recording NativeSettings stub. Mirrors the argument order of the real
 -- framework (justarandomguyintheinternet/CP77_nativeSettings).
@@ -105,7 +101,7 @@ assert_true(integration:init(), "integration initialises against the stub")
 --
 -- saved_tracking_mode is persisted STATE, not a knob: it records which mode the
 -- master switch should restore, and is rewritten every time tracking goes off.
-local NOT_IN_UI = { saved_tracking_mode = true }
+local NOT_IN_UI = { enable_on_startup = true }
 
 local missing = {}
 for key in pairs(settings:getDefaults()) do
@@ -184,7 +180,7 @@ assert_eq(settings:get("position_enabled"), true, "master restores position-only
 settings:set("enabled", true)
 settings:set("position_enabled", false)
 widgets[rot_ref].callback(false)
-assert_eq(settings:get("saved_tracking_mode"), "rot", "last rotation axis records rotation-only")
+assert_eq(settings.suspendedMode.position_enabled, false, "last rotation axis remembers rotation-only")
 widgets[master_ref].callback(true)
 assert_eq(settings:get("enabled"), true, "master restores rotation-only rotation")
 assert_eq(settings:get("position_enabled"), false, "master keeps position off in rotation-only")
@@ -192,7 +188,7 @@ assert_eq(settings:get("position_enabled"), false, "master keeps position off in
 settings:set("enabled", false)
 settings:set("position_enabled", true)
 widgets[pos_ref].callback(false)
-assert_eq(settings:get("saved_tracking_mode"), "pos", "last position axis records position-only")
+assert_eq(settings.suspendedMode.enabled, false, "last position axis remembers position-only")
 widgets[master_ref].callback(true)
 assert_eq(settings:get("enabled"), false, "master keeps rotation off in position-only")
 assert_eq(settings:get("position_enabled"), true, "master restores position-only position")

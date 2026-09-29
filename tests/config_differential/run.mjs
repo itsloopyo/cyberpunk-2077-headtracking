@@ -12,6 +12,9 @@ const defaults = {enabled:true, position_enabled:true, local_smoothing:0, remote
   position_limit_z_fwd:0.4, position_limit_z_back:0.1, yaw_mode:'world',
   saved_tracking_mode:'both', chase_camera_tracking:true, TrueFreeLook:false};
 const cases = [{}, defaults, JSON.parse(fs.readFileSync('config.json','utf8'))];
+for (const name of fs.readdirSync('tests/config_differential/data')) {
+  cases.push(JSON.parse(fs.readFileSync(`tests/config_differential/data/${name}`, 'utf8')));
+}
 for (const key of Object.keys(defaults)) {
   for (const value of [true,false,0,0.01,0.08,0.49,0.6,1,10,90,180,1000,-1,'world','local','rot','pos','both','wrong',null,[],{}]) {
     cases.push({...defaults,[key]:value});
@@ -37,7 +40,7 @@ try {
   const script=path.join(folder,'oracle.lua');
   fs.writeFileSync(script, `
 local cases = ${lua(cases)}
-local Settings = dofile("tests/config_differential/oracle/settings.lua")
+local Settings = dofile(arg[1])
 local input
 json = { decode = function() return input end }
 io.open = function() return { read = function() return "object" end, close = function() end } end
@@ -58,8 +61,26 @@ for i=0,${cases.length-1} do
   output(encode(settings:getAll()))
 end
 `);
-  const oracle=run('lua',[script]).trim().split(/\r?\n/).map(JSON.parse);
+  const oracle=run('lua',[script,'tests/config_differential/oracle/settings.lua']).trim().split(/\r?\n/).map(JSON.parse);
   assert.equal(oracle.length,cases.length);
   for(let i=0;i<cases.length;i++) assert.deepEqual(native[i],oracle[i],`Legacy case ${i}: ${JSON.stringify(cases[i])}`);
-  console.log(`Legacy reader matches the frozen Lua oracle for ${cases.length} inputs`);
+  const published=run('lua',[script,'tests/config_differential/oracle/published_settings.lua']).trim().split(/\r?\n/).map(JSON.parse);
+  for(let i=0;i<cases.length;i++) {
+    for(const key of Object.keys(defaults).filter(key=>key !== 'TrueFreeLook'))
+      assert.deepEqual(native[i][key],published[i][key],`Published reader case ${i}, ${key}`);
+  }
+  const migrated=run('native/build/bin/config_tests.exe',['--migrate-json'],cases.map(c=>JSON.stringify(c)).join('\n')+'\n')
+    .trim().split(/\r?\n/).map(JSON.parse);
+  for(let i=0;i<cases.length;i++) {
+    const expected={...oracle[i],enable_on_startup:true};
+    if(!expected.enabled && !expected.position_enabled) {
+      expected.enabled=expected.saved_tracking_mode !== 'pos';
+      expected.position_enabled=expected.saved_tracking_mode !== 'rot';
+    }
+    delete expected.saved_tracking_mode;
+    delete expected.crosshair_enabled;
+    if(expected.position_limit_y_down === 0.05) expected.position_limit_y_down=0.2;
+    assert.deepEqual(migrated[i],expected,`Migration case ${i}: ${JSON.stringify(cases[i])}`);
+  }
+  console.log(`Published Lua, frozen Lua, native import and read-only migration agree for ${cases.length} inputs (recorded changes applied)`);
 } finally { fs.rmSync(folder,{recursive:true}); }

@@ -97,3 +97,4 @@ docker-compose*.yml text eol=lf
 *.jar binary
 *.war binary
 *.ear binary
+CameraUnlock.ini -text whitespace=cr-at-eol

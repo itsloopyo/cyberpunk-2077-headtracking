@@ -47,9 +47,14 @@ test-constants = { cmd = "lua tests/core_constants_test.lua" }
 # is the core's own code, not a port, so there is nothing here to check.
 # Where a local test and a vector disagree, the vector is right.
 test-vectors  = { cmd = "node cameraunlock-core/scripts/pipeline-vectors/run-vectors.mjs --vectors cameraunlock-core/data/pipeline-conformance.json --harness \"lua tests/conformance_harness.lua\" --expect-skips position-interpolator-fills-frames-between-samples,position-interpolator-extrapolation-expires-on-stall,position-interpolator-resists-packet-jitter,position-interpolator-default-sample-interval-is-one-thirtieth,position-clamp-before-smoothing,position-clamp-is-asymmetric,vertical-limits-are-independent,gimbal-lock-at-exactly-90,euler-roundtrip-sweep,euler-decomposition-returns-canonical-angles,pivot-compensation-cancels-a-pure-head-turn,pivot-compensation-defaults-off,pivot-compensation-covers-pitch-and-the-up-arm,deadzone-is-continuous-at-its-edge,diagonal-motion-keeps-roll-at-zero,wire-position-is-centimetres,wire-rejects-finite-double-infinite-float,hcam-trailer-parses,packet-rejects-a-short-datagram,packet-accepts-a-longer-datagram-without-inventing-a-trailer,hcam-trailer-version-is-forward-compatible,hcam-trailer-does-not-recenter,no-center-captured-on-connect-rotation,no-center-captured-on-connect-position,duplicate-packets-track-the-source-rate" }
-test = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-state", "test-ads-fade", "test-lean-clamp", "test-lean-line-sweep", "test-weapon-view", "test-reticle", "test-settings-ui", "test-manifest", "test-camera", "test-constants", "test-vectors"] }
+test-unit = { depends-on = ["test-syntax", "test-settings", "test-console", "test-delegate", "test-aim", "test-pose", "test-state", "test-ads-fade", "test-lean-clamp", "test-lean-line-sweep", "test-weapon-view", "test-reticle", "test-settings-ui", "test-manifest", "test-camera", "test-constants", "test-vectors"] }
+
+test = { depends-on = ["test-unit", "test-config", "test-differential"] }
 
 [target.win-64.tasks]
+render-config = { cmd = "native/build/bin/config_tests.exe --render-config CameraUnlock.ini && node cameraunlock-core/scripts/encode-seed.mjs", depends-on = ["build-native"] }
+test-config = { cmd = "native/build/bin/config_tests.exe", depends-on = ["build-native"] }
+test-differential = { cmd = "node tests/config_differential/run.mjs", depends-on = ["build-native"] }
 # Build native RED4ext C++ plugin
 build-native = { cmd = "native\\build.bat" }
 build = { depends-on = ["build-native"] }
@@ -81,7 +86,7 @@ check-fingerprint = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/ch
 # described in cameraunlock-core/AGENTS.md (`package` -> `build`). The
 # vendored CET + RED4ext loaders are committed under vendor/ and bundled
 # into the ZIP by package-release.ps1.
-package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build", "test"] }
+package = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1", depends-on = ["build", "test-unit", "test-config"] }
 
 # Automated release workflow
 release = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/release.ps1" }
@@ -93,6 +98,7 @@ clean = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/clean.ps1" }
 update-deps = { cmd = "powershell -ExecutionPolicy Bypass -File scripts/update-deps.ps1" }
 
 [target.linux-64.tasks]
+test = { depends-on = ["test-unit"] }
 # Everything that touches the payload is Windows-only and fails fast here.
 # The package this repo ships is a Windows RED4ext DLL plus a CET Lua tree, so
 # no Linux task can produce a correct artifact. The previous wiring pointed

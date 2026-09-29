@@ -6,6 +6,7 @@
 #include "AimCompensation.hpp"
 #include "UdpReceiver.hpp"
 #include "ScriptChannel.hpp"
+#include "ConfigRuntime.hpp"
 #include "NativeRunningHook.hpp"
 #include "AimProviderHook.hpp"
 #include "RicochetPreviewHook.hpp"
@@ -101,6 +102,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
 
         g_sharedState.Shutdown();
         LogInfo("[HeadTrackingAim] Shared memory shutdown");
+        ConfigRuntime_Shutdown();
         Log_Close();
         break;
     }

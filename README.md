@@ -152,6 +152,8 @@ view sits off to one side, centre it in the tracker.
 
 ## Controls
 
+These are the default bindings. Change the hotkey rows in `CameraUnlock.ini` or `Defaults.ini` to remap them.
+
 Two equivalent binding sets, so use whichever your keyboard has. Both sets are always active: a nav-cluster key and its chord fire the same action, and pressing either triggers it once.
 
 | Action                | Nav-cluster | Chord           |
@@ -186,7 +188,7 @@ A scope's target indicator lights for what the scope is pointed at, not for what
 
 First-person driving tracks your head exactly like being on foot.
 
-The outside chase camera tracks your head too. Turn it off with "Chase Camera Tracking" in the settings panel, or `chase_camera_tracking` in `config.json`. Two rough edges to know about:
+The outside chase camera tracks your head too. Turn it off with "Chase Camera Tracking" in the settings panel, or `ChaseCameraTracking` in `CameraUnlock.ini`. Two rough edges to know about:
 
 - The near scene follows your head; the distant scene stays fixed on the screen. Third-person driving renders through more than one view, and only one of them currently carries the head rotation.
 - The game's camera motion blur smears the whole world, because it works out how fast static geometry is moving from a camera that has not been rotated. **Turn Motion Blur off** in Graphics.
@@ -197,58 +199,107 @@ Head yaw there pans and tilts about the camera's own axes, so it behaves like lo
 
 ## Configuration
 
-The mod writes its config to:
+<!-- cameraunlock:config -->
+The mod reads its settings from `bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\CameraUnlock.ini` in the game folder, and creates the file when it starts and finds none. Edit it with any text editor.
 
+A setting set to `default` takes its value from `Defaults.ini`, which every head tracking mod that keeps its settings in `CameraUnlock.ini` reads. Head tracking mods that keep their settings in another file do not read it. Changing a setting in `Defaults.ini` changes it in every game that has it set to `default`. Writing a value in place of `default` changes that setting for this game only. When the mod saves a setting that a hotkey changed in game, it writes the new value in place of `default`, so that setting no longer follows `Defaults.ini` in this game until you set it to `default` again.
+
+`Defaults.ini` is `%AppData%\CameraUnlock\Defaults.ini` on Windows; `$XDG_CONFIG_HOME/CameraUnlock/Defaults.ini` on Linux, or `~/.config/CameraUnlock/Defaults.ini` where `XDG_CONFIG_HOME` is not set, under Wine and Proton too; and `~/Library/Application Support/CameraUnlock/Defaults.ini` on macOS. The mod's log, where it writes one, names the file it read.
+
+When the mod starts and finds no `Defaults.ini`, it creates one holding the built-in values, unless Windows runs the game as a packaged app. The mod never changes `Defaults.ini` after that. Edit it with any text editor.
+
+The built-in value of each setting set to `default` below:
+
+- `EnableOnStartup=true`
+- `WorldSpaceYaw=true`
+- `RotationEnabled=true`
+- `LocalSmoothing=0.0`
+- `RemoteSmoothing=0.15`
+- `PositionEnabled=true`
+- `TrueFreeLook=false`
+- `PositionLimitX=0.3`
+- `PositionLimitY=0.2`
+- `PositionLimitYDown=0.2`
+- `PositionLimitZ=0.4`
+- `PositionLimitZBack=0.1`
+- `ToggleKey=End, Ctrl+Shift+Y`
+- `CycleTrackingModeKey=PageUp, Ctrl+Shift+G`
+- `YawModeKey=PageDown, Ctrl+Shift+H`
+- `TrueFreeLookKey=Insert, Ctrl+Shift+U`
+
+With every setting at its default, the file reads:
+
+```ini
+; Cyberpunk 2077 head tracking settings.
+; Comments start with ; and go on their own line. Text after a value is part of the value.
+; Hotkeys are key names such as End, PageUp or Ctrl+Shift+Y. Separate several with commas; leave empty for none.
+; A setting set to default takes its value from Defaults.ini, which every head tracking mod
+; that keeps its settings in CameraUnlock.ini reads: %AppData%\CameraUnlock\Defaults.ini on
+; Windows, $XDG_CONFIG_HOME/CameraUnlock/Defaults.ini (normally ~/.config/CameraUnlock) on
+; Linux, under Wine and Proton too, and ~/Library/Application Support/CameraUnlock/Defaults.ini
+; on macOS. The log names the file it read. Change a setting in Defaults.ini to change it in
+; every game that has it set to default, or write a value here instead of default to change it
+; for this game only.
+
+[CameraUnlock]
+; Written by the mod. Leave this section in place.
+ConfigFormat=1
+
+[General]
+; true: head tracking is on when the game starts. ToggleKey turns it on and off.
+EnableOnStartup=default
+; true: yaw turns around the world's up axis. false: around the camera's own up axis.
+WorldSpaceYaw=default
+; true: turning your head turns the view.
+; Tracking mode at startup, with PositionEnabled. The mode hotkey changes both.
+RotationEnabled=default
+
+[Smoothing]
+; Smoothing when the tracker runs on this PC. 0 is the least, 1 the most.
+LocalSmoothing=default
+; Smoothing when the tracker is another device on the network, such as a phone.
+; 0 is the least, 1 the most.
+RemoteSmoothing=default
+
+[Position]
+; true: moving your head moves the view.
+; Tracking mode at startup, with RotationEnabled. The mode hotkey changes both.
+PositionEnabled=default
+; false: while you aim down the sights, leaning keeps your eye on the sights.
+; true: the weapon stays put and your head moves freely around it (true free look).
+TrueFreeLook=default
+; How far, in metres, leaning left or right can move the view.
+PositionLimitX=default
+; How far, in metres, raising your head can move the view.
+PositionLimitY=default
+; How far, in metres, lowering your head can move the view.
+PositionLimitYDown=default
+; How far, in metres, leaning forward can move the view.
+PositionLimitZ=default
+; How far, in metres, leaning back can move the view.
+PositionLimitZBack=default
+
+[Hotkeys]
+; Turns head tracking on and off.
+ToggleKey=default
+; Changes the tracking mode: rotation and position, rotation only, position only.
+CycleTrackingModeKey=default
+; Switches yaw between the world's up axis and the camera's own (WorldSpaceYaw).
+YawModeKey=default
+; Switches between keeping your eye on the sights and true free look (TrueFreeLook).
+TrueFreeLookKey=default
+
+[Camera]
+; Maximum head rotation in degrees, relative to the aim.
+MaxYawDegrees=120.0
+MaxPitchDegrees=80.0
+MaxRollDegrees=45.0
+; Apply head tracking to the third-person vehicle camera.
+ChaseCameraTracking=true
 ```
-<Cyberpunk 2077>\bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\config.json
-```
+<!-- /cameraunlock:config -->
 
-Edit it directly, or configure the mod in game if you have a settings framework installed. The defaults below are what the mod ships with:
-
-- [Native Settings UI](https://www.nexusmods.com/cyberpunk2077/mods/3518) puts every option below except `saved_tracking_mode`, which the mod keeps for itself, into the game's own Settings menu, controller included. Optional: without it the mod runs exactly the same and you edit `config.json` by hand.
-
-Native Settings is the only framework this mod registers with. If you use a different settings front-end, whether it picks this mod up is down to whether that front-end reads Native Settings' registry - nothing extra is needed from here either way.
-
-
-```json
-{
-  "enabled": true,
-
-  "local_smoothing": 0.0,
-  "remote_smoothing": 0.15,
-
-  "clamp_yaw": 120.0,
-  "clamp_pitch": 80.0,
-  "clamp_roll": 45.0,
-
-  "crosshair_enabled": true,
-
-  "position_enabled": true,
-  "position_limit_x": 0.30,
-  "position_limit_y_up": 0.20,
-  "position_limit_y_down": 0.05,
-  "position_limit_z_fwd": 0.40,
-  "position_limit_z_back": 0.10,
-
-  "yaw_mode": "world",
-
-  "TrueFreeLook": false,
-
-  "saved_tracking_mode": "both"
-}
-```
-
-JSON has no comment syntax, so the settings worth touching are described here instead. Ranges below are what the file accepts; the in-game sliders deliberately cover a narrower band, so a value you type into the file can sit outside what the slider can reach.
-
-- `local_smoothing` (0.0 to 1.0, default 0.0): smoothing applied when the tracker runs on this machine (loopback). 0 = no smoothing, 1 = heavy.
-- `remote_smoothing` (0.0 to 1.0, default 0.15): smoothing applied when the tracker is a remote device on the network. 0 = no smoothing, 1 = heavy.
-  The mod picks between the two from the source address of each tracking packet, so switching from a local OpenTrack instance to a phone on WiFi swaps the value with no restart. Both cover rotation and position, so there is no separate position smoothing setting. Local defaults to zero because a same-machine tracker is already stable and any smoothing there is pure added latency.
-- `clamp_*` (degrees): rotation caps, so head rotation cannot fight the aim system.
-- `crosshair_enabled`: moves the game's own reticle to the true aim point during normal play. It uses Cyberpunk's live camera projection, including the exact scope projection, rather than an estimated field of view.
-- `position_enabled` and `position_limit_*`: enable 6DOF translation and set Cyberpunk-specific camera travel limits in metres. Positional sensitivity belongs in the tracker.
-- `saved_tracking_mode`: not a setting - it is where the mod remembers which tracking mode to restore when tracking is switched back on, whether that is you pressing `End` or the mod bringing tracking up on the next launch after you quit with it off. Rewritten every time you switch tracking off. Leave it alone.
-- `TrueFreeLook`: `false` keeps your eye on the sights while you lean with them up; `true` leaves the weapon where it is and your head free around it. Toggle live with `Insert` / `Ctrl+Shift+U`. The choice is saved, so it survives a restart.
-- `yaw_mode`: `"world"` is horizon-locked yaw, so head yaw always swings around world vertical no matter how far the view has pitched. `"local"` pivots around the camera's current up-axis instead, which tilts with mouse pitch. Toggle live with `Page Down` / `Ctrl+Shift+H`. The choice is saved, so it survives a restart.
+[Native Settings UI](https://www.nexusmods.com/cyberpunk2077/mods/3518) adds tracking mode, yaw mode, true free look, smoothing, camera limits and chase-camera tracking to the game's Settings menu. Changes apply immediately and are saved for this game. The master switch lasts for the session; EnableOnStartup controls the next launch. Restart the game after editing either INI file by hand.
 
 ## Troubleshooting
 
@@ -294,7 +345,7 @@ JSON has no comment syntax, so the settings worth touching are described here in
 
 ## Updating
 
-Download the new release ZIP and run `install.cmd` again. Your `config.json` is preserved.
+Download the new release ZIP and run `install.cmd` again. Your settings are preserved.
 
 ## Uninstalling
 

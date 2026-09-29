@@ -306,7 +306,7 @@ function Camera.new(settings)
         position_enabled = false,
         position_limit_x = 0.30,
         position_limit_y_up = 0.20,
-        position_limit_y_down = 0.05,
+        position_limit_y_down = 0.20,
         position_limit_z_fwd = 0.40,
         position_limit_z_back = 0.10,
     }
@@ -383,7 +383,7 @@ function Camera:refreshSettingsCache()
     self.cached_settings.position_enabled = pe
     self.cached_settings.position_limit_x = s:get("position_limit_x") or 0.30
     self.cached_settings.position_limit_y_up = s:get("position_limit_y_up") or 0.20
-    self.cached_settings.position_limit_y_down = s:get("position_limit_y_down") or 0.05
+    self.cached_settings.position_limit_y_down = s:get("position_limit_y_down") or 0.20
     self.cached_settings.position_limit_z_fwd = s:get("position_limit_z_fwd") or 0.40
     self.cached_settings.position_limit_z_back = s:get("position_limit_z_back") or 0.10
 end

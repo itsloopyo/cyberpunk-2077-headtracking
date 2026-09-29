@@ -12,7 +12,7 @@ on:
 
 jobs:
   release:
-    uses: itsloopyo/cameraunlock-core/.github/workflows/release-mod.yml@435915a8a3d8e1b799cc169b74f1fcf72b9534e7
+    uses: itsloopyo/cameraunlock-core/.github/workflows/release-mod.yml@73610497fa0e7862a84b0f511a458747557fbe1f
     with:
       project-name: 'Cyberpunk 2077 HeadTracking'
       version-source: regex

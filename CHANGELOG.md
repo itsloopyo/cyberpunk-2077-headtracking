@@ -4,6 +4,23 @@
 
 ### Changed
 
+- Settings now use `CameraUnlock.ini` beside the CET mod. The first launch imports
+  existing `config.json` settings without changing that file. Unchanged legacy
+  defaults follow `%AppData%\CameraUnlock\Defaults.ini`; values you changed stay
+  specific to Cyberpunk. The mod creates Defaults.ini when absent and never
+  changes an existing copy.
+- Hotkeys are configurable in the INI files. The settings panel still saves
+  smoothing, camera limits, chase-camera tracking, tracking mode, yaw mode and
+  true free look. Each save preserves comments and unrelated settings.
+- The master on/off switch lasts for the session. `EnableOnStartup` controls
+  startup, and the selected tracking mode survives a restart.
+- The default downward travel limit follows the shared 20 cm default instead
+  of 5 cm. A changed legacy limit is preserved.
+- The reticle follows the aim whenever tracking runs; `crosshair_enabled` and
+  the persisted master-switch bookkeeping `saved_tracking_mode` are no longer
+  settings. Existing files remain available for rolling back to an older build.
+- Updating and uninstalling preserve both settings files in place.
+
 - Leaning now carries on while you aim down sights. As the sights come up, the lean
   moves from the camera to your arms and weapon, so the sights stay in front of your
   eye and your rounds leave from where your eye is: lean round a corner with the

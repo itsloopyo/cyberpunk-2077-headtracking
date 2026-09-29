@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 itsloopyo
 #include "ScriptChannel.hpp"
+#include "ConfigRuntime.hpp"
 #include "FppCameraWrite.hpp"
 
 #include "ChaseCameraHook.hpp"
@@ -24,11 +25,7 @@ namespace {
 // Bit layout for the `flags` out-param, mirrored in modules/udp.lua. Bit 6 is
 // live status; bits 3-5 and 7 are one-shot edges that Lua clears on consume.
 // Keep both sides in sync when adding new flags.
-constexpr uint32_t kFlagToggleTracking   = 1u << 3;
-constexpr uint32_t kFlagCycleMode        = 1u << 4;
-constexpr uint32_t kFlagToggleYaw        = 1u << 5;
 constexpr uint32_t kFlagRemoteConnection = 1u << 6;
-constexpr uint32_t kFlagToggleFreeLook   = 1u << 7;
 
 std::atomic<uint64_t> s_lastPushMs{0};
 uint64_t s_lastRejectLogMs = 0;
@@ -37,72 +34,6 @@ std::atomic<bool> s_lastPushIsAds{false};
 std::atomic<float> s_lastPushHeadDegrees{0.0f};
 std::atomic<bool> s_chaseCameraActive{false};
 std::atomic<bool> s_loggedFirstPush{false};
-
-bool s_toggleTrackingChordWasDown = false;
-bool s_cycleModeChordWasDown = false;
-bool s_yawModeChordWasDown = false;
-bool s_freeLookChordWasDown = false;
-
-// True when the foreground window belongs to this process. The chords below
-// are read from GetAsyncKeyState, which is global to the session: without this
-// they fire while the player is alt-tabbed into another application.
-bool GameWindowHasFocus() {
-    const HWND fg = GetForegroundWindow();
-    if (!fg) return false;
-    DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
-    return pid == GetCurrentProcessId();
-}
-
-// Polls the standard CameraUnlock chords (Ctrl+Shift+{Y,G,H,U}). Each chord is
-// paired with the canonical nav-cluster key as a parallel edge source; either
-// firing produces one edge. Neither set can go through CET: registerHotkey
-// dispatch crashes before entering Lua on this game build, and the sandbox
-// strips LuaJIT FFI so Lua-side GetAsyncKeyState polling is impossible.
-struct ChordEdges {
-    bool toggleTracking;
-    bool cycleMode;
-    bool yawMode;
-    bool freeLook;
-};
-
-ChordEdges ConsumeChordEdges() {
-    const bool ctrlDown = ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) ||
-                          ((GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0) ||
-                          ((GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0);
-    const bool shiftDown = ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) ||
-                           ((GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0) ||
-                           ((GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0);
-    const bool modsDown = ctrlDown && shiftDown;
-
-    const bool toggleDown =
-        ((GetAsyncKeyState(VK_END) & 0x8000) != 0) ||
-        (modsDown && ((GetAsyncKeyState('Y') & 0x8000) != 0));
-    const bool cycleDown =
-        ((GetAsyncKeyState(VK_PRIOR) & 0x8000) != 0) ||
-        (modsDown && ((GetAsyncKeyState('G') & 0x8000) != 0));
-    const bool yawDown =
-        ((GetAsyncKeyState(VK_NEXT) & 0x8000) != 0) ||
-        (modsDown && ((GetAsyncKeyState('H') & 0x8000) != 0));
-    const bool freeLookDown =
-        ((GetAsyncKeyState(VK_INSERT) & 0x8000) != 0) ||
-        (modsDown && ((GetAsyncKeyState('U') & 0x8000) != 0));
-
-    // Latch the physical state even while unfocused, so a key held across the
-    // focus boundary is not read as a fresh press the moment the game returns.
-    const bool focused = GameWindowHasFocus();
-
-    ChordEdges e{};
-    e.toggleTracking = focused && toggleDown && !s_toggleTrackingChordWasDown;
-    e.cycleMode      = focused && cycleDown  && !s_cycleModeChordWasDown;
-    e.yawMode        = focused && yawDown    && !s_yawModeChordWasDown;
-    e.freeLook       = focused && freeLookDown && !s_freeLookChordWasDown;
-    s_toggleTrackingChordWasDown = toggleDown;
-    s_cycleModeChordWasDown      = cycleDown;
-    s_yawModeChordWasDown        = yawDown;
-    s_freeLookChordWasDown       = freeLookDown;
-    return e;
-}
 
 void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, int64_t) {
     float* pYaw = nullptr;
@@ -126,12 +57,7 @@ void PollPose(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, bool* aOut, i
     UdpReceiver_PublishLatest();
     const HeadTrackingState state = g_sharedState.Read();
 
-    uint32_t flags = 0;
-    const ChordEdges edges = ConsumeChordEdges();
-    if (edges.toggleTracking) flags |= kFlagToggleTracking;
-    if (edges.cycleMode)      flags |= kFlagCycleMode;
-    if (edges.yawMode)        flags |= kFlagToggleYaw;
-    if (edges.freeLook)       flags |= kFlagToggleFreeLook;
+    uint32_t flags = ConfigRuntime_PollKeys();
     // Live status, not an edge: Lua re-reads it every poll so a user switching
     // between a local OpenTrack instance and a phone on WiFi gets the other
     // smoothing parameter without a game restart.
@@ -313,6 +239,7 @@ void RegisterFunctions() {
 // functions above only take Float/Bool/Uint32, which are fundamentals present
 // from the start, which is why they work where they are.
 void RegisterLogFunction() {
+    ConfigRuntime_Register();
     auto* rtti = RED4ext::CRTTISystem::Get();
 
     auto* scriptLog = RED4ext::CGlobalFunction::Create(

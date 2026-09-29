@@ -36,7 +36,6 @@
     { "source": "modules/camera.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/camera.lua" },
     { "source": "modules/debuglog.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/debuglog.lua" },
     { "source": "modules/GameUI.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/GameUI.lua" },
-    { "source": "modules/hotkeys.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/hotkeys.lua" },
     { "source": "modules/nativesettings.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/nativesettings.lua" },
     { "source": "modules/perf.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/perf.lua" },
     { "source": "modules/poseinterpolator.lua", "target": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/modules/poseinterpolator.lua" },
@@ -49,6 +48,13 @@
     { "source": "tweaks/HeadTracking_ProjectileBullets.yaml", "target": "r6/tweaks/HeadTracking_ProjectileBullets.yaml" }
   ],
 
+  "config": {
+    "path": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/CameraUnlock.ini",
+    "anchor": "game_root",
+    "legacy_source": "bin/x64/plugins/cyber_engine_tweaks/mods/HeadTracking/config.json",
+    "canonical_since": "1.4.0",
+    "per_game": {}
+  },
   "runtime_requirements": [],
   "dependencies": []
 }

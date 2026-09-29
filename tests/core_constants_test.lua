@@ -9,17 +9,6 @@
 -- never the defaults. Without this file a moved core constant leaves the mod
 -- quietly on the old number.
 --
--- The settings defaults are read off a live Settings instance. The two ramp
--- ends in camera.lua and the interpolator constants in poseinterpolator.lua are
--- module-locals on purpose - nothing outside those files may set them - so they
--- are read from the source declaration rather than widened into module exports
--- for a test's benefit.
---
--- Not pinned, and why:
---   settings.position_limit_y_down is 0.05 against core's 0.20. Every mod in
---   the fleet tightens the downward budget; the camera sits at the eyes and the
---   extra travel clips into the player body. Per-game, not a restated default.
-
 local function assert_eq(actual, expected, label)
     if actual ~= expected then
         error(string.format(
@@ -56,19 +45,6 @@ local function module_local(path, name)
     local chunk = assert(load("return " .. value, name))
     return chunk()
 end
-
-package.path = "./?.lua;./modules/?.lua;" .. package.path
-local Settings = require("modules.settings")
-if not Settings then Settings = require("settings") end
-
-local defaults = Settings.new().defaults
-
-assert_eq(defaults.local_smoothing, core("local_smoothing_default"), "local_smoothing")
-assert_eq(defaults.remote_smoothing, core("remote_smoothing_default"), "remote_smoothing")
-assert_eq(defaults.position_limit_x, core("limit_x"), "position_limit_x")
-assert_eq(defaults.position_limit_y_up, core("limit_y"), "position_limit_y_up")
-assert_eq(defaults.position_limit_z_fwd, core("limit_z"), "position_limit_z_fwd")
-assert_eq(defaults.position_limit_z_back, core("limit_z_back"), "position_limit_z_back")
 
 assert_eq(module_local("modules/camera.lua", "FRAME_INTERPOLATION_SPEED"),
     core("frame_interpolation_speed"), "camera.FRAME_INTERPOLATION_SPEED")

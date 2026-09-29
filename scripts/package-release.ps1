@@ -91,7 +91,6 @@ $requiredModFiles = @(
     "modules\nativesettings.lua",
     "modules\perf.lua",
     "modules\debuglog.lua",
-    "modules\hotkeys.lua",
     "modules\poseinterpolator.lua",
     "modules\shift_compat.lua"
 )

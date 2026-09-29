@@ -3,16 +3,13 @@
     Remove HeadTracking mod from Cyberpunk 2077 CET mods directory.
 
 .DESCRIPTION
-    Deletes the HeadTracking CET mod folder and the native RED4ext plugin DLL,
-    if present. Leaves user config.json alone only when -KeepConfig is set.
+    Removes the HeadTracking payload and preserves user configuration in place.
 
 .PARAMETER GamePath
     Optional custom path to Cyberpunk 2077 installation.
 
 .PARAMETER KeepConfig
-    If set, preserves the user's config.json under the CET mod folder
-    (the mod folder itself is still removed, but config is backed up
-    to %TEMP%\HeadTracking-config-backup.json).
+    Accepted for compatibility. User configuration is always preserved.
 
 .PARAMETER Force
     Accepted for compatibility with the CameraUnlock uninstall contract
@@ -94,16 +91,16 @@ $dllPath = Join-Path $gameDir "red4ext\plugins\HeadTrackingAim.dll"
 $removedSomething = $false
 
 if (Test-Path $modDir) {
-    if ($KeepConfig) {
-        $cfgSrc = Join-Path $modDir "config.json"
-        if (Test-Path $cfgSrc) {
-            $backup = Join-Path $env:TEMP "HeadTracking-config-backup.json"
-            Copy-Item -Path $cfgSrc -Destination $backup -Force
-            Write-Info "Backed up config.json to: $backup"
-        }
+    $resolvedModDir = [IO.Path]::GetFullPath($modDir)
+    $resolvedGameDir = [IO.Path]::GetFullPath($gameDir).TrimEnd('\') + '\'
+    if (-not $resolvedModDir.StartsWith($resolvedGameDir, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Mod folder is outside the game directory: $resolvedModDir"
     }
-    Remove-Item -Path $modDir -Recurse -Force
-    Write-Info "Removed CET mod folder: $modDir"
+    foreach ($name in @('init.lua', 'modules', 'LICENSE', 'THIRD-PARTY-NOTICES.md')) {
+        $payload = Join-Path $resolvedModDir $name
+        if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurse -Force }
+    }
+    Write-Info "Removed CET payload; user configuration remains in $modDir"
     $removedSomething = $true
 } else {
     Write-Info "CET mod folder not present (already removed?)"
