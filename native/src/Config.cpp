@@ -141,7 +141,8 @@ cfg::ConfigOwnerOptions<Config> Options(const std::filesystem::path& folder, cfg
     options.header = {"Cyberpunk 2077"};
     options.defaults = std::move(defaults);
     options.import.run = Import;
-    for (const auto& [key, value] : legacy::Defaults().items()) options.import.keys.push_back({"", key});
+    const auto legacyDefaults = legacy::Defaults();
+    for (const auto& [key, value] : legacyDefaults.items()) options.import.keys.push_back({"", key});
     return options;
 }
 }
