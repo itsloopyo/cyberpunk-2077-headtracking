@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.1] - 2026-09-30
+
+### Fixed
+
+- keep legacy defaults alive while registering import keys
+
 ## [1.4.0] - 2026-09-30
 
 ### Changed
