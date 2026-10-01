@@ -244,7 +244,7 @@ end
 -- (incremental mutation). Above this, the engine has overwritten the orientation
 -- with its own clean mouse value (camera-state events) and the head-peel must be
 -- skipped - peeling last_head_quat off an already-clean value snaps the view off
--- by the head angle. ~0.08 L1 ≈ 9 degrees: clears smooth per-frame mouse look,
+-- by the head angle. ~0.08 L1 â‰ˆ 9 degrees: clears smooth per-frame mouse look,
 -- trips on a meaningful head turn's worth of divergence.
 local PEEL_DIVERGENCE_THRESHOLD = 0.08
 
@@ -342,11 +342,7 @@ function Camera.new(settings)
     self.lean_was_failed = false
     self.lean_last_log = 0
 
-    -- The weapon the parts below belong to, and whether they hold a turn.
-    self.weapon_view_id = nil
-    self.weapon_view_applied = false
-    self.weapon_view_logged = false
-    self.weapon_view_last_log = -WEAPON_VIEW_LOG_INTERVAL_S
+    self.weapon_view = WeaponView.new()
 
     -- Initialize cache from settings
     self:refreshSettingsCache()
@@ -547,43 +543,6 @@ local leanQuery = LeanLineSweep.query(leanCast, LEAN_SKIN)
 
 local function _readZoomTerms(cam)
     return cam.zoom, cam.zoomOverrideWeight, cam.zoomOverrideValue
-end
-
-local function _readWeaponZoomTerms(cam)
-    return cam.zoomWeaponOverrideWeight, cam.zoomWeaponOverrideValue
-end
-
-local function _callGetActiveWeapon(player)
-    return GameObject.GetActiveWeapon(player)
-end
-
-local function _callFindEntity(id)
-    return Game.FindEntityByID(id)
-end
-
-local function _callSetLocalTransform(component, pos, quat)
-    component:SetLocalPosition(pos)
-    component:SetLocalOrientation(quat)
-end
-
--- The parts the rest of a weapon hangs off: the animated parts with no parent
--- (the Grad's Receiver, which carries barrel, scope and magazine), and the
--- meshes bound straight to the entity root beside them (its muzzle brake).
--- Turning only the Receiver left the muzzle brake behind.
-local function _collectWeaponParts(weapon)
-    local placed = cname("entIPlacedComponent")
-    local animated = cname("entAnimatedComponent")
-    local parts = {}
-    for _, c in ipairs(weapon:GetComponents()) do
-        if c:IsA(placed) then
-            local binding = c.parentTransform
-            if (binding == nil and c:IsA(animated))
-                    or (binding ~= nil and binding.bindName.value == "root") then
-                parts[#parts + 1] = c
-            end
-        end
-    end
-    return parts
 end
 
 --- How much the FPP camera is magnifying the world right now, as the factor the
@@ -1130,90 +1089,12 @@ function Camera:_clampAt(eye, desired, deltaTime)
     return scale
 end
 
---- Put the weapon's parts back where the weapon keeps them. Like the rig, a
---- turn left in them stays through a menu or a holster.
----
---- The weapon is found again by its ID rather than kept: a component handle
---- held across frames outlives the entity when a load destroys it, and
---- releasing it afterwards crashed the game a few seconds into gameplay. A
---- weapon that no longer exists has nothing left to put back.
 function Camera:_releaseWeaponView()
-    self.weapon_view_logged = false
-    if not self.weapon_view_applied then return end
-    self.weapon_view_applied = false
-    local ok, weapon = pcall(_callFindEntity, self.weapon_view_id)
-    if not ok or weapon == nil then return end
-    local origin, identity = Vector4.new(0, 0, 0, 1.0), Quaternion.new(0, 0, 0, 1)
-    for _, c in ipairs(_collectWeaponParts(weapon)) do
-        pcall(_callSetLocalTransform, c, origin, identity)
-    end
+    self.weapon_view:release(getFPPCamera())
 end
 
---- Turn the held weapon so the weapon pass draws its sight line where the world
---- pass draws the aim. See modules/weapon_view.lua. Runs after the camera's
---- orientation and position for the frame are written.
 function Camera:applyWeaponView()
-    local cam, player = getFPPCamera()
-    if not cam then return end
-    local okW, weapon = pcall(_callGetActiveWeapon, player)
-    if not okW or weapon == nil then
-        self:_releaseWeaponView()
-        return
-    end
-    local bone = getCameraBone(player)
-    if bone == nil then
-        self:_releaseWeaponView()
-        return
-    end
-    local id = weapon:GetEntityID()
-    if self.weapon_view_id == nil or id.hash ~= self.weapon_view_id.hash then
-        self:_releaseWeaponView()
-        self.weapon_view_id = id
-    end
-
-    local okZ, zoom, weight, value = pcall(_readZoomTerms, cam)
-    local okG, weapon_weight, weapon_value = pcall(_readWeaponZoomTerms, cam)
-    if not (okZ and okG and isValidNumber(zoom) and isValidNumber(weight) and isValidNumber(value)
-            and isValidNumber(weapon_weight) and isValidNumber(weapon_value)) then
-        self:_releaseWeaponView()
-        return
-    end
-    local world_zoom = WeaponView.magnification(zoom, weight, value)
-    local weapon_zoom = WeaponView.magnification(zoom, weapon_weight, weapon_value)
-    local ratio = weapon_zoom / world_zoom
-    if math.abs(ratio - 1) < 1e-4 then
-        self:_releaseWeaponView()
-        return
-    end
-
-    -- Logged on the first fully scoped frame, not the first turned one: the
-    -- opening frames of an aim blend both zooms from where they sat at the hip.
-    local now = os.clock()
-    if weapon_weight >= 1 and not self.weapon_view_logged
-            and now - self.weapon_view_last_log >= WEAPON_VIEW_LOG_INTERVAL_S then
-        self.weapon_view_logged = true
-        hlog(string.format(
-            "[HeadTracking] weapon view: world zoom=%.4f weapon zoom=%.4f ratio=%.4f parts=%d",
-            world_zoom, weapon_zoom, ratio, #_collectWeaponParts(weapon)))
-        self.weapon_view_last_log = now
-    end
-
-    local cm = cam:GetLocalToWorld()
-    local bm = bone:GetLocalToWorld()
-    local fwd = bm.Y
-    local l = math.sqrt(dot3(fwd, fwd))
-    local aim = { x = fwd.x / l, y = fwd.y / l, z = fwd.z / l }
-    local eye = cm:GetTranslation()
-    local weapon_pos = weapon:GetWorldPosition()
-    local turn = WeaponView.turn(aim, { X = cm.X, Y = cm.Y, Z = cm.Z }, eye, bm.W, weapon_pos, ratio)
-    local pos, quat = WeaponView.toLocal(turn, eye, weapon_pos, weapon:GetWorldOrientation())
-    local pos4 = Vector4.new(pos.x, pos.y, pos.z, 1.0)
-    local quat4 = Quaternion.new(quat.i, quat.j, quat.k, quat.r)
-    local parts = _collectWeaponParts(weapon)
-    for i = 1, #parts do
-        pcall(_callSetLocalTransform, parts[i], pos4, quat4)
-    end
-    self.weapon_view_applied = true
+    self.weapon_view:apply(getFPPCamera())
 end
 
 --- One-shot startup reset: forces cam.localOrientation to identity and

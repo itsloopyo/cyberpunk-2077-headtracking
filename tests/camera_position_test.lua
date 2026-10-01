@@ -64,10 +64,7 @@ local function bare_camera(overrides)
     cam.lean_was_contact = false
     cam.lean_was_failed = false
     cam.lean_last_log = 0
-    cam.weapon_view_id = nil
-    cam.weapon_view_applied = false
-    cam.weapon_view_logged = false
-    cam.weapon_view_last_log = -10
+    cam.weapon_view = require("modules.weapon_view").new()
     cam.is_remote_connection = false
     cam.cached_settings = {
         enabled = true,
@@ -705,166 +702,33 @@ do
 end
 
 -- ------------------------------------------------------------ weapon view
---
--- The arithmetic is modules/weapon_view.lua's, tested there. What is pinned
--- here is the bookkeeping: which parts get the turn, that nothing is written at
--- the hip, and that the parts go back to the weapon's own placement whenever
--- the turn stops applying.
 
-local function part(name, animated, bind)
-    local p = { name = name, writes = {} }
-    p.parentTransform = bind and { bindName = { value = bind } } or nil
-    p.IsA = function(_, class)
-        if class == "entIPlacedComponent" then return true end
-        if class == "entAnimatedComponent" then return animated end
-        return false
-    end
-    p.SetLocalPosition = function(self, v) self.writes[#self.writes + 1] = { pos = v } end
-    p.SetLocalOrientation = function(self, q) self.writes[#self.writes].quat = q end
-    return p
-end
-
-local function weapon(hash)
-    local parts = {
-        receiver = part("Receiver", true, nil),
-        barrel = part("Barrel", true, "Receiver"),
-        muzzle = part("muzzle_brake", false, "root"),
-        projectile = part("Projectile", false, nil),
+do
+    local fpp = {
+        zoom = 1, zoomOverrideWeight = 1, zoomOverrideValue = 1.6997,
+        zoomWeaponOverrideWeight = 1, zoomWeaponOverrideValue = 1.9614,
     }
-    local list = { parts.receiver, parts.barrel, parts.muzzle, parts.projectile }
-    return {
-        parts = parts,
-        GetEntityID = function() return { hash = hash } end,
-        GetComponents = function() return list end,
-        GetWorldPosition = function() return v3(99.8, 200.25, 2.55) end,
-        GetWorldOrientation = function() return { i = 0, j = 0, k = 0.2588, r = 0.9659 } end,
-    }
-end
-
-local function stub_weapon_view(held)
-    local turned_axes = {
-        X = v3(math.cos(0.2), -math.sin(0.2), 0),
-        Y = v3(math.sin(0.2), math.cos(0.2), 0),
-        Z = v3(0, 0, 1),
-    }
-    local cam = {
-        zoom = 1.0, zoomOverrideWeight = 0.0, zoomOverrideValue = 1.0,
-        zoomWeaponOverrideWeight = 0.0, zoomWeaponOverrideValue = 0.1,
-        GetLocalToWorld = function()
-            return { X = turned_axes.X, Y = turned_axes.Y, Z = turned_axes.Z,
-                     GetTranslation = function() return v3(100, 200, 2.7) end }
-        end,
-    }
-    local bone = { GetLocalToWorld = function() return { X = v3(1, 0, 0), Y = v3(0, 1, 0), Z = v3(0, 0, 1), W = v3(100, 200, 2.7) } end }
-    local player = {
-        GetFPPCameraComponent = function() return cam end,
-        FindComponentByName = function(_, name) return assert(({ EnvTriggerActivator = bone })[name]) end,
-    }
-    Vector4 = { new = function(x, y, z, w) return { x = x, y = y, z = z, w = w } end }
-    Quaternion = { new = function(i, j, k, r) return { i = i, j = j, k = k, r = r } end }
-    CName = { new = function(name) return name end }
     Game = {
-        GetPlayer = function() return player end,
+        GetPlayer = function()
+            return { GetFPPCameraComponent = function() return fpp end }
+        end,
         HeadTrackingSetFppOrientation = function() end,
-        FindEntityByID = function(id) return held.alive[id.hash] end,
     }
-    GameObject = { GetActiveWeapon = function() return held.weapon end }
-    return cam
-end
-
-local function scope_up(cam)
-    cam.zoomOverrideWeight, cam.zoomOverrideValue = 1.0, 1.6997
-    cam.zoomWeaponOverrideWeight, cam.zoomWeaponOverrideValue = 1.0, 1.9614
-end
-
-local function last(p) return p.writes[#p.writes] end
-
-local function holding(held, w) held.weapon = w; held.alive[w.GetEntityID().hash] = w end
-
---- True if any value reachable from the camera's own fields is one of the parts.
-local function holds_a_part(cam, w)
-    local parts = {}
-    for _, p in pairs(w.parts) do parts[p] = true end
-    for _, v in pairs(cam) do
-        if parts[v] then return true end
-        if type(v) == "table" then
-            for _, x in pairs(v) do if parts[x] then return true end end
-        end
-    end
-    return false
-end
-local function is_identity(w) return w.pos.x == 0 and w.pos.y == 0 and w.pos.z == 0 and w.quat.r == 1 end
-
-do
-    local held = { alive = {} }
-    holding(held, weapon(1))
-    local fpp = stub_weapon_view(held)
+    GameObject = {
+        GetActiveWeapon = function() error("weapon transforms must remain untouched") end,
+    }
     local cam = bare_camera()
-
     cam:applyWeaponView()
-    for _, p in pairs(held.weapon.parts) do
-        assert_true(#p.writes == 0, "at the hip the weapon's zoom is the world's, so nothing is written: " .. p.name)
-    end
-
-    scope_up(fpp)
-    cam:applyWeaponView()
-    local parts = held.weapon.parts
-    assert_true(#parts.receiver.writes == 1 and not is_identity(last(parts.receiver)),
-        "scoped with the head turned, the parentless animated part is turned")
-    assert_true(#parts.muzzle.writes == 1, "and so is the mesh bound to the entity root")
-    assert_true(#parts.barrel.writes == 0, "a part bound to another part rides it and is left alone")
-    assert_true(#parts.projectile.writes == 0, "the projectile spawn is not a part and is never moved")
-    assert_true(not holds_a_part(cam, held.weapon),
-        "no component handle is kept between frames, so none outlives its weapon")
-
+    assert_near(fpp.zoomWeaponOverrideValue, fpp.zoomOverrideValue, "scope projection matches world")
     cam:suspend()
-    assert_true(is_identity(last(parts.receiver)) and is_identity(last(parts.muzzle)),
-        "suspend puts the parts back where the weapon keeps them")
-end
-
-do
-    local held = { alive = {} }
-    holding(held, weapon(1))
-    local fpp = stub_weapon_view(held)
-    local cam = bare_camera()
-    scope_up(fpp)
+    assert_near(fpp.zoomWeaponOverrideValue, 1.9614, "suspend restores weapon zoom")
+    fpp.zoomOverrideValue, fpp.zoomWeaponOverrideWeight = 4, 0
     cam:applyWeaponView()
-    local old = held.weapon
-    holding(held, weapon(2))
+    assert_near(fpp.zoomWeaponOverrideValue, 4, "scanner projection matches world")
+    Game.GetPlayer = function() return nil end
     cam:applyWeaponView()
-    assert_true(is_identity(last(old.parts.receiver)), "swapping weapons restores the one put away")
-    assert_true(#held.weapon.parts.receiver.writes == 1, "and turns the one drawn")
-
-    fpp.zoomOverrideWeight, fpp.zoomWeaponOverrideWeight = 0.0, 0.0
-    cam:applyWeaponView()
-    assert_true(is_identity(last(held.weapon.parts.receiver)), "lowering the sights restores the weapon")
-    local n = #held.weapon.parts.receiver.writes
-    cam:applyWeaponView()
-    assert_true(#held.weapon.parts.receiver.writes == n, "and it is written once, not every frame at the hip")
-
-    held.weapon = nil
-    scope_up(fpp)
-    cam:applyWeaponView()
-    assert_true(not cam.weapon_view_applied, "with nothing in hand there is nothing to turn")
-end
-
-do
-    -- A load destroys the weapon while it holds a turn. Nothing of it may be
-    -- touched afterwards.
-    local held = { alive = {} }
-    holding(held, weapon(3))
-    local fpp = stub_weapon_view(held)
-    local cam = bare_camera()
-    scope_up(fpp)
-    cam:applyWeaponView()
-    local gone = held.weapon
-    local n = #gone.parts.receiver.writes
-    held.alive[3] = nil
-    holding(held, weapon(4))
-    cam:applyWeaponView()
-    assert_true(#gone.parts.receiver.writes == n, "a destroyed weapon's parts are never written")
     cam:suspend()
-    assert_true(#gone.parts.receiver.writes == n, "not even on suspend")
+    assert_true(cam.weapon_view.weight == nil, "loading discards saved zoom")
 end
 
 print("== Camera smoothing OK ==")
