@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.2] - 2026-10-01
+
+### Fixed
+
+- keep weapons attached to hands during aiming and scanning
+
 ## [1.4.1] - 2026-09-30
 
 ### Fixed
