@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- The deploy and uninstall scripts now reach every installed copy of the game
+  on the machine (Steam, GOG, Epic) and report what they did to each, instead
+  of the first copy detection returned.
+- The build profile log line reads `gog-steam-win64-20250827`: the Steam 2.31
+  executable is identical to the GOG one, so the same profile covers both.
+
 ## [1.4.2] - 2026-10-01
 
 ### Fixed

@@ -14,7 +14,8 @@
     a rederive after a game patch.
 
 .PARAMETER GamePath
-    Game install root. Auto-detected when omitted.
+    Game install root. When omitted, every installed copy on this machine is
+    fingerprinted in turn.
 
 .PARAMETER ExePath
     Path straight to a Cyberpunk2077.exe, bypassing game-path detection.
@@ -52,14 +53,21 @@ if (-not $ExePath) {
             exit 1
         }
         Import-Module $gpdPath -Force
-        $GamePath = Find-GamePath -GameId 'cyberpunk-2077'
-        if (-not $GamePath) {
+        # Every installed copy: the stores can ship different EXEs for one game
+        # version, and a fingerprint read off one copy says nothing about another.
+        $exePaths = @(Find-AllGamePaths -GameId 'cyberpunk-2077' | ForEach-Object { Join-Path $_ 'bin\x64\Cyberpunk2077.exe' })
+        if ($exePaths.Count -eq 0) {
             Write-Fail "Cyberpunk 2077 not found - pass -GamePath or -ExePath explicitly."
             exit 1
         }
+    } else {
+        $exePaths = @(Join-Path $GamePath 'bin\x64\Cyberpunk2077.exe')
     }
-    $ExePath = Join-Path $GamePath 'bin\x64\Cyberpunk2077.exe'
+} else {
+    $exePaths = @($ExePath)
 }
+
+foreach ($ExePath in $exePaths) {
 
 if (-not (Test-Path -LiteralPath $ExePath)) {
     Write-Fail "No EXE at: $ExePath"
@@ -154,5 +162,7 @@ Write-Host "Replace 'store' with steam/gog/epic, fill in the RVAs, and add the p
 Write-Host "to the TOP of kKnownProfiles in native/src/builds/build_registry.cpp." -ForegroundColor DarkGray
 Write-Host "Never edit an existing profile's numbers - patches get a NEW profile." -ForegroundColor DarkGray
 Write-Host ""
+
+}
 
 exit 0

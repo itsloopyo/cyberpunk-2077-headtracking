@@ -6,7 +6,8 @@
     Removes the HeadTracking payload and preserves user configuration in place.
 
 .PARAMETER GamePath
-    Optional custom path to Cyberpunk 2077 installation.
+    Optional custom path to one Cyberpunk 2077 installation. Without it, the
+    mod is removed from every installed copy on this machine.
 
 .PARAMETER KeepConfig
     Accepted for compatibility. User configuration is always preserved.
@@ -51,12 +52,14 @@ if (Test-Path -LiteralPath $gamePathDetectionModule) {
     $haveGamePathDetection = $true
 }
 
-function Find-GameInstallation {
+# Every installed copy, matching deploy.ps1. A caller-supplied path stays a
+# single target, because the launcher passes one and means it.
+function Find-GameInstallations {
     param([string]$CustomPath)
 
     if ($CustomPath) {
         $exePath = Join-Path $CustomPath 'bin\x64\Cyberpunk2077.exe'
-        if ((Test-Path $CustomPath) -and (Test-Path $exePath)) { return $CustomPath }
+        if ((Test-Path $CustomPath) -and (Test-Path $exePath)) { return @($CustomPath) }
         Write-Fail "Provided -GamePath does not contain Cyberpunk 2077: $CustomPath"
         exit 1
     }
@@ -66,9 +69,7 @@ function Find-GameInstallation {
         exit 1
     }
 
-    $found = Find-GamePath -GameId 'cyberpunk-2077'
-    if ($found) { return $found }
-    return $null
+    return @(Find-AllGamePaths -GameId 'cyberpunk-2077')
 }
 
 Write-Host ""
@@ -76,43 +77,6 @@ Write-Host "========================================" -ForegroundColor Yellow
 Write-Host "  HeadTracking Mod Uninstall Script" -ForegroundColor Yellow
 Write-Host "========================================" -ForegroundColor Yellow
 Write-Host ""
-
-$gameDir = Find-GameInstallation -CustomPath $GamePath
-if (-not $gameDir) {
-    Write-Fail "Cyberpunk 2077 installation not found!"
-    Write-Host "Specify a path: .\uninstall.ps1 -GamePath ""D:\Your\Game\Path""" -ForegroundColor Yellow
-    exit 1
-}
-Write-Info "Found Cyberpunk 2077 at: $gameDir"
-
-$modDir = Join-Path $gameDir "bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking"
-$dllPath = Join-Path $gameDir "red4ext\plugins\HeadTrackingAim.dll"
-
-$removedSomething = $false
-
-if (Test-Path $modDir) {
-    $resolvedModDir = [IO.Path]::GetFullPath($modDir)
-    $resolvedGameDir = [IO.Path]::GetFullPath($gameDir).TrimEnd('\') + '\'
-    if (-not $resolvedModDir.StartsWith($resolvedGameDir, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Mod folder is outside the game directory: $resolvedModDir"
-    }
-    foreach ($name in @('init.lua', 'modules', 'LICENSE', 'THIRD-PARTY-NOTICES.md')) {
-        $payload = Join-Path $resolvedModDir $name
-        if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurse -Force }
-    }
-    Write-Info "Removed CET payload; user configuration remains in $modDir"
-    $removedSomething = $true
-} else {
-    Write-Info "CET mod folder not present (already removed?)"
-}
-
-if (Test-Path $dllPath) {
-    Remove-Item -Path $dllPath -Force
-    Write-Info "Removed native plugin: $dllPath"
-    $removedSomething = $true
-} else {
-    Write-Info "Native plugin not present (already removed or never installed)"
-}
 
 # Take our hotkeys back out of CET's shared bindings.json. Leaving a
 # HeadTracking section behind keeps three keys claimed in CET's binding UI for a
@@ -157,12 +121,64 @@ function Remove-CetBindings {
     }
 }
 
-Remove-CetBindings -GameDir $gameDir
+# One copy. True when a payload file was removed from it.
+function Uninstall-FromGame {
+    param([string]$GameDir)
+
+    Write-Host ""
+    Write-Host "--- $gameDir" -ForegroundColor Cyan
+
+    $modDir = Join-Path $gameDir "bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking"
+    $dllPath = Join-Path $gameDir "red4ext\plugins\HeadTrackingAim.dll"
+
+    $removedSomething = $false
+
+    if (Test-Path $modDir) {
+        $resolvedModDir = [IO.Path]::GetFullPath($modDir)
+        $resolvedGameDir = [IO.Path]::GetFullPath($gameDir).TrimEnd('\') + '\'
+        if (-not $resolvedModDir.StartsWith($resolvedGameDir, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Mod folder is outside the game directory: $resolvedModDir"
+        }
+        foreach ($name in @('init.lua', 'modules', 'LICENSE', 'THIRD-PARTY-NOTICES.md')) {
+            $payload = Join-Path $resolvedModDir $name
+            if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurse -Force }
+        }
+        Write-Info "Removed CET payload; user configuration remains in $modDir"
+        $removedSomething = $true
+    } else {
+        Write-Info "CET mod folder not present (already removed?)"
+    }
+
+    if (Test-Path $dllPath) {
+        Remove-Item -Path $dllPath -Force
+        Write-Info "Removed native plugin: $dllPath"
+        $removedSomething = $true
+    } else {
+        Write-Info "Native plugin not present (already removed or never installed)"
+    }
+
+    Remove-CetBindings -GameDir $gameDir
+    return $removedSomething
+}
+
+$gameDirs = @(Find-GameInstallations -CustomPath $GamePath)
+if ($gameDirs.Count -eq 0) {
+    Write-Fail "Cyberpunk 2077 installation not found!"
+    Write-Host "Specify a path: .\uninstall.ps1 -GamePath ""D:\Your\Game\Path""" -ForegroundColor Yellow
+    exit 1
+}
+Write-Info "Found $($gameDirs.Count) Cyberpunk 2077 installation(s):"
+$gameDirs | ForEach-Object { Write-Host "  $_" -ForegroundColor Cyan }
+
+$removedFrom = @()
+foreach ($dir in $gameDirs) {
+    if (Uninstall-FromGame -gameDir $dir) { $removedFrom += $dir }
+}
 
 Write-Host ""
-if ($removedSomething) {
-    Write-Success "HeadTracking uninstalled successfully."
+if ($removedFrom.Count -gt 0) {
+    Write-Success "HeadTracking uninstalled from $($removedFrom.Count) of $($gameDirs.Count) installation(s)."
 } else {
-    Write-Info "Nothing to uninstall - mod was not installed."
+    Write-Info "Nothing to uninstall - mod was not installed in any copy."
 }
 exit 0

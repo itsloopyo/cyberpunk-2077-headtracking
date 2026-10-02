@@ -4,11 +4,12 @@
 
 .DESCRIPTION
     Validates game and CET installation, then copies mod files to the correct location.
-    Supports multiple common game installation paths.
+    Without -GamePath, every installed copy of the game on this machine (Steam,
+    GOG, Epic) is deployed to, and the outcome is reported per copy.
 
 .PARAMETER GamePath
-    Optional custom path to Cyberpunk 2077 installation.
-    If not provided, searches common installation locations.
+    Optional custom path to one Cyberpunk 2077 installation. When given, that
+    copy is the only target.
 
 .EXAMPLE
     .\deploy.ps1
@@ -63,21 +64,24 @@ if (-not $gpdPath) {
 }
 Import-Module $gpdPath -Force
 
-function Find-GameInstallation {
+# Every installed copy, not the first one detection returns. Owning the game on
+# two stores is ordinary, and a deploy that writes to one copy while the other
+# gets launched presents as a fix that did not work. A caller-supplied path wins
+# outright and stays a single target, because the launcher passes one and means
+# it.
+function Find-GameInstallations {
     param(
         [string]$CustomPath
     )
 
     if ($CustomPath) {
         $exePath = Join-Path $CustomPath 'bin\x64\Cyberpunk2077.exe'
-        if ((Test-Path $CustomPath) -and (Test-Path $exePath)) { return $CustomPath }
+        if ((Test-Path $CustomPath) -and (Test-Path $exePath)) { return @($CustomPath) }
         Write-Fail "Provided -GamePath does not contain Cyberpunk 2077: $CustomPath"
         exit 1
     }
 
-    $found = Find-GamePath -GameId 'cyberpunk-2077'
-    if ($found) { return $found }
-    return $null
+    return @(Find-AllGamePaths -GameId 'cyberpunk-2077')
 }
 
 function Validate-CETInstallation {
@@ -350,9 +354,9 @@ if ($missingFiles.Count -gt 0) {
 }
 Write-Info "All mod files present"
 
-# Find game installation
-$gameDir = Find-GameInstallation -CustomPath $GamePath
-if (-not $gameDir) {
+# Find game installations
+$gameDirs = @(Find-GameInstallations -CustomPath $GamePath)
+if ($gameDirs.Count -eq 0) {
     Write-Fail "Cyberpunk 2077 installation not found!"
     Write-Host ""
     Write-Host "Detection order: CYBERPUNK_2077_PATH env var -> Steam appmanifest 1091500 ->" -ForegroundColor Yellow
@@ -362,66 +366,85 @@ if (-not $gameDir) {
     Write-Host "  .\deploy.ps1 -GamePath ""D:\Your\Game\Path""" -ForegroundColor Cyan
     exit 1
 }
-Write-Info "Found Cyberpunk 2077 at: $gameDir"
+Write-Info "Found $($gameDirs.Count) Cyberpunk 2077 installation(s):"
+$gameDirs | ForEach-Object { Write-Host "  $_" -ForegroundColor Cyan }
 
-# Auto-install the bundled CET loader if the user doesn't already have one.
-Install-VendoredLoader -SourceDir $sourceDir -GameDir $gameDir -Slug 'cet' `
-    -DetectRelPath 'bin\x64\plugins\cyber_engine_tweaks.asi' -DisplayName 'Cyber Engine Tweaks' | Out-Null
+# One copy. Returns a status string for the summary; a hard failure exits the
+# script, since the remaining copies would fail the same way.
+function Deploy-ToGame {
+    param([string]$GameDir)
 
-# TweakXL applies the projectile restoration. Automatic fire cannot decouple
-# without it, so it is a hard requirement rather than an optional extra.
-Install-VendoredLoader -SourceDir $sourceDir -GameDir $gameDir -Slug 'tweakxl' `
-    -DetectRelPath 'red4ext\plugins\TweakXL\TweakXL.dll' -DisplayName 'TweakXL' | Out-Null
+    Write-Host ""
+    Write-Host "--- $GameDir" -ForegroundColor Cyan
 
-# Validate CET installation
-$cetDir = Validate-CETInstallation -GameDir $gameDir
-if (-not $cetDir) {
-    Write-Fail "Cyber Engine Tweaks (CET) not found!"
+    # Auto-install the bundled CET loader if the user doesn't already have one.
+    Install-VendoredLoader -SourceDir $sourceDir -GameDir $GameDir -Slug 'cet' `
+        -DetectRelPath 'bin\x64\plugins\cyber_engine_tweaks.asi' -DisplayName 'Cyber Engine Tweaks' | Out-Null
+
+    # TweakXL applies the projectile restoration. Automatic fire cannot decouple
+    # without it, so it is a hard requirement rather than an optional extra.
+    Install-VendoredLoader -SourceDir $sourceDir -GameDir $GameDir -Slug 'tweakxl' `
+        -DetectRelPath 'red4ext\plugins\TweakXL\TweakXL.dll' -DisplayName 'TweakXL' | Out-Null
+
+    # Validate CET installation
+    $cetDir = Validate-CETInstallation -GameDir $GameDir
+    if (-not $cetDir) {
+        Write-Fail "Cyber Engine Tweaks (CET) not found!"
+        Write-Host ""
+        Write-Host "CET is required for this mod to work. Installation steps:" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  1. Download the latest release from:" -ForegroundColor White
+        Write-Host "     https://github.com/maximegmd/CyberEngineTweaks/releases" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  2. Extract the zip contents to your game folder:" -ForegroundColor White
+        Write-Host "     $GameDir" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  3. Verify installation - you should have:" -ForegroundColor White
+        Write-Host "     $GameDir\bin\x64\plugins\cyber_engine_tweaks\" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  4. Launch the game and press ~ or Home to verify CET console opens" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  5. Re-run this deploy script" -ForegroundColor White
+        Write-Host ""
+        Write-Host "Alternative: Install via Vortex from https://www.nexusmods.com/cyberpunk2077/mods/107" -ForegroundColor DarkGray
+        exit 1
+    }
+    Write-Info "Found CET at: $cetDir"
+
+    # Deploy CET mod
+    $modDir = Join-Path $cetDir "mods\HeadTracking"
+    Write-Info "Deploying CET mod to: $modDir"
+
+    $result = Deploy-Mod -SourceDir $sourceDir -TargetDir $modDir
+    if (-not $result) {
+        Write-Fail "Deployment failed!"
+        exit 1
+    }
+
+    # Auto-install the bundled RED4ext loader so the native aim plugin loads.
+    Install-VendoredLoader -SourceDir $sourceDir -GameDir $GameDir -Slug 'red4ext' `
+        -DetectRelPath 'red4ext\RED4ext.dll' -DisplayName 'RED4ext' | Out-Null
+
+    # Deploy native RED4ext plugin (optional - for aim compensation)
     Write-Host ""
-    Write-Host "CET is required for this mod to work. Installation steps:" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "  1. Download the latest release from:" -ForegroundColor White
-    Write-Host "     https://github.com/maximegmd/CyberEngineTweaks/releases" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  2. Extract the zip contents to your game folder:" -ForegroundColor White
-    Write-Host "     $gameDir" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  3. Verify installation - you should have:" -ForegroundColor White
-    Write-Host "     $gameDir\bin\x64\plugins\cyber_engine_tweaks\" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  4. Launch the game and press ~ or Home to verify CET console opens" -ForegroundColor White
-    Write-Host ""
-    Write-Host "  5. Re-run this deploy script" -ForegroundColor White
-    Write-Host ""
-    Write-Host "Alternative: Install via Vortex from https://www.nexusmods.com/cyberpunk2077/mods/107" -ForegroundColor DarkGray
-    exit 1
+    Write-Info "Checking for native aim compensation plugin..."
+    $nativeDeployed = Deploy-NativePlugin -SourceDir $sourceDir -GameDir $GameDir
+    Deploy-Tweaks -SourceDir $sourceDir -GameDir $GameDir | Out-Null
+
+    if ($nativeDeployed) { return "CET mod + native plugin + tweaks" }
+    return "CET mod + tweaks (native plugin not built)"
 }
-Write-Info "Found CET at: $cetDir"
 
-# Deploy CET mod
-$modDir = Join-Path $cetDir "mods\HeadTracking"
-Write-Info "Deploying CET mod to: $modDir"
-
-$result = Deploy-Mod -SourceDir $sourceDir -TargetDir $modDir
-if (-not $result) {
-    Write-Fail "Deployment failed!"
-    exit 1
+$outcomes = @{}
+foreach ($dir in $gameDirs) {
+    $outcomes[$dir] = Deploy-ToGame -GameDir $dir
 }
 
-# Auto-install the bundled RED4ext loader so the native aim plugin loads.
-Install-VendoredLoader -SourceDir $sourceDir -GameDir $gameDir -Slug 'red4ext' `
-    -DetectRelPath 'red4ext\RED4ext.dll' -DisplayName 'RED4ext' | Out-Null
-
-# Deploy native RED4ext plugin (optional - for aim compensation)
 Write-Host ""
-Write-Info "Checking for native aim compensation plugin..."
-$nativeDeployed = Deploy-NativePlugin -SourceDir $sourceDir -GameDir $gameDir
-Deploy-Tweaks -SourceDir $sourceDir -GameDir $gameDir | Out-Null
-
-Write-Host ""
-Write-Success "Mod deployed successfully!"
-if ($nativeDeployed) {
-    Write-Success "Native aim compensation plugin deployed (requires RE hook address)"
+Write-Success "Mod deployed to $($gameDirs.Count) installation(s):"
+foreach ($dir in $gameDirs) {
+    Write-Host "  $dir" -ForegroundColor Green
+    Write-Host "    $($outcomes[$dir])" -ForegroundColor DarkGray
 }
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Yellow
