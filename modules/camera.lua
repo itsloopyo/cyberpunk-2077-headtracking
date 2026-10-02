@@ -95,6 +95,9 @@ end
 local function _callSetLocalPosition(cam, v)
     cam:SetLocalPosition(v)
 end
+local function _callGetActiveWeapon(player)
+    return GameObject.GetActiveWeapon(player)
+end
 
 -- Hand the native plugin the orientation we just put in the camera so it can
 -- re-stamp the same value from its own per-frame tick, undoing anything that
@@ -335,14 +338,23 @@ function Camera.new(settings)
     -- What the rig root holds right now, in the root's own frame. The clean eye
     -- is the camera bone less this, because the bone rides the root.
     self.rig_written = { x = 0, y = 0, z = 0 }
+    -- The weapon turn the rig holds (modules/weapon_view.lua), in the camera
+    -- bone's frame, and whether the rig's orientation is ours right now.
+    self.view_turn = nil
+    self.rig_turned = false
+    -- How far the bone's origin sits from the clean eye, in the rig's own axes:
+    -- the lean alone until the rig is turned.
+    self.rig_shift = { x = 0, y = 0, z = 0 }
+    -- The opposite turn, held by the camera so the view stays where it was.
+    self.view_counter = nil
+    self.view_logged = false
+    self.view_last_log = -WEAPON_VIEW_LOG_INTERVAL_S
 
     self.lean_clamp = LeanClamp.new(LEAN_SKIN, LEAN_RELEASE_SMOOTHING)
     self.lean_last_eye = nil
     self.lean_was_contact = false
     self.lean_was_failed = false
     self.lean_last_log = 0
-
-    self.weapon_view = WeaponView.new()
 
     -- Initialize cache from settings
     self:refreshSettingsCache()
@@ -543,6 +555,29 @@ local leanQuery = LeanLineSweep.query(leanCast, LEAN_SKIN)
 
 local function _readZoomTerms(cam)
     return cam.zoom, cam.zoomOverrideWeight, cam.zoomOverrideValue
+end
+local function _readWeaponZoomTerms(cam)
+    return cam.zoomWeaponOverrideWeight, cam.zoomWeaponOverrideValue
+end
+
+-- A weapon origin closer along the aim than this has no direction to turn.
+local WEAPON_VIEW_MIN_DEPTH = 0.01
+
+--- Weapon magnification over world magnification, or nil where the two match
+--- and the weapon needs no turn.
+local function weaponZoomRatio(cam)
+    local okZ, zoom, weight, value = pcall(_readZoomTerms, cam)
+    local okW, weapon_weight, weapon_value = pcall(_readWeaponZoomTerms, cam)
+    if not (okZ and okW and isValidNumber(zoom) and isValidNumber(weight) and isValidNumber(value)
+            and isValidNumber(weapon_weight) and isValidNumber(weapon_value)) then
+        return nil
+    end
+    local world = WeaponView.worldMagnification(zoom, weight, value)
+    local weapon = WeaponView.weaponMagnification(weapon_weight, weapon_value)
+    if world <= 0 or weapon <= 0 then return nil end
+    local ratio = weapon / world
+    if math.abs(ratio - 1) < 1e-4 then return nil end
+    return ratio, world, weapon, weapon_weight
 end
 
 --- How much the FPP camera is magnifying the world right now, as the factor the
@@ -828,21 +863,23 @@ function Camera:apply(yaw, pitch, roll, deltaTime)
     -- intermittent "points the wrong way". One signal drives every peel below
     -- (local and world): world = parent * local, so an overwrite of local is an
     -- overwrite of world too.
-    local engine_kept_our_write = self.last_head_quat and self._last_written_final_quat
+    local kept = self._last_written_final_quat
         and quatDelta(current_quat, self._last_written_final_quat) <= PEEL_DIVERGENCE_THRESHOLD
+    local engine_kept_our_write = self.last_head_quat and kept
 
-    local clean_quat
-    if self._skip_head_peel_once then
-        clean_quat = engine_kept_our_write
-            and quatNormalize(quatMul(current_quat, quaternionInverse(self.last_head_quat)))
-            or current_quat
-        self._skip_head_peel_once = false
-    elseif self.last_head_quat then
-        clean_quat = engine_kept_our_write
-            and quatNormalize(quatMul(current_quat, quaternionInverse(self.last_head_quat)))
-            or current_quat
-    else
-        clean_quat = current_quat
+    -- What was written is counter * clean * head: the head on the right, and on
+    -- the left the weapon view's counter-turn, which position-only tracking
+    -- writes with no head beside it.
+    local clean_quat = current_quat
+    local counter = self.view_counter
+    if kept and (self.last_head_quat or counter) then
+        if self.last_head_quat then
+            clean_quat = quatMul(clean_quat, quaternionInverse(self.last_head_quat))
+        end
+        if counter then
+            clean_quat = quatMul(Quaternion.new(-counter.i, -counter.j, -counter.k, counter.r), clean_quat)
+        end
+        clean_quat = quatNormalize(clean_quat)
     end
 
     -- Step 5: Build the head rotation quaternion.
@@ -1011,6 +1048,7 @@ function Camera:apply(yaw, pitch, roll, deltaTime)
         self._applied_head_pitch = self.smooth_pitch
         self.last_clean_local_quat = clean_quat
         self._last_written_final_quat = { i = fi, j = fj, k = fk, r = fr }
+        self.view_counter = nil
     end
 
 
@@ -1044,16 +1082,31 @@ end
 function Camera:_releaseRig(player)
     if not self.rig_applied then return end
     local rig = getRig(player)
-    if rig then pcall(_callSetLocalPosition, rig, Vector4.new(0, 0, 0, 1.0)) end
+    if rig then
+        pcall(_callSetLocalPosition, rig, Vector4.new(0, 0, 0, 1.0))
+        if self.rig_turned then
+            pcall(_callSetLocalOrientation, rig, Quaternion.new(0, 0, 0, 1))
+        end
+    end
     self.rig_written.x, self.rig_written.y, self.rig_written.z = 0, 0, 0
+    self.rig_shift.x, self.rig_shift.y, self.rig_shift.z = 0, 0, 0
+    self.rig_turned = false
+    self.view_turn = nil
     self.rig_applied = false
 end
 
 --- Cut a lean (x, y, z, in the camera bone's frame) down to what the level
 --- leaves room for, measured from the clean eye. Returns the scale to apply.
 function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime)
-    local rig_world = axesToWorld(rig_m, self.rig_written.x, self.rig_written.y, self.rig_written.z)
+    local rig_world = axesToWorld(rig_m, self.rig_shift.x, self.rig_shift.y, self.rig_shift.z)
     local eye = { x = bone_m.W.x - rig_world.x, y = bone_m.W.y - rig_world.y, z = bone_m.W.z - rig_world.z }
+    -- The bone's axes carry the weapon turn the rig took last frame; the lean
+    -- is measured in the bone's frame without it.
+    local turn = self.view_turn
+    if turn then
+        local d = WeaponView.qrot(WeaponView.qconj(turn), { x = x, y = y, z = z })
+        x, y, z = d.x, d.y, d.z
+    end
     return self:_clampAt(eye, axesToWorld(bone_m, x, y, z), deltaTime)
 end
 
@@ -1089,12 +1142,132 @@ function Camera:_clampAt(eye, desired, deltaTime)
     return scale
 end
 
-function Camera:_releaseWeaponView()
-    self.weapon_view:release(getFPPCamera())
+--- The camera's local orientation as a plain quaternion with the counter-turn
+--- taken back out, or nil where it cannot be read.
+function Camera:_viewBase(cam)
+    local counter, last = self.view_counter, self._last_written_final_quat
+    if not counter and last then
+        -- apply() wrote the camera after the last counter-turn, and this is it.
+        return { i = last.i, j = last.j, k = last.k, r = last.r }
+    end
+    local ok, got = pcall(_callGetLocalOrientation, cam)
+    if not ok or not got or not (isValidNumber(got.i) and isValidNumber(got.j)
+            and isValidNumber(got.k) and isValidNumber(got.r)) then
+        return nil
+    end
+    local q = quatNormalize(got)
+    local base = { i = q.i, j = q.j, k = q.k, r = q.r }
+    if counter and last and quatDelta(base, last) <= PEEL_DIVERGENCE_THRESHOLD then
+        base = WeaponView.qmul(WeaponView.qconj(counter), base)
+    end
+    return base
 end
 
-function Camera:applyWeaponView()
-    self.weapon_view:apply(getFPPCamera())
+--- Take the weapon turn back out of the rig and the camera.
+function Camera:_stopWeaponView(cam, player, base)
+    self.view_logged = false
+    if self.view_counter then
+        -- Still set, so apply() has not rewritten the camera this frame.
+        if base then
+            pcall(_callSetLocalOrientation, cam, Quaternion.new(base.i, base.j, base.k, base.r))
+        end
+        publishFppOrientation(nil, false)
+        self.view_counter = nil
+        self._last_written_final_quat = nil
+    end
+    if self.rig_turned then
+        local rig = getRig(player)
+        local lean = self.rig_written
+        if rig then
+            pcall(_callSetLocalOrientation, rig, Quaternion.new(0, 0, 0, 1))
+            pcall(_callSetLocalPosition, rig, Vector4.new(lean.x, lean.y, lean.z, 1.0))
+        end
+        self.rig_shift.x, self.rig_shift.y, self.rig_shift.z = lean.x, lean.y, lean.z
+        self.rig_turned = false
+        self.view_turn = nil
+    end
+end
+
+--- Turn the rig so the weapon pass draws the sight line where the world pass
+--- draws the aim, and turn the camera back by as much so the view stays put.
+--- See modules/weapon_view.lua. Runs after the camera's orientation and the
+--- lean are written. Mounted in a vehicle the rig stays where the seat puts it.
+--- @param mounted boolean
+function Camera:applyWeaponView(mounted)
+    local cam, player = getFPPCamera()
+    if not cam then
+        -- A load rebuilds the player, and with it everything this wrote.
+        self.view_counter, self.view_turn, self.rig_turned = nil, nil, false
+        self.rig_shift.x, self.rig_shift.y, self.rig_shift.z = 0, 0, 0
+        return
+    end
+    local base = self:_viewBase(cam)
+    local ratio, world_zoom, weapon_zoom, weapon_weight
+    if base and not mounted then
+        ratio, world_zoom, weapon_zoom, weapon_weight = weaponZoomRatio(cam)
+    end
+    local rig, bone, weapon
+    if ratio then
+        rig, bone = getRig(player), getCameraBone(player)
+        local ok, held = pcall(_callGetActiveWeapon, player)
+        weapon = ok and held or nil
+    end
+    if not (rig and bone and weapon) then
+        self:_stopWeaponView(cam, player, base)
+        return
+    end
+
+    local rig_m, bone_m = rig:GetLocalToWorld(), bone:GetLocalToWorld()
+    local at = weapon:GetWorldPosition()
+    local rel = { x = at.x - bone_m.W.x, y = at.y - bone_m.W.y, z = at.z - bone_m.W.z }
+    local weapon_pos = { x = dot3(rel, bone_m.X), y = dot3(rel, bone_m.Y), z = dot3(rel, bone_m.Z) }
+    local eye = self.pos_local
+    if weapon_pos.y - eye.y < WEAPON_VIEW_MIN_DEPTH then
+        self:_stopWeaponView(cam, player, base)
+        return
+    end
+    local off = { x = bone_m.W.x - rig_m.W.x, y = bone_m.W.y - rig_m.W.y, z = bone_m.W.z - rig_m.W.z }
+    local bone_origin = { x = dot3(off, rig_m.X), y = dot3(off, rig_m.Y), z = dot3(off, rig_m.Z) }
+    local function toRoot(v)
+        local w = axesToWorld(bone_m, v.x, v.y, v.z)
+        return { x = dot3(w, rig_m.X), y = dot3(w, rig_m.Y), z = dot3(w, rig_m.Z) }
+    end
+
+    local turn = WeaponView.turn(base, eye, weapon_pos, ratio)
+    local orientation, position, shift = WeaponView.rig(turn, toRoot, bone_origin, eye, self.rig_written)
+    local counter = WeaponView.qconj(turn)
+    local view = quatNormalize(WeaponView.qmul(counter, base))
+    if not (isValidNumber(view.i) and isValidNumber(view.j) and isValidNumber(view.k) and isValidNumber(view.r)
+            and isValidNumber(orientation.i) and isValidNumber(orientation.j)
+            and isValidNumber(orientation.k) and isValidNumber(orientation.r)
+            and isValidNumber(position.x) and isValidNumber(position.y) and isValidNumber(position.z)) then
+        self:_stopWeaponView(cam, player, base)
+        return
+    end
+
+    pcall(_callSetLocalOrientation, rig,
+        Quaternion.new(orientation.i, orientation.j, orientation.k, orientation.r))
+    pcall(_callSetLocalPosition, rig, Vector4.new(position.x, position.y, position.z, 1.0))
+    pcall(_callSetLocalOrientation, cam, view)
+    publishFppOrientation(view, true)
+    self._last_written_final_quat = { i = view.i, j = view.j, k = view.k, r = view.r }
+    self.view_counter = counter
+    self.view_turn = turn
+    self.rig_shift.x, self.rig_shift.y, self.rig_shift.z = shift.x, shift.y, shift.z
+    self.rig_turned = true
+    self.rig_applied = true
+
+    -- Logged on the first fully aimed frame, not the first turned one: the
+    -- opening frames of an aim blend both zooms from where they sat at the hip.
+    local now = os.clock()
+    if weapon_weight >= 1 and not self.view_logged
+            and now - self.view_last_log >= WEAPON_VIEW_LOG_INTERVAL_S then
+        self.view_logged = true
+        self.view_last_log = now
+        hlog(string.format(
+            "[HeadTracking] weapon view: world zoom=%.4f weapon zoom=%.4f ratio=%.4f turn=%.2fdeg",
+            world_zoom, weapon_zoom, ratio, math.deg(2 * math.acos(math.min(1, math.abs(turn.r))))))
+    end
 end
 
 --- One-shot startup reset: forces cam.localOrientation to identity and
@@ -1108,6 +1281,7 @@ function Camera:tryInitialReset()
     pcall(_callSetLocalOrientation, cam, Quaternion.new(0, 0, 0, 1))
     publishFppOrientation(nil, false)
     self.last_head_quat = nil
+    self.view_counter = nil
     self.last_clean_local_quat = nil
     self._computed_head_quat = nil
     self._prev_head_quat = nil
@@ -1187,7 +1361,7 @@ function Camera:suspend()
     -- the peel below just cleaned out.
     publishFppOrientation(nil, false)
 
-    if self.last_head_quat then
+    if self.last_head_quat or self.view_counter then
         if cam then
             local ok, current = pcall(_callGetLocalOrientation, cam)
             local engine_kept_our_write = ok and current
@@ -1196,11 +1370,19 @@ function Camera:suspend()
                 and self._last_written_final_quat
                 and quatDelta(current, self._last_written_final_quat) <= PEEL_DIVERGENCE_THRESHOLD
             if engine_kept_our_write then
-                local clean = quatNormalize(quatMul(current, quaternionInverse(self.last_head_quat)))
-                pcall(_callSetLocalOrientation, cam, clean)
+                local clean = current
+                if self.last_head_quat then
+                    clean = quatMul(clean, quaternionInverse(self.last_head_quat))
+                end
+                local counter = self.view_counter
+                if counter then
+                    clean = quatMul(Quaternion.new(-counter.i, -counter.j, -counter.k, counter.r), clean)
+                end
+                pcall(_callSetLocalOrientation, cam, quatNormalize(clean))
             end
         end
         self.last_head_quat = nil
+        self.view_counter = nil
         self._last_written_final_quat = nil
     end
     -- getHeadQuat() is what the native aim hooks peel off every shot. With the
@@ -1222,7 +1404,7 @@ function Camera:suspend()
         local player = Game.GetPlayer()
         if player then self:_releaseRig(player) end
     end
-    self:_releaseWeaponView()
+    self.view_logged = false
     -- Outside the pos_applied branch: that flag is only ever set by
     -- applyPosition, so gating the state reset on it left the chase-camera path
     -- resuming from a stale smoothed offset.
@@ -1445,6 +1627,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
         local ox, oy, oz = dot3(d, rig_m.X), dot3(d, rig_m.Y), dot3(d, rig_m.Z)
         pcall(_callSetLocalPosition, rig, Vector4.new(ox, oy, oz, 1.0))
         self.rig_written.x, self.rig_written.y, self.rig_written.z = ox, oy, oz
+        self.rig_shift.x, self.rig_shift.y, self.rig_shift.z = ox, oy, oz
         self.rig_applied = true
     else
         self:_releaseRig(player)

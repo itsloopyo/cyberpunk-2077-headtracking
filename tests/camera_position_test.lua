@@ -64,7 +64,12 @@ local function bare_camera(overrides)
     cam.lean_was_contact = false
     cam.lean_was_failed = false
     cam.lean_last_log = 0
-    cam.weapon_view = require("modules.weapon_view").new()
+    cam.view_turn = nil
+    cam.rig_turned = false
+    cam.rig_shift = { x = 0, y = 0, z = 0 }
+    cam.view_counter = nil
+    cam.view_logged = false
+    cam.view_last_log = -10
     cam.is_remote_connection = false
     cam.cached_settings = {
         enabled = true,
@@ -704,31 +709,97 @@ end
 -- ------------------------------------------------------------ weapon view
 
 do
+    -- Aiming with the head turned, on a weapon the game draws at a different
+    -- zoom from the world. The rig takes a turn and the camera the opposite
+    -- one; the zooms are the game's and stay as it set them.
+    stub_cet()
     local fpp = {
-        zoom = 1, zoomOverrideWeight = 1, zoomOverrideValue = 1.6997,
-        zoomWeaponOverrideWeight = 1, zoomWeaponOverrideValue = 1.9614,
+        zoom = 1, zoomOverrideWeight = 1, zoomOverrideValue = 1.4996,
+        zoomWeaponOverrideWeight = 1, zoomWeaponOverrideValue = 1.0,
+        orientation = { i = 0, j = 0, k = 0, r = 1 },
+        SetLocalPosition = function() end,
     }
-    Game = {
-        GetPlayer = function()
-            return { GetFPPCameraComponent = function() return fpp end }
+    function fpp:GetLocalOrientation() return self.orientation end
+    function fpp:SetLocalOrientation(q) self.orientation = { i = q.i, j = q.j, k = q.k, r = q.r } end
+    local rig = {
+        orientation = nil, position = nil,
+        GetLocalToWorld = function() return ROOT_AXES end,
+    }
+    function rig:SetLocalOrientation(q) self.orientation = q end
+    function rig:SetLocalPosition(v) self.position = v end
+    local bone = { GetLocalToWorld = function() return BONE_AXES end }
+    local by_name = { root = rig, EnvTriggerActivator = bone }
+    local player = {
+        GetFPPCameraComponent = function() return fpp end,
+        FindComponentByName = function(_, name) return by_name[name] end,
+    }
+    Game.GetPlayer = function() return player end
+    Quaternion = { new = function(i, j, k, r) return { i = i, j = j, k = k, r = r } end }
+    local ahead = to_world(BONE_AXES, v3(0.03, 0.35, -0.08))
+    local weapon = {
+        GetWorldPosition = function()
+            return v3(BONE_AXES.W.x + ahead.x, BONE_AXES.W.y + ahead.y, BONE_AXES.W.z + ahead.z)
         end,
-        HeadTrackingSetFppOrientation = function() end,
     }
-    GameObject = {
-        GetActiveWeapon = function() error("weapon transforms must remain untouched") end,
-    }
+    GameObject = { GetActiveWeapon = function() return weapon end }
+
+    -- What apply() leaves behind: the head on the camera, 12 degrees of yaw.
+    local h = math.rad(12) / 2
+    local head = { i = 0, j = 0, k = math.sin(h), r = math.cos(h) }
     local cam = bare_camera()
-    cam:applyWeaponView()
-    assert_near(fpp.zoomWeaponOverrideValue, fpp.zoomOverrideValue, "scope projection matches world")
+    fpp.orientation = head
+    cam.last_head_quat = head
+    cam._last_written_final_quat = head
+
+    cam:applyWeaponView(true)
+    assert_true(rig.orientation == nil, "mounted, the rig stays where the seat puts it")
+
+    cam:applyWeaponView(false)
+    assert_true(cam.rig_turned and cam.rig_applied, "the rig holds the weapon turn")
+    assert_true(math.abs(rig.orientation.r) < 1 - 1e-6, "which is a real turn")
+    assert_near(fpp.zoomWeaponOverrideValue, 1.0, "the weapon's zoom is left to the game")
+    local WeaponView = require("modules.weapon_view")
+    local back = WeaponView.qmul(cam.view_turn, fpp.orientation)
+    assert_near(math.abs(back.i * head.i + back.j * head.j + back.k * head.k + back.r * head.r), 1,
+        "the camera holds the opposite turn", 1e-9)
+
+    -- The next frame's apply() has to find the clean orientation under both.
+    local held = fpp.orientation
+    local clean = WeaponView.qmul(WeaponView.qmul(WeaponView.qconj(cam.view_counter), held),
+        WeaponView.qconj(head))
+    assert_near(math.abs(clean.r), 1, "counter and head peel back to the clean camera", 1e-9)
+
     cam:suspend()
-    assert_near(fpp.zoomWeaponOverrideValue, 1.9614, "suspend restores weapon zoom")
-    fpp.zoomOverrideValue, fpp.zoomWeaponOverrideWeight = 4, 0
-    cam:applyWeaponView()
-    assert_near(fpp.zoomWeaponOverrideValue, 4, "scanner projection matches world")
+    assert_near(math.abs(fpp.orientation.r), 1, "suspend takes head and counter-turn off the camera", 1e-9)
+    assert_near(math.abs(rig.orientation.r), 1, "and puts the rig's orientation back", 1e-12)
+    assert_near(rig.position.x, 0, "and its position", 1e-12)
+    assert_true(not cam.rig_turned and cam.view_counter == nil and cam.view_turn == nil,
+        "with nothing left held")
+
+    -- At the hip both zooms are the camera's own, and nothing is written.
+    rig.orientation, rig.position = nil, nil
+    fpp.zoomOverrideWeight, fpp.zoomWeaponOverrideWeight = 0, 0
+    fpp.orientation = head
+    cam._last_written_final_quat = head
+    cam:applyWeaponView(false)
+    assert_true(rig.orientation == nil and rig.position == nil, "matching zooms turn nothing")
+
+    -- Sights down mid-turn: the rig goes back to carrying the lean alone.
+    fpp.zoomOverrideWeight, fpp.zoomWeaponOverrideWeight = 1, 1
+    cam.rig_written.x = -0.1
+    cam:applyWeaponView(false)
+    assert_true(cam.rig_turned, "turned again")
+    cam.view_counter = nil
+    fpp.zoomOverrideWeight, fpp.zoomWeaponOverrideWeight = 0, 0
+    cam:applyWeaponView(false)
+    assert_near(math.abs(rig.orientation.r), 1, "the turn comes back out", 1e-12)
+    assert_near(rig.position.x, -0.1, "and the lean stays", 1e-12)
+    assert_near(cam.rig_shift.x, -0.1, "with the eye measured from the lean again", 1e-12)
+
     Game.GetPlayer = function() return nil end
-    cam:applyWeaponView()
-    cam:suspend()
-    assert_true(cam.weapon_view.weight == nil, "loading discards saved zoom")
+    cam.rig_turned, cam.view_turn = true, {}
+    cam:applyWeaponView(false)
+    assert_true(not cam.rig_turned and cam.view_turn == nil, "a load drops what was held")
 end
 
 print("== Camera smoothing OK ==")
