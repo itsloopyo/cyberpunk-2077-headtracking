@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.4] - 2026-10-02
+
+### Fixed
+
+- stop the weapon jumping in size when aiming down sights
+
 ## [1.4.3] - 2026-10-02
 
 ### Fixed
