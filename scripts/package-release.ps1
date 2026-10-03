@@ -83,6 +83,8 @@ $requiredModFiles = @(
     "modules\GameUI.lua",
     "modules\builtin_crosshair.lua",
     "modules\ads_fade.lua",
+    "modules\aim_mode.lua",
+    "modules\aim_marker.lua",
     "modules\lean_clamp.lua",
     "modules\lean_line_sweep.lua",
     "modules\weapon_view.lua",

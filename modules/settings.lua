@@ -1,6 +1,8 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026 itsloopyo
 
+local AimMode = require("modules/aim_mode")
+
 local Settings = {}
 Settings.__index = Settings
 
@@ -74,6 +76,15 @@ function Settings:setMode(rotation, position)
     if not rotation and not position then return self:setTrackingEnabled(false) end
     self.suspendedMode = nil
     return self:apply({ enabled = rotation, position_enabled = position }, true)
+end
+
+function Settings:aimMode()
+    return AimMode.decode(self:get("TrueFreeLook"), self:get("FreeLookMarker"))
+end
+
+function Settings:setAimMode(mode)
+    local free_look, marker = AimMode.encode(mode)
+    return self:apply({ TrueFreeLook = free_look, FreeLookMarker = marker }, true)
 end
 
 function Settings:isTrackingEnabled()

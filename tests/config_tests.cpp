@@ -103,6 +103,7 @@ int main(int argc, char** argv) {
             const auto loaded = owner.Load();
             Require(!loaded.config.enabled && loaded.config.position_enabled, "Saved position-only mode lost");
             Require(!loaded.config.world_space_yaw && loaded.config.true_free_look, "Preferences lost");
+            Require(!loaded.config.free_look_marker, "True free look from before the marker gained one");
             Require(loaded.config.position_limit_y_down == 0.08 && loaded.config.remote_smoothing == 0.7, "Tuned values lost");
             const auto globalBefore = Read(root / "Defaults.ini");
             auto text = Read(path / "CameraUnlock.ini");
@@ -121,6 +122,44 @@ int main(int argc, char** argv) {
             cfg::ConfigOwner<Config> restart(htconfig::Options(path, defaults));
             const auto state = restart.Load().config;
             Require(state.enabled && !state.position_enabled && state.world_space_yaw, "Saved preferences lost on restart");
+        }
+        for (const auto* mode : {"paused", "marker", "tracked"}) {
+            const auto path = folder();
+            auto legacy = legacy::Defaults();
+            legacy["ads_mode"] = mode;
+            Write(path / "config.json", legacy.dump());
+            cfg::ConfigOwner<Config> owner(htconfig::Options(path, defaults));
+            const auto loaded = owner.Load();
+            Require(loaded.status == cfg::ConfigLoadStatus::Migrated, "A config carrying ads_mode did not load");
+            Require(!loaded.config.true_free_look && !loaded.config.free_look_marker, "ads_mode changed the aim mode");
+            Require(Read(path / "CameraUnlock.ini") == fresh, "ads_mode reached the canonical file");
+        }
+        {
+            const auto path = folder();
+            cfg::ConfigOwner<Config> owner(htconfig::Options(path, defaults));
+            const auto created = owner.Load().config;
+            Require(!created.true_free_look && !created.free_look_marker, "The aim mode does not default to sights locked");
+            auto expected = fresh;
+            const auto set = [&expected](const std::string& key, const std::string& from, const std::string& to) {
+                const auto at = expected.find(key + "=" + from + "\r\n");
+                Require(at != std::string::npos, "Aim mode row missing from the rendered config");
+                expected.replace(at, key.size() + 1 + from.size(), key + "=" + to);
+            };
+            Require(owner.Save([](Config& config) { config.true_free_look = true; config.free_look_marker = true; }).status ==
+                        cfg::ConfigSaveStatus::Saved, "Aim mode save failed");
+            set("TrueFreeLook", "default", "true");
+            set("FreeLookMarker", "default", "true");
+            Require(Read(path / "CameraUnlock.ini") == expected, "Aim mode save changed more than its two rows");
+            cfg::ConfigOwner<Config> marker(htconfig::Options(path, defaults));
+            const auto withMarker = marker.Load().config;
+            Require(withMarker.true_free_look && withMarker.free_look_marker, "Free look with a marker lost on restart");
+            Require(marker.Save([](Config& config) { config.free_look_marker = false; }).status == cfg::ConfigSaveStatus::Saved,
+                    "Aim mode save failed");
+            set("FreeLookMarker", "true", "false");
+            Require(Read(path / "CameraUnlock.ini") == expected, "Aim mode save changed more than its two rows");
+            cfg::ConfigOwner<Config> freeLook(htconfig::Options(path, defaults));
+            const auto noMarker = freeLook.Load().config;
+            Require(noMarker.true_free_look && !noMarker.free_look_marker, "True free look lost on restart");
         }
         {
             Write(root / "Defaults.ini", "[General]\r\nRotationEnabled=false\r\nWorldSpaceYaw=false\r\n[Position]\r\nPositionEnabled=true\r\nPositionLimitYDown=0.12\r\n");

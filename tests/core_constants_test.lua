@@ -72,4 +72,21 @@ local fade = "modules/ads_fade.lua"
 assert_eq(module_local(fade, "LOWER_S") * 1000, core("ads_fade_lower_ms"), "ads_fade.LOWER_S")
 assert_eq(module_local(fade, "RAISE_S") * 1000, core("ads_fade_raise_ms"), "ads_fade.RAISE_S")
 
+-- The aim marker's style is core's AimMarkerStyle, which lives in a header
+-- rather than the conformance file.
+local MARKER_HEADER = read_file("cameraunlock-core/cpp/include/cameraunlock/rendering/aim_marker.h")
+local function marker_style(field)
+    local value = MARKER_HEADER:match("float%s+" .. field .. "%s*=%s*([%d%.]+)f;")
+    if not value then error(field .. " is not in AimMarkerStyle", 2) end
+    return tonumber(value)
+end
+local marker = "modules/aim_marker.lua"
+assert_eq(module_local(marker, "ARM_PIXELS"), marker_style("arm_pixels"), "aim_marker.ARM_PIXELS")
+assert_eq(module_local(marker, "GAP_PIXELS"), marker_style("gap_pixels"), "aim_marker.GAP_PIXELS")
+assert_eq(module_local(marker, "THICKNESS_PIXELS"), marker_style("thickness_pixels"), "aim_marker.THICKNESS_PIXELS")
+assert_eq(module_local(marker, "INK_ALPHA") * 255, tonumber(MARKER_HEADER:match("ink%s*=%s*0x(%x%x)FFFFFF"), 16),
+    "aim_marker.INK_ALPHA")
+assert_eq(module_local(marker, "OUTLINE_ALPHA") * 255,
+    tonumber(MARKER_HEADER:match("outline%s*=%s*0x(%x%x)000000"), 16), "aim_marker.OUTLINE_ALPHA")
+
 print("core_constants_test: all constants match cameraunlock-core")

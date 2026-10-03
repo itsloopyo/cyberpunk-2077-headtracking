@@ -26,7 +26,21 @@ end
 local LeanClamp = require("modules/lean_clamp")
 local LeanLineSweep = require("modules/lean_line_sweep")
 local WeaponView = require("modules/weapon_view")
-
+-- How far forward of where the game puts the eye a lean may take it with the
+-- sights up, in metres, so the eye stops short of the rear sight or a scope's
+-- eyepiece. Each figure is the furthest lean at which the sight was still whole
+-- in front of the near plane, with the next step measured clipping it: the
+-- Omaha's rear sight clips at 0.33, the Satara's at 0.14, and the long scope's
+-- eyepiece on the Grad at 0.12. A scope is the component named Scope on the
+-- held weapon. A weapon type with no figure of its own takes the nearest stop
+-- measured.
+local FORWARD_STOP_SCOPED = 0.09
+local FORWARD_STOP_BY_TYPE = {
+    Wea_Handgun = 0.30,
+    Wea_ShotgunDual = 0.12,
+}
+local FORWARD_STOP_UNMEASURED = 0.09
+local SCOPE_COMPONENT = "Scope"
 -- How far off a surface the lean holds the eye, from the collision hit. The
 -- near plane measured at 1.5-3.5 cm against a Watson wall, whose rendered face
 -- sat 11 cm behind its collision proxy, so 10 cm clears the near plane with room
@@ -97,6 +111,13 @@ local function _callSetLocalPosition(cam, v)
 end
 local function _callGetActiveWeapon(player)
     return GameObject.GetActiveWeapon(player)
+end
+
+--- The held weapon's item type name (Wea_Handgun and so on) and whether it
+--- carries a scope.
+local function _callWeaponSight(weapon)
+    local scoped = weapon:FindComponentByName(CName.new(SCOPE_COMPONENT)) ~= nil
+    return RPGManager.GetItemType(weapon:GetItemID()).value, scoped
 end
 
 -- Hand the native plugin the orientation we just put in the camera so it can
@@ -355,6 +376,8 @@ function Camera.new(settings)
     self.lean_was_contact = false
     self.lean_was_failed = false
     self.lean_last_log = 0
+    self.forward_last_log = 0
+    self.forward_stop_logged = nil
 
     -- Initialize cache from settings
     self:refreshSettingsCache()
@@ -1527,24 +1550,48 @@ function Camera:_smoothPosition(rx, ry, rz, deltaTime)
     return self:_clampPosition(self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z)
 end
 
+--- How far a lean in may go with the held weapon's sights up, in metres.
+function Camera:_forwardStop(player)
+    local ok, weapon = pcall(_callGetActiveWeapon, player)
+    if not ok or not weapon then return FORWARD_STOP_UNMEASURED end
+    local read, kind, scoped = pcall(_callWeaponSight, weapon)
+    if not read then
+        kind, scoped = "unreadable", false
+    end
+    local stop = scoped and FORWARD_STOP_SCOPED
+        or FORWARD_STOP_BY_TYPE[kind] or FORWARD_STOP_UNMEASURED
+    local label = tostring(kind) .. (scoped and "+scope" or "")
+    if self.forward_stop_logged ~= label then
+        self.forward_stop_logged = label
+        hlog(string.format("[HeadTracking] rear sight stop: weapon=%s stop=%.2fm%s", label, stop,
+            (scoped or FORWARD_STOP_BY_TYPE[kind]) and "" or " (not measured for this weapon type)"))
+    end
+    return stop
+end
+
 --- Apply 6DOF head translation to the FPP camera and the rig it hangs off.
 --- Inputs are raw OpenTrack cm values (lateral, vertical, longitudinal), or nil
 --- on a frame with no fresh packet - call this every frame, see _smoothPosition.
 ---
---- The lean is split between two carriers. On the camera it moves the eye and
---- nothing else: the arms, the weapon and the round stay with the body. On the
---- rig root it moves all of them, so the sights stay on the eye and the round
---- leaves from where the eye is. The shares need not sum to 1, and 0 on both
---- removes the lean.
+--- The lateral lean (sideways and vertical) is split between two carriers. On
+--- the camera it moves the eye and nothing else: the arms, the weapon and the
+--- round stay with the body. On the rig root it moves all of them, so the sights
+--- stay on the eye and the round leaves from where the eye is. The shares need
+--- not sum to 1, and 0 on both removes the lateral lean.
+---
+--- The lean along the aim stays on the camera whatever the shares: an eye that
+--- moves along the sight line is still on it, so leaning in brings the sights
+--- closer. With the sights up it stops short of the rear sight (_forwardStop).
 --- Pipeline: per-axis sensitivity -> exponential smoothing ->
 ---           cm to m -> axis remap -> asymmetric clamp -> SetLocalPosition.
 --- Cyberpunk local cam frame (smoke-test confirmed): +Z is up; we map
 ---   OT y (vertical, +up)   -> cam Z
 ---   OT x (lateral, +right) -> cam X
 ---   OT z (longitudinal, +fwd) -> cam Y
---- @param camera_share number Fraction of the lean carried by the camera
---- @param rig_share number Fraction of the lean carried by the rig root
-function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
+--- @param camera_share number Fraction of the lateral lean carried by the camera
+--- @param rig_share number Fraction of the lateral lean carried by the rig root
+--- @param sights_up number 0 at the hip, 1 with the sights up
+function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, sights_up)
     local c = self.cached_settings
     if not c.position_enabled then
         if self.pos_applied or self.rig_applied then
@@ -1579,8 +1626,17 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
         return
     end
 
+    -- The zoom scales what moves the picture across the frame. Y is along the
+    -- aim: leaning in brings the scene closer and moves nothing sideways.
     local zoom = self.zoom_factor
-    cam_x, cam_y, cam_z = cam_x * zoom, cam_y * zoom, cam_z * zoom
+    cam_x, cam_z = cam_x * zoom, cam_z * zoom
+
+    local asked_forward = cam_y
+    if sights_up > 0 then
+        local stop = self:_forwardStop(player)
+        if cam_y > stop then cam_y = cam_y + (stop - cam_y) * sights_up end
+    end
+    local stopped_forward = cam_y
 
     -- Both carriers move the eye to the same place, so the clamp cuts the whole
     -- lean once and the shares divide what is left.
@@ -1607,7 +1663,15 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
     local room = self:_clampLean(bone_m, rig_m, cam_x, cam_y, cam_z, deltaTime)
     cam_x, cam_y, cam_z = cam_x * room, cam_y * room, cam_z * room
 
-    local eye_x, eye_y, eye_z = cam_x * camera_share, cam_y * camera_share, cam_z * camera_share
+    local now = os.clock()
+    if math.abs(asked_forward) > 0.01 and now - self.forward_last_log >= LEAN_LOG_INTERVAL_S then
+        self.forward_last_log = now
+        hlog(string.format(
+            "[HeadTracking] lean in: asked=%.3fm after_sight_stop=%.3fm applied=%.3fm sights_up=%.2f zoom=%.4f",
+            asked_forward, stopped_forward, cam_y, sights_up, zoom))
+    end
+
+    local eye_x, eye_y, eye_z = cam_x * camera_share, cam_y, cam_z * camera_share
     pcall(_callSetLocalPosition, cam, Vector4.new(eye_x, eye_y, eye_z, 1.0))
     -- Only the camera's share opens a gap between the eye and the round's start
     -- point. The rig's share moves both, so the aim hook and the reticle are
@@ -1617,7 +1681,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share)
     self.pos_local.z = eye_z
     self.pos_applied = true
 
-    local bx, by, bz = cam_x * rig_share, cam_y * rig_share, cam_z * rig_share
+    local bx, by, bz = cam_x * rig_share, 0, cam_z * rig_share
     self.rig_local.x, self.rig_local.y, self.rig_local.z = bx, by, bz
     if rig_share > 0 then
         -- Re-expressed in the root's frame, so the root moves the eye exactly

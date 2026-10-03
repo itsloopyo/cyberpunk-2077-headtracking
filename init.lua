@@ -68,6 +68,8 @@ local State = safeRequire("modules/state")
 local UI = safeRequire("modules/ui")
 local BuiltinCrosshair = safeRequire("modules/builtin_crosshair")
 local AdsFade = safeRequire("modules/ads_fade")
+local AimMode = safeRequire("modules/aim_mode")
+local AimMarker = safeRequire("modules/aim_marker")
 local Aim = safeRequire("modules/aim")
 local NativeSettingsIntegration = safeRequire("modules/nativesettings")
 local Perf = safeRequire("modules/perf")
@@ -300,6 +302,11 @@ local was_chase_camera = false
 -- Hands the lean from the camera to the rig as the sights come up. See
 -- modules/ads_fade.lua and Camera:applyPosition.
 local ads_fade = nil
+-- Follows the sights alone, whatever the aim mode: the forward stop at the
+-- rear sight and the aim marker both ride it.
+local sights_fade = nil
+local aim_marker = nil
+local aim_marker_opacity = 0.0
 
 local function hotkeyDebounced(id)
     local now = os.clock()
@@ -320,7 +327,7 @@ end
 
 -- Forward declarations so the onUpdate dispatch resolves the upvalue at call.
 local handleToggleTracking, handleCycleMode,
-      handleToggleYawMode, handleToggleTrueFreeLook
+      handleToggleYawMode, handleCycleAimMode
 
 -- Lifecycle: Called when mod initializes.
 -- Each step is wrapped so that on failure we capture WHICH step failed and
@@ -419,6 +426,7 @@ registerForEvent("onInit", function()
     runInitStep("ads_fade", function()
         if not AdsFade then error("AdsFade module failed to load") end
         ads_fade = AdsFade.new()
+        sights_fade = AdsFade.new()
     end)
 
     runInitStep("nativeUI", function()
@@ -440,6 +448,7 @@ registerForEvent("onInit", function()
             local GameUI = require("modules/GameUI")
             GameUI.Listen("LoadingStart", function() crosshair:dropHandles() end)
             GameUI.Listen("SessionEnd", function() crosshair:dropHandles() end)
+            aim_marker = AimMarker.new(crosshair)
             mlog("[HeadTracking] Built-in crosshair driver initialized")
         else
             crosshair = nil
@@ -538,7 +547,7 @@ local function onUpdateImpl(deltaTime)
     if udp:consumeNativeToggleTrackingRequested() then handleToggleTracking() end
     if udp:consumeNativeCycleModeRequested()      then handleCycleMode()      end
     if udp:consumeNativeToggleYawRequested()      then handleToggleYawMode()  end
-    if udp:consumeNativeToggleFreeLookRequested() then handleToggleTrueFreeLook() end
+    if udp:consumeNativeToggleFreeLookRequested() then handleCycleAimMode() end
 
     local tracking_allowed = state:isTrackingAllowed()
     -- Read alongside the verdict it belongs to, not at the point of use, so the
@@ -557,14 +566,20 @@ local function onUpdateImpl(deltaTime)
     -- camera to the rig, so the weapon comes with the eye and stays on the
     -- sights, and the round leaves from where the eye is. The sights come from
     -- the game's own aim state, and any suppression resets the transition so
-    -- the next aim starts clean. In true free look the lean stays on the camera
-    -- and the weapon stays put; toggling mid-aim rides the same fade.
-    local ads_scale = ads_fade:update(
-        state:isAdsActive() and not settings:get("TrueFreeLook"), now)
+    -- the next aim starts clean. In the two free look modes the lean stays on
+    -- the camera and the weapon stays put; cycling mid-aim rides the same fade.
+    local aiming = state:isAdsActive()
+    local ads_scale = ads_fade:update(aiming and not settings:get("TrueFreeLook"), now)
+    local sights_up = 1.0 - sights_fade:update(aiming, now)
     if not tracking_allowed then
         ads_fade:reset()
+        sights_fade:reset()
         ads_scale = 1.0
+        sights_up = 0.0
     end
+    -- The marker is the FPP view's: in the chase camera nothing is aimed down.
+    aim_marker_opacity = state:isChaseCameraActive() and 0.0
+        or AimMode.markerOpacity(settings:aimMode(), sights_up)
 
     -- Third-person driving renders from the vehicle chase camera, which ignores
     -- everything written to the player's FPP camera. So the head rotation goes
@@ -684,7 +699,7 @@ local function onUpdateImpl(deltaTime)
             -- rig stays where the seat puts it, so on the sights the lean
             -- eases out instead.
             local rig_share = mounted and 0.0 or (1.0 - ads_scale)
-            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime, ads_scale, rig_share)
+            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime, ads_scale, rig_share, sights_up)
             camera:applyWeaponView(mounted)
         end
         perf:recordCameraUpdate()
@@ -750,6 +765,7 @@ local function onDrawImpl()
     if ui then
         ui:draw()
     end
+    if aim_marker then aim_marker:draw(aim_marker_opacity) end
 end
 registerForEvent("onDraw", guarded("onDraw", onDrawImpl))
 
@@ -887,17 +903,18 @@ end
 -- dispatch crashes before entering Lua on this game build, so do not bind
 -- PageDown here.
 
--- Insert / Ctrl+Shift+U - Sights locked <-> true free look, saved to config.json.
--- Polled natively in ScriptChannel.cpp, like the rest.
-function handleToggleTrueFreeLook()
-    if hotkeyDebounced("ToggleTrueFreeLook") then return end
+-- Insert / Ctrl+Shift+U - Cycle the aim mode: sights locked, free look with a
+-- marker, true free look. Saved on each press. Polled natively in
+-- ScriptChannel.cpp, like the rest.
+function handleCycleAimMode()
+    if hotkeyDebounced("CycleAimMode") then return end
     if not settings or not ui then return end
 
-    local on = not settings:get("TrueFreeLook")
-    settings:set("TrueFreeLook", on)
+    local mode = AimMode.next(settings:aimMode())
+    settings:setAimMode(mode)
 
-    ui:showSuccess(on and "True free look: ON" or "True free look: OFF (sights locked)", 2.0)
-    mlog("[HeadTracking] TrueFreeLook -> " .. tostring(on))
+    ui:showSuccess(AimMode.label(mode), 2.0)
+    mlog("[HeadTracking] " .. AimMode.label(mode))
 end
 
 -- Public API for the CET console. Reachable as

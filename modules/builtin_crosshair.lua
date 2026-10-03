@@ -2343,11 +2343,21 @@ function BuiltinCrosshair:_resetAll()
     if self._shove_nameplate then self:_writeNameplates(0, 0) end
 end
 
+--- Screen offset from centre to where the round will land, in pixels, as the
+--- last tick projected it. The aim marker draws here, so it and the game's own
+--- crosshair come from the one projection.
+--- @return number dx, number dy, boolean valid
+function BuiltinCrosshair:getAimOffset()
+    if not self._aim_valid then return 0, 0, false end
+    return self._aim_dx, self._aim_dy, true
+end
+
 --- @param tracking_allowed boolean
 --- @param mounted boolean|nil In a vehicle: the in-car bracket reticle exists only
 ---   there, and its widgets outlive the drive, so on foot they are left alone.
 function BuiltinCrosshair:tick(tracking_allowed, mounted)
     self._hit_marker_tracking_allowed = self.enabled and tracking_allowed
+    self._aim_valid = false
     if self._np_probe_frames > 0 then
         pcall(function() self:_probeNameplatesTick() end)
     end
@@ -2388,6 +2398,7 @@ function BuiltinCrosshair:tick(tracking_allowed, mounted)
     self._stat_screen_w, self._stat_screen_h = screen_w, screen_h
 
     local dx, dy, valid = self:_computeOffset(screen_w, screen_h)
+    self._aim_dx, self._aim_dy, self._aim_valid = dx, dy, valid
 
     if #self:_entries() == 0 then
         self._stat.ticks_with_zero_ctrls = self._stat.ticks_with_zero_ctrls + 1

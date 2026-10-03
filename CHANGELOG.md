@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Free look with a marker, a third aim mode between sights locked and true free
+  look. `Insert` / `Ctrl+Shift+U` now cycles the three. In it the weapon stays
+  put and your head moves freely around it, and a small white marker shows where
+  your rounds will land while the sights are up. The settings panel's True Free
+  Look switch is now an Aim Mode list.
+
+### Changed
+
+- Leaning in is no longer scaled down by the zoom. A forward lean reaches the
+  same distance through a scope as at the hip.
+- With the sights up, leaning in and back moves your eye along the sights
+  instead of carrying the weapon with it, so leaning in brings the sights
+  closer. Your eye stops short of the rear sight.
+
 ## [1.4.4] - 2026-10-02
 
 ### Fixed

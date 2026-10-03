@@ -5,6 +5,10 @@
 -- https://www.nexusmods.com/cyberpunk2077/mods/3518
 -- Production-ready implementation with state sync, reset functionality, and observer integration
 
+local AimMode = require("modules/aim_mode")
+
+local AimMode = require("modules/aim_mode")
+
 local NativeSettingsIntegration = {}
 NativeSettingsIntegration.__index = NativeSettingsIntegration
 
@@ -20,6 +24,15 @@ local ENUM_SETTINGS = {
         labels = { "World (horizon-locked)", "Camera-relative" },
     },
 }
+
+local AIM_MODE_LABELS = { "Sights locked", "Free look with marker", "True free look" }
+
+local function aimModeIndex(mode)
+    for i, candidate in ipairs(AimMode.ORDER) do
+        if candidate == mode then return i end
+    end
+    error("Unknown aim mode: " .. tostring(mode))
+end
 
 --- Index of a stored enum string, for a selector widget.
 --- Falls back to the first entry: a value that is not in the list cannot be
@@ -114,6 +127,7 @@ function NativeSettingsIntegration:shutdown()
     -- Clear widget references
     self.widgetRefs = {}
     self.masterWidgetRef = nil
+    self.aimModeWidgetRef = nil
     self.initialized = false
 end
 
@@ -131,6 +145,12 @@ function NativeSettingsIntegration:onSettingChanged(key, new_value)
     -- of - the key's own switch, which falls through below.
     if key == "enabled" or key == "position_enabled" then
         self:refreshWidget(self.masterWidgetRef, self.settings:isTrackingEnabled())
+    end
+
+    -- The aim mode is a pair of keys behind one selector, as the master is.
+    if key == "TrueFreeLook" or key == "FreeLookMarker" then
+        self:refreshWidget(self.aimModeWidgetRef, aimModeIndex(self.settings:aimMode()))
+        return
     end
 
     if ENUM_SETTINGS[key] then
@@ -343,14 +363,15 @@ function NativeSettingsIntegration:registerSettings()
             end
         end
     )
-    self.widgetRefs["TrueFreeLook"] = ns.addSwitch(
+    self.aimModeWidgetRef = ns.addSelectorString(
         "/HeadTracking/Position",
-        "True Free Look",
-        "Off: leaning while aiming down sights keeps your eye on the sights, and the weapon moves with your head. On: the weapon stays where it is and your head moves freely around it, so to see down the sights you have to put your head behind them. Hotkey: Insert / Ctrl+Shift+U.",
-        self.settings:get("TrueFreeLook"),
-        self.settings:getDefaults().TrueFreeLook,
-        function(state)
-            self.settings:set("TrueFreeLook", state)
+        "Aim Mode",
+        "How a lean is handled while you aim down sights. Sights locked: leaning never takes your eye off the sights, and the weapon moves with your head. Free look with marker: the weapon stays where it is and your head moves freely around it, with a small white marker where your rounds will land. True free look: the same with no marker. Hotkey: Insert / Ctrl+Shift+U.",
+        AIM_MODE_LABELS,
+        aimModeIndex(self.settings:aimMode()),
+        1,
+        function(index)
+            self.settings:setAimMode(AimMode.ORDER[index])
         end
     )
     -- Z limits are asymmetric because leaning in has far more travel than

@@ -17,6 +17,7 @@ cfg::ConfigTable<Config> MakeTable() {
     table.Concept<C::PositionEnabled>(&Config::position_enabled).Writable();
     table.Concept<C::WorldSpaceYaw>(&Config::world_space_yaw).Writable();
     table.Concept<C::TrueFreeLook>(&Config::true_free_look).Writable();
+    table.Concept<C::FreeLookMarker>(&Config::free_look_marker).Writable();
     table.Concept<C::LocalSmoothing>(&Config::local_smoothing).Writable();
     table.Concept<C::RemoteSmoothing>(&Config::remote_smoothing).Writable();
     table.Concept<C::PositionLimitX>(&Config::position_limit_x).Writable();
@@ -41,6 +42,7 @@ nlohmann::json ToLua(const Config& c) {
     return {{"enabled", c.enabled}, {"position_enabled", c.position_enabled},
             {"enable_on_startup", c.enable_on_startup},
             {"yaw_mode", c.world_space_yaw ? "world" : "local"}, {"TrueFreeLook", c.true_free_look},
+            {"FreeLookMarker", c.free_look_marker},
             {"local_smoothing", c.local_smoothing}, {"remote_smoothing", c.remote_smoothing},
             {"position_limit_x", c.position_limit_x}, {"position_limit_y_up", c.position_limit_y_up},
             {"position_limit_y_down", c.position_limit_y_down}, {"position_limit_z_fwd", c.position_limit_z_fwd},
@@ -69,6 +71,7 @@ void ApplyPatch(Config& c, const nlohmann::json& patch) {
     if (yaw != "world" && yaw != "local") throw std::invalid_argument("Invalid yaw mode");
     c.world_space_yaw = yaw == "world";
     c.true_free_look = values.at("TrueFreeLook");
+    c.free_look_marker = values.at("FreeLookMarker");
     c.local_smoothing = values.at("local_smoothing");
     c.remote_smoothing = values.at("remote_smoothing");
     c.position_limit_x = values.at("position_limit_x");
@@ -125,7 +128,8 @@ cfg::ImportResult Import(const cfg::LegacyInput& input, Config& out) {
     follows.Setting(C::PositionLimitYDown, read.at("position_limit_y_down") == shipped.at("position_limit_y_down"));
     follows.Setting(C::PositionLimitZ, read.at("position_limit_z_fwd") == shipped.at("position_limit_z_fwd"));
     follows.Setting(C::PositionLimitZBack, read.at("position_limit_z_back") == shipped.at("position_limit_z_back"));
-    for (const auto id : {C::EnableOnStartup, C::ToggleKey, C::CycleTrackingModeKey, C::YawModeKey, C::TrueFreeLookKey})
+    for (const auto id : {C::EnableOnStartup, C::FreeLookMarker, C::ToggleKey, C::CycleTrackingModeKey, C::YawModeKey,
+                          C::TrueFreeLookKey})
         follows.NotInLegacy(id);
     std::vector<cfg::DroppedValue> dropped;
     if (!read.at("crosshair_enabled").get<bool>())

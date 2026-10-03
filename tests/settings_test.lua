@@ -22,6 +22,29 @@ assert(not settings:get("enabled") and settings:get("position_enabled") and #bri
 settings:set("yaw_mode", "local")
 assert(bridge.saved.yaw_mode == "local")
 assert(bridge.calls[2].enabled == nil, "Saving yaw must not overwrite the mode")
+local AimMode = require("modules/aim_mode")
+assert(settings:aimMode() == AimMode.SIGHTS_LOCKED, "The aim mode defaults to sights locked")
+local expected_pairs = { { true, true }, { true, false }, { false, false } }
+for step, pair in ipairs(expected_pairs) do
+    local calls = #bridge.calls
+    settings:setAimMode(AimMode.next(settings:aimMode()))
+    assert(#bridge.calls == calls + 1, "An aim mode step is one save")
+    local saved = bridge.calls[#bridge.calls]
+    assert(saved.TrueFreeLook == pair[1] and saved.FreeLookMarker == pair[2],
+        "Aim mode step " .. step .. " saved the wrong pair")
+    local keys = 0
+    for _ in pairs(saved) do keys = keys + 1 end
+    assert(keys == 2, "An aim mode step saves nothing but the pair")
+end
+bridge.saved.TrueFreeLook, bridge.saved.FreeLookMarker = true, nil
+local old_free_look = Settings.new()
+old_free_look:load()
+assert(old_free_look:aimMode() == AimMode.TRUE_FREE_LOOK, "A config from before the marker stays in true free look")
+bridge.saved.TrueFreeLook, bridge.saved.FreeLookMarker = false, true
+local stray_marker = Settings.new()
+stray_marker:load()
+assert(stray_marker:aimMode() == AimMode.SIGHTS_LOCKED, "The marker alone is sights locked")
+bridge.saved.FreeLookMarker = false
 settings:setTrackingEnabled(false)
 local restart = Settings.new()
 restart:load()

@@ -101,7 +101,9 @@ assert_true(integration:init(), "integration initialises against the stub")
 --
 -- saved_tracking_mode is persisted STATE, not a knob: it records which mode the
 -- master switch should restore, and is rewritten every time tracking goes off.
-local NOT_IN_UI = { enable_on_startup = true }
+-- TrueFreeLook and FreeLookMarker are one setting to the player, the aim mode,
+-- and share the selector checked under (3).
+local NOT_IN_UI = { enable_on_startup = true, TrueFreeLook = true, FreeLookMarker = true }
 
 local missing = {}
 for key in pairs(settings:getDefaults()) do
@@ -128,9 +130,23 @@ assert_eq(settings:get("yaw_mode"), "local", "selecting index 2 stores 'local'")
 widgets[yaw_ref].callback(1)
 assert_eq(settings:get("yaw_mode"), "world", "selecting index 1 stores 'world'")
 
--- (3) Aiming down sights has no setting: head tracking carries straight on
---     through the aim.
+-- (3) The aim mode is one selector over the TrueFreeLook / FreeLookMarker pair,
+--     in the order the hotkey cycles, and each choice is one save of both.
 assert_eq(integration.widgetRefs["ads_mode"], nil, "no ADS mode widget")
+local aim_ref = integration.aimModeWidgetRef
+assert_eq(widgets[aim_ref].kind, "selector", "the aim mode is a selector")
+assert_eq(widgets[aim_ref].current, 1, "which opens on sights locked")
+local saves = #bridge.calls
+widgets[aim_ref].callback(2)
+assert_eq(settings:get("TrueFreeLook"), true, "free look with marker turns free look on")
+assert_eq(settings:get("FreeLookMarker"), true, "and the marker")
+assert_eq(#bridge.calls, saves + 1, "in one save")
+widgets[aim_ref].callback(3)
+assert_eq(settings:get("TrueFreeLook"), true, "true free look keeps free look on")
+assert_eq(settings:get("FreeLookMarker"), false, "and drops the marker")
+refreshes = {}
+settings:setAimMode("SightsLocked")
+assert_eq(refreshes[aim_ref], 1, "the hotkey moves the selector back to sights locked")
 
 -- (4) A change from outside the panel (the hotkey) refreshes the widget with an
 --     INDEX. Pushing the raw string here would silently leave the dropdown on
