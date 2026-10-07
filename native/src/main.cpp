@@ -15,6 +15,10 @@
 #include "ChaseCameraHook.hpp"
 #include "builds/build_registry.hpp"
 
+#ifdef HEADTRACKING_DEV_INPUT
+void StartIsolatedInputIfAsked();
+#endif
+
 // Standard OpenTrack UDP port. If you change this, also change the OpenTrack
 // Output configuration (IP: 127.0.0.1, Port: 4242).
 constexpr uint16_t kUdpPort = 4242;
@@ -29,6 +33,11 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         // to be open (and the previous session rotated away) before it does.
         Log_Open();
         LogInfo("[HeadTrackingAim] plugin loading (RED4ext), log opened beside the game EXE");
+
+#ifdef HEADTRACKING_DEV_INPUT
+        // Before anything of the mod's reads a key.
+        StartIsolatedInputIfAsked();
+#endif
 
         if (!g_sharedState.Init()) {
             LogError("[HeadTrackingAim] Failed to initialize shared memory");

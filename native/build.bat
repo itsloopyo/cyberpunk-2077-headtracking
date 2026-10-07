@@ -33,28 +33,37 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: `build.bat dev` makes the dev build in build-dev: the plugin with cameraunlock-core's isolated
+:: input, for tests that run the game in the background. Never packaged.
+set "BUILD_DIR=build"
+set "EXTRA="
+if /i "%~1"=="dev" (
+    set "BUILD_DIR=build-dev"
+    set "EXTRA=-DHEADTRACKING_DEV_INPUT=ON"
+)
+
 :: Create build directory if needed
 cd /d "%~dp0"
-if not exist "build" mkdir build
+if not exist "!BUILD_DIR!" mkdir "!BUILD_DIR!"
 
 :: Configure. If the cache was generated against a different source path (e.g.
 :: the repo was moved or renamed), CMake refuses to re-use it and errors out.
 :: Retry once after wiping the build dir so `pixi run install` just works
 :: instead of needing a manual `pixi run clean`.
 echo Configuring with CMake...
-cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -S . -B build
+cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release !EXTRA! -S . -B "!BUILD_DIR!"
 if errorlevel 1 (
     echo CMake configure failed - likely stale cache from a prior source path. Cleaning and retrying...
-    rmdir /s /q build
-    mkdir build
-    cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -S . -B build
+    rmdir /s /q "!BUILD_DIR!"
+    mkdir "!BUILD_DIR!"
+    cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release !EXTRA! -S . -B "!BUILD_DIR!"
     if errorlevel 1 (
         echo ERROR: CMake configuration failed after clean retry
         exit /b 1
     )
 )
 
-cd build
+cd "!BUILD_DIR!"
 
 :: Build
 echo Building...

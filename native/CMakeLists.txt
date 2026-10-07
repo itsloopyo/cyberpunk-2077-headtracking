@@ -19,6 +19,13 @@ if(NOT EXISTS "${CAMERAUNLOCK_DIR}/CMakeLists.txt")
         "Run: git submodule update --init --recursive")
 endif()
 set(CAMERAUNLOCK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# Dev builds only (native\build.bat dev): the game takes its keyboard and mouse from a command
+# file, so a test can run it in the background. scripts/package-release.ps1 takes the plugin from
+# native/build, which this never is.
+option(HEADTRACKING_DEV_INPUT "Build cameraunlock-core's isolated input into the plugin (tests only, never released)" OFF)
+if(HEADTRACKING_DEV_INPUT)
+    set(CAMERAUNLOCK_BUILD_HOOKS ON CACHE BOOL "" FORCE)
+endif()
 add_subdirectory(${CAMERAUNLOCK_DIR} ${CMAKE_BINARY_DIR}/_deps/cameraunlock EXCLUDE_FROM_ALL)
 if(MSVC)
     set_property(TARGET cameraunlock PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
@@ -58,6 +65,15 @@ target_link_libraries(HeadTrackingAim PRIVATE
     d3d12    # FreezeFrameHook: swapchain Present hook + backbuffer copy
     dxgi     # FreezeFrameHook: swapchain creation for vtable steal
 )
+
+if(HEADTRACKING_DEV_INPUT)
+    target_sources(HeadTrackingAim PRIVATE src/dev/IsolatedInput.cpp)
+    target_link_libraries(HeadTrackingAim PRIVATE minhook)
+    target_compile_definitions(HeadTrackingAim PRIVATE HEADTRACKING_DEV_INPUT=1)
+    if(MSVC)
+        set_property(TARGET minhook PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    endif()
+endif()
 
 # Windows-specific settings
 if(WIN32)
