@@ -33,13 +33,18 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: `build.bat dev` makes the dev build in build-dev: the plugin with cameraunlock-core's isolated
-:: input, for tests that run the game in the background. Never packaged.
+:: `build.bat dev <port>` makes the dev build in build-dev: the plugin with cameraunlock-core's
+:: isolated input, listening on the test's port, for tests that run the game in the background.
+:: Never packaged.
 set "BUILD_DIR=build"
 set "EXTRA="
 if /i "%~1"=="dev" (
+    if "%~2"=="" (
+        echo ERROR: build.bat dev needs the test's UDP port
+        exit /b 1
+    )
     set "BUILD_DIR=build-dev"
-    set "EXTRA=-DHEADTRACKING_DEV_INPUT=ON"
+    set "EXTRA=-DHEADTRACKING_DEV_INPUT=ON -DHEADTRACKING_TEST_UDP_PORT=%~2"
 )
 
 :: Create build directory if needed

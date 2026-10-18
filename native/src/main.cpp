@@ -20,8 +20,13 @@ void StartIsolatedInputIfAsked();
 #endif
 
 // Standard OpenTrack UDP port. If you change this, also change the OpenTrack
-// Output configuration (IP: 127.0.0.1, Port: 4242).
+// Output configuration (IP: 127.0.0.1, Port: 4242). A dev build made for a
+// background test listens on the test's own port instead.
+#ifdef HEADTRACKING_TEST_UDP_PORT
+constexpr uint16_t kUdpPort = HEADTRACKING_TEST_UDP_PORT;
+#else
 constexpr uint16_t kUdpPort = 4242;
+#endif
 
 
 RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
