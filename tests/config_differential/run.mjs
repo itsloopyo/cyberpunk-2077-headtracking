@@ -80,6 +80,7 @@ end
     delete expected.saved_tracking_mode;
     delete expected.crosshair_enabled;
     expected.FreeLookMarker=false;
+    expected.StockSights=false;
     if(expected.position_limit_y_down === 0.05) expected.position_limit_y_down=0.2;
     assert.deepEqual(migrated[i],expected,`Migration case ${i}: ${JSON.stringify(cases[i])}`);
   }

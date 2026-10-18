@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Stock sights, a fourth aim mode after true free look on `Insert` /
+  `Ctrl+Shift+U`. While the sights are up your head stops turning and leaning
+  the view, so the sights sit in the centre as they do without head tracking.
+  Tilting your head still tilts the view, and when you lower the weapon the view
+  eases back to where you are looking. The settings panel's Aim Mode list has it
+  too.
+
 ## [1.4.5] - 2026-10-03
 
 ### Added

@@ -1591,7 +1591,8 @@ end
 --- @param camera_share number Fraction of the lateral lean carried by the camera
 --- @param rig_share number Fraction of the lateral lean carried by the rig root
 --- @param sights_up number 0 at the hip, 1 with the sights up
-function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, sights_up)
+--- @param pose_share number Share of the whole lean that reaches the view: 1, or the stock sights fade
+function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, sights_up, pose_share)
     local c = self.cached_settings
     if not c.position_enabled then
         if self.pos_applied or self.rig_applied then
@@ -1625,6 +1626,8 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, si
         or not (isValidNumber(cam_x) and isValidNumber(cam_y) and isValidNumber(cam_z)) then
         return
     end
+
+    cam_x, cam_y, cam_z = cam_x * pose_share, cam_y * pose_share, cam_z * pose_share
 
     -- The zoom scales what moves the picture across the frame. Y is along the
     -- aim: leaning in brings the scene closer and moves nothing sideways.

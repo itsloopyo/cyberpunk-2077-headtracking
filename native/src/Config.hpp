@@ -15,6 +15,7 @@ struct Config {
     bool world_space_yaw = true;
     bool true_free_look = false;
     bool free_look_marker = false;
+    bool stock_sights = false;
     double local_smoothing = 0.0;
     double remote_smoothing = 0.15;
     double position_limit_x = 0.30;

@@ -416,7 +416,7 @@ local function stub_cet()
     return written, rig_written
 end
 
-local function hip(cam, rx, ry, rz, dt) cam:applyPosition(rx, ry, rz, dt, 1.0, 0.0, 0.0) end
+local function hip(cam, rx, ry, rz, dt) cam:applyPosition(rx, ry, rz, dt, 1.0, 0.0, 0.0, 1.0) end
 
 --- Lean hard enough that the smoother saturates at the lateral limit.
 local function lean_to_the_limit(cam, apply)
@@ -529,7 +529,7 @@ do
     -- the camera's share, which is zero: eye and round have moved together.
     local written, rig_written = stub_cet()
     local cam = bare_camera()
-    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0, 1.0, 1.0)
     assert_near(written[#written].x, 0, "the camera holds none of the lean on the sights")
     assert_near(cam.pos_local.x, 0, "so nothing opens a gap between eye and round")
     local rig = rig_written[#rig_written]
@@ -539,6 +539,35 @@ do
     assert_true(cam.rig_applied, "the rig holds the offset")
     local bx = cam:getRigPosition()
     assert_near(bx, -0.10, "the rig's share is reported in the camera bone's frame")
+end
+
+do
+    -- Stock sights scales the whole lean, the part along the aim included,
+    -- before the zoom, the forward stop and the hand-over read it.
+    for _, share in ipairs({ 1.0, 0.5, 0.0 }) do
+        local written = stub_cet()
+        local cam = bare_camera()
+        cam:applyPosition(10, 5, -40, DT, 1.0, 0.0, 0.0, share)
+        local w = written[#written]
+        local label = string.format("stock sights share %.1f", share)
+        assert_near(w.x, -0.10 * share, label .. ": the lateral lean", 1e-12)
+        assert_near(w.y, 0.40 * share, label .. ": the lean along the aim", 1e-12)
+        assert_near(w.z, 0.05 * share, label .. ": the vertical lean", 1e-12)
+    end
+
+    -- Sights up in stock sights: nothing is left on the camera or the rig, and
+    -- the forward stop has nothing to hold.
+    local written, rig_written = stub_cet()
+    local cam = bare_camera()
+    cam:applyPosition(10, 5, -40, DT, 0.0, 1.0, 1.0, 0.0)
+    local w = written[#written]
+    assert_near(w.x, 0, "stock sights up: no lateral lean on the camera", 1e-12)
+    assert_near(w.y, 0, "stock sights up: no lean in", 1e-12)
+    assert_near(w.z, 0, "stock sights up: no vertical lean", 1e-12)
+    local r = rig_written[#rig_written]
+    assert_near(r.x, 0, "stock sights up: the rig holds no lateral lean", 1e-12)
+    assert_near(r.y, 0, "stock sights up: nor any along the aim", 1e-12)
+    assert_near(r.z, 0, "stock sights up: nor any vertical", 1e-12)
 end
 
 do
@@ -552,7 +581,7 @@ do
     for _, shares in ipairs(cases) do
         local written, rig_written = stub_cet()
         local cam = bare_camera()
-        cam:applyPosition(8, 5, -20, DT, shares[1], shares[2], 1.0 - shares[1])
+        cam:applyPosition(8, 5, -20, DT, shares[1], shares[2], 1.0 - shares[1], 1.0)
         local eye = to_world(BONE_AXES, written[#written])
         local r = rig_written and rig_written[#rig_written]
         if r then
@@ -578,7 +607,7 @@ do
     -- suspending all have to write it back to the origin.
     local written, rig_written = stub_cet()
     local cam = bare_camera()
-    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0, 1.0, 1.0)
     hip(cam, 10, 0, 0, DT)
     assert_near(rig_written[#rig_written].x, 0, "leaving the sights puts the rig back")
     assert_true(not cam.rig_applied, "and clears the outstanding write")
@@ -586,14 +615,14 @@ do
     hip(cam, 10, 0, 0, DT)
     assert_true(#rig_written == count, "an idle rig is not rewritten every frame")
 
-    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0, 1.0, 1.0)
     cam.cached_settings.position_enabled = false
-    cam:applyPosition(0, 0, 0, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(0, 0, 0, DT, 0.0, 1.0, 1.0, 1.0)
     assert_near(rig_written[#rig_written].x, 0, "position off puts the rig back")
     assert_true(not cam.rig_applied, "position off clears the rig's write")
 
     cam.cached_settings.position_enabled = true
-    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(10, 0, 0, DT, 0.0, 1.0, 1.0, 1.0)
     cam.last_head_quat = nil
     cam:suspend()
     assert_near(rig_written[#rig_written].x, 0, "suspend puts the rig back")
@@ -628,7 +657,7 @@ do
             local written, rig_written = stub_cet()
             local cam = bare_camera()
             cam.zoom_factor = zoom
-            cam:applyPosition(10, 0, -40, DT, camera_share, 1.0 - camera_share, 1.0)
+            cam:applyPosition(10, 0, -40, DT, camera_share, 1.0 - camera_share, 1.0, 1.0)
             local label = string.format("zoom %.2f, camera share %.0f", zoom, camera_share)
             assert_near(written[#written].y, 0.30, label .. ": the eye stops at the rear sight", 1e-12)
             assert_near(cam.pos_local.y, 0.30, label .. ": and the aim hook is told so", 1e-12)
@@ -652,17 +681,17 @@ do
     -- it, and a lean back, are never touched.
     local written = stub_cet()
     local cam = bare_camera()
-    cam:applyPosition(0, 0, -40, DT, 0.5, 0.5, 0.5)
+    cam:applyPosition(0, 0, -40, DT, 0.5, 0.5, 0.5, 1.0)
     assert_near(written[#written].y, 0.35, "halfway up, the stop is halfway in", 1e-12)
 
     written = stub_cet()
     cam = bare_camera()
-    cam:applyPosition(0, 0, -20, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(0, 0, -20, DT, 0.0, 1.0, 1.0, 1.0)
     assert_near(written[#written].y, 0.20, "a lean short of the stop passes through", 1e-12)
 
     written = stub_cet()
     cam = bare_camera()
-    cam:applyPosition(0, 0, 40, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(0, 0, 40, DT, 0.0, 1.0, 1.0, 1.0)
     assert_near(written[#written].y, -0.10, "leaning back is bounded by its own limit alone", 1e-12)
 end
 
@@ -681,7 +710,7 @@ do
         local written = stub_cet()
         held = { kind = case.kind, scoped = case.scoped }
         local cam = bare_camera()
-        cam:applyPosition(0, 0, -40, DT, 0.0, 1.0, 1.0)
+        cam:applyPosition(0, 0, -40, DT, 0.0, 1.0, 1.0, 1.0)
         assert_near(written[#written].y, case.stop,
             case.kind .. (case.scoped and " with a scope" or "") .. ": stops at its own sight", 1e-12)
     end
@@ -729,7 +758,7 @@ do
         wall = { p = v3(BONE_AXES.W.x + lean_dir.x * 0.15, BONE_AXES.W.y + lean_dir.y * 0.15,
                         BONE_AXES.W.z + lean_dir.z * 0.15),
                  n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
-        cam:applyPosition(20, 0, 0, DT, shares[1], shares[2], 1.0 - shares[1])
+        cam:applyPosition(20, 0, 0, DT, shares[1], shares[2], 1.0 - shares[1], 1.0)
         local label = string.format("camera %.1f / rig %.1f", shares[1], shares[2])
         assert_near(standoff(eye_after(written, rig_written)), 0.10, label .. ": held a skin off the wall", 1e-9)
         assert_true(cam.lean_clamp:inContact(), label .. ": contact is reported")
@@ -758,7 +787,7 @@ do
     -- or the clamp measures from a point that is already against the wall.
     local written, rig_written = stub_cet()
     local cam = bare_camera()
-    cam:applyPosition(20, 0, 0, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(20, 0, 0, DT, 0.0, 1.0, 1.0, 1.0)
     local held = rig_written[#rig_written]
     assert_near(cam.rig_written.x, held.x, "the rig's offset is remembered in its own frame")
     local lean_dir = to_world(BONE_AXES, v3(-1, 0, 0))
@@ -770,7 +799,7 @@ do
     local rw = to_world(ROOT_AXES, held)
     local saved = BONE_AXES.W
     BONE_AXES.W = v3(saved.x + rw.x, saved.y + rw.y, saved.z + rw.z)
-    cam:applyPosition(20, 0, 0, DT, 0.0, 1.0, 1.0)
+    cam:applyPosition(20, 0, 0, DT, 0.0, 1.0, 1.0, 1.0)
     local eye = eye_after(written, rig_written)
     BONE_AXES.W = saved
     local ex = v3(eye.x - rw.x, eye.y - rw.y, eye.z - rw.z)
@@ -811,7 +840,7 @@ do
                     BONE_AXES.W.z + lean_dir.z * 0.15),
              n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
     cam.cached_settings.position_enabled = true
-    cam:applyPosition(20, 0, 0, DT, 1.0, 0.0, 0.0)
+    cam:applyPosition(20, 0, 0, DT, 1.0, 0.0, 0.0, 1.0)
     assert_true(cam.lean_clamp:inContact(), "a constructed camera clamps the lean")
 end
 

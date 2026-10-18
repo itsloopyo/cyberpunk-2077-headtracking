@@ -24,18 +24,23 @@ assert(bridge.saved.yaw_mode == "local")
 assert(bridge.calls[2].enabled == nil, "Saving yaw must not overwrite the mode")
 local AimMode = require("modules/aim_mode")
 assert(settings:aimMode() == AimMode.SIGHTS_LOCKED, "The aim mode defaults to sights locked")
-local expected_pairs = { { true, true }, { true, false }, { false, false } }
-for step, pair in ipairs(expected_pairs) do
+local expected_steps = { { true, true, false }, { true, false, false }, { false, false, true }, { false, false, false } }
+for step, values in ipairs(expected_steps) do
     local calls = #bridge.calls
     settings:setAimMode(AimMode.next(settings:aimMode()))
     assert(#bridge.calls == calls + 1, "An aim mode step is one save")
     local saved = bridge.calls[#bridge.calls]
-    assert(saved.TrueFreeLook == pair[1] and saved.FreeLookMarker == pair[2],
-        "Aim mode step " .. step .. " saved the wrong pair")
+    assert(saved.TrueFreeLook == values[1] and saved.FreeLookMarker == values[2] and saved.StockSights == values[3],
+        "Aim mode step " .. step .. " saved the wrong values")
     local keys = 0
     for _ in pairs(saved) do keys = keys + 1 end
-    assert(keys == 2, "An aim mode step saves nothing but the pair")
+    assert(keys == 3, "An aim mode step saves nothing but its three settings")
 end
+bridge.saved.StockSights = true
+local stock_restart = Settings.new()
+stock_restart:load()
+assert(stock_restart:aimMode() == AimMode.STOCK_SIGHTS, "Stock sights lost on restart")
+bridge.saved.StockSights = false
 bridge.saved.TrueFreeLook, bridge.saved.FreeLookMarker = true, nil
 local old_free_look = Settings.new()
 old_free_look:load()

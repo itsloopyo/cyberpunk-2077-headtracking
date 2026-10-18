@@ -305,6 +305,9 @@ local ads_fade = nil
 -- Follows the sights alone, whatever the aim mode: the forward stop at the
 -- rear sight and the aim marker both ride it.
 local sights_fade = nil
+-- The share of yaw, pitch and the lean that reaches the view in stock sights:
+-- 1 at the hip and in every other mode, 0 with the sights up.
+local stock_fade = nil
 local aim_marker = nil
 local aim_marker_opacity = 0.0
 
@@ -427,6 +430,7 @@ registerForEvent("onInit", function()
         if not AdsFade then error("AdsFade module failed to load") end
         ads_fade = AdsFade.new()
         sights_fade = AdsFade.new()
+        stock_fade = AdsFade.new()
     end)
 
     runInitStep("nativeUI", function()
@@ -568,18 +572,24 @@ local function onUpdateImpl(deltaTime)
     -- the game's own aim state, and any suppression resets the transition so
     -- the next aim starts clean. In the two free look modes the lean stays on
     -- the camera and the weapon stays put; cycling mid-aim rides the same fade.
+    -- Stock sights hands the lean over as sights locked does while its own
+    -- fade takes yaw, pitch and the lean out of the pose.
     local aiming = state:isAdsActive()
-    local ads_scale = ads_fade:update(aiming and not settings:get("TrueFreeLook"), now)
+    local aim_mode = settings:aimMode()
+    local ads_scale = ads_fade:update(aiming and not AimMode.isFreeLook(aim_mode), now)
     local sights_up = 1.0 - sights_fade:update(aiming, now)
+    local stock_share = stock_fade:update(AimMode.stockSightsEngaged(aim_mode, aiming), now)
     if not tracking_allowed then
         ads_fade:reset()
         sights_fade:reset()
+        stock_fade:reset()
         ads_scale = 1.0
         sights_up = 0.0
+        stock_share = 1.0
     end
     -- The marker is the FPP view's: in the chase camera nothing is aimed down.
     aim_marker_opacity = state:isChaseCameraActive() and 0.0
-        or AimMode.markerOpacity(settings:aimMode(), sights_up)
+        or AimMode.markerOpacity(aim_mode, sights_up)
 
     -- Third-person driving renders from the vehicle chase camera, which ignores
     -- everything written to the player's FPP camera. So the head rotation goes
@@ -673,9 +683,15 @@ local function onUpdateImpl(deltaTime)
     local raw_x, raw_y, raw_z
     if data then raw_x, raw_y, raw_z = data.x or 0, data.y or 0, data.z or 0 end
 
+    -- Stock sights scales the pose before anything reads it, so the zoom, the
+    -- lean clamp, the hand-over, the weapon view, the reticle and the aim hooks
+    -- all work from what is applied. Roll is never scaled. The lean is scaled
+    -- in Camera:applyPosition, after the smoother that fills packet gaps.
     local pose_yaw, pose_pitch, pose_roll = interp_yaw, interp_pitch, interp_roll
+    if pose_yaw ~= nil then
+        pose_yaw, pose_pitch, pose_roll = AimMode.stockPose(stock_share, pose_yaw, pose_pitch, pose_roll)
+    end
     local pose_x, pose_y, pose_z = raw_x, raw_y, raw_z
-
 
     if pose_yaw ~= nil then
         local rot_on = settings:get("enabled") and true or false
@@ -699,7 +715,8 @@ local function onUpdateImpl(deltaTime)
             -- rig stays where the seat puts it, so on the sights the lean
             -- eases out instead.
             local rig_share = mounted and 0.0 or (1.0 - ads_scale)
-            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime, ads_scale, rig_share, sights_up)
+            camera:applyPosition(pose_x, pose_y, pose_z, deltaTime, ads_scale, rig_share, sights_up,
+                stock_share)
             camera:applyWeaponView(mounted)
         end
         perf:recordCameraUpdate()
@@ -904,7 +921,7 @@ end
 -- PageDown here.
 
 -- Insert / Ctrl+Shift+U - Cycle the aim mode: sights locked, free look with a
--- marker, true free look. Saved on each press. Polled natively in
+-- marker, true free look, stock sights. Saved on each press. Polled natively in
 -- ScriptChannel.cpp, like the rest.
 function handleCycleAimMode()
     if hotkeyDebounced("CycleAimMode") then return end

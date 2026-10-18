@@ -79,12 +79,12 @@ function Settings:setMode(rotation, position)
 end
 
 function Settings:aimMode()
-    return AimMode.decode(self:get("TrueFreeLook"), self:get("FreeLookMarker"))
+    return AimMode.decode(self:get("TrueFreeLook"), self:get("FreeLookMarker"), self:get("StockSights"))
 end
 
 function Settings:setAimMode(mode)
-    local free_look, marker = AimMode.encode(mode)
-    return self:apply({ TrueFreeLook = free_look, FreeLookMarker = marker }, true)
+    local free_look, marker, stock = AimMode.encode(mode)
+    return self:apply({ TrueFreeLook = free_look, FreeLookMarker = marker, StockSights = stock }, true)
 end
 
 function Settings:isTrackingEnabled()

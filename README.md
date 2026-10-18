@@ -172,17 +172,18 @@ Two equivalent binding sets, so use whichever your keyboard has. Both sets are a
 
 ### Aiming down sights
 
-Head tracking stays on while you aim. The weapon stays where your mouse or controller points it, so with your head turned it sits off to one side with its sights still lined up, and your rounds land where those sights point. Head movement is scaled to the zoom, so a scope does not magnify it. Leaning in is not scaled: it brings the scene closer by the same distance at any zoom.
+Head tracking stays on while you aim, unless you pick stock sights below. The weapon stays where your mouse or controller points it, so with your head turned it sits off to one side with its sights still lined up, and your rounds land where those sights point. Head movement is scaled to the zoom, so a scope does not magnify it. Leaning in is not scaled: it brings the scene closer by the same distance at any zoom.
 
-`Insert` / `Ctrl+Shift+U` cycles three ways of handling a lean while you aim, and the mod saves the one you pick, so it holds the next time you start the game:
+`Insert` / `Ctrl+Shift+U` cycles four ways of aiming, and the mod saves the one you pick, so it holds the next time you start the game:
 
 1. **Sights locked** (default) - leaning never takes your eye off the sights, and leaning in towards them brings them closer.
 2. **Free look with a marker** - the weapon stays put and your head moves freely around it, so the sights only line up with your head behind them. A small white marker shows where your rounds will land while the sights are up.
 3. **True free look** - the same, with no marker. To place a shot you have to put your head behind the sights, as you would in VR. It is hard.
+4. **Stock sights** - while the sights are up your head stops turning and leaning the view, so the sights sit in the centre as they do without head tracking. Tilting your head still tilts the view. When you lower the weapon the view goes back to where you are looking.
 
 Leaning carries on through the aim. As the sights come up, your arms and weapon move with your head, so the sights stay in front of your eye, and your rounds leave from where your eye is. Lean round a corner with the sights up and you can hit what you can see from there. Handing the lean from the camera to the weapon does not move the view. Leaning in and back moves your eye along the sights while the weapon stays where it is, so leaning in brings the sights closer, and your eye stops short of the rear sight.
 
-With your head off a scope's axis its own reticle is no longer where the round goes. In mode 2 the white marker is.
+With your head off a scope's axis its own reticle is no longer where the round goes. In mode 2 the white marker is. In stock sights the scope is the game's own, and its reticle is where the round goes.
 
 With your head turned, the sights and the centre of a scope still show what the round will hit. While you aim the game draws your arms and weapon at a different magnification from the world, which would otherwise swing them a different distance across the screen than the scene behind them, so the mod turns them together by the difference. The weapon keeps the size the game gives it.
 
@@ -224,6 +225,7 @@ The built-in value of each setting set to `default` below:
 - `PositionEnabled=true`
 - `TrueFreeLook=false`
 - `FreeLookMarker=false`
+- `StockSights=false`
 - `PositionLimitX=0.3`
 - `PositionLimitY=0.2`
 - `PositionLimitYDown=0.2`
@@ -278,6 +280,9 @@ TrueFreeLook=default
 ; true, with TrueFreeLook=true: an aim marker shows where your shot will land while you aim down the sights.
 ; It does nothing while TrueFreeLook is false.
 FreeLookMarker=default
+; true: while you aim down the sights your head stops moving the view, apart from tilting it,
+; so the sights sit in the centre as they do without head tracking. At the hip nothing changes.
+StockSights=default
 ; How far, in metres, leaning left or right can move the view.
 PositionLimitX=default
 ; How far, in metres, raising your head can move the view.
@@ -296,7 +301,8 @@ ToggleKey=default
 CycleTrackingModeKey=default
 ; Switches yaw between the world's up axis and the camera's own (WorldSpaceYaw).
 YawModeKey=default
-; Cycles the aim mode: sights locked, free look with a marker, true free look (TrueFreeLook, FreeLookMarker).
+; Cycles the aim mode: sights locked, free look with a marker, true free look, stock sights
+; (TrueFreeLook, FreeLookMarker, StockSights).
 TrueFreeLookKey=default
 
 [Camera]
@@ -348,6 +354,9 @@ ChaseCameraTracking=true
 
 **I can't see down the sights, they are misaligned.**
 - You are in one of the free look modes and your head is leaned off them. Move your head back behind them, or press `Insert` / `Ctrl+Shift+U` until the toast says sights locked.
+
+**The view swings when I raise or lower the sights.**
+- You are in stock sights with your head turned: the view goes to your aim while the sights are up and back to where you are looking when they come down. Press `Insert` / `Ctrl+Shift+U` for another mode if you want head tracking to carry on through the aim.
 
 **Wrong rotation axis (camera moves the wrong way).**
 - Invert the offending axis in OpenTrack under **Output > Mapping** rather than in the mod. The mod has no inversion setting on purpose.

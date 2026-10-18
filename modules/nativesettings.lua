@@ -7,8 +7,6 @@
 
 local AimMode = require("modules/aim_mode")
 
-local AimMode = require("modules/aim_mode")
-
 local NativeSettingsIntegration = {}
 NativeSettingsIntegration.__index = NativeSettingsIntegration
 
@@ -25,7 +23,7 @@ local ENUM_SETTINGS = {
     },
 }
 
-local AIM_MODE_LABELS = { "Sights locked", "Free look with marker", "True free look" }
+local AIM_MODE_LABELS = { "Sights locked", "Free look with marker", "True free look", "Stock sights" }
 
 local function aimModeIndex(mode)
     for i, candidate in ipairs(AimMode.ORDER) do
@@ -147,8 +145,8 @@ function NativeSettingsIntegration:onSettingChanged(key, new_value)
         self:refreshWidget(self.masterWidgetRef, self.settings:isTrackingEnabled())
     end
 
-    -- The aim mode is a pair of keys behind one selector, as the master is.
-    if key == "TrueFreeLook" or key == "FreeLookMarker" then
+    -- The aim mode is three keys behind one selector, as the master is two.
+    if key == "TrueFreeLook" or key == "FreeLookMarker" or key == "StockSights" then
         self:refreshWidget(self.aimModeWidgetRef, aimModeIndex(self.settings:aimMode()))
         return
     end
@@ -366,7 +364,7 @@ function NativeSettingsIntegration:registerSettings()
     self.aimModeWidgetRef = ns.addSelectorString(
         "/HeadTracking/Position",
         "Aim Mode",
-        "How a lean is handled while you aim down sights. Sights locked: leaning never takes your eye off the sights, and the weapon moves with your head. Free look with marker: the weapon stays where it is and your head moves freely around it, with a small white marker where your rounds will land. True free look: the same with no marker. Hotkey: Insert / Ctrl+Shift+U.",
+        "How a lean is handled while you aim down sights. Sights locked: leaning never takes your eye off the sights, and the weapon moves with your head. Free look with marker: the weapon stays where it is and your head moves freely around it, with a small white marker where your rounds will land. True free look: the same with no marker. Stock sights: while the sights are up your head stops turning and leaning the view, so the sights sit in the centre; tilting your head still tilts it. Hotkey: Insert / Ctrl+Shift+U.",
         AIM_MODE_LABELS,
         aimModeIndex(self.settings:aimMode()),
         1,
