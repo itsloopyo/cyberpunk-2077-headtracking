@@ -1670,8 +1670,8 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, si
     if math.abs(asked_forward) > 0.01 and now - self.forward_last_log >= LEAN_LOG_INTERVAL_S then
         self.forward_last_log = now
         hlog(string.format(
-            "[HeadTracking] lean in: asked=%.3fm after_sight_stop=%.3fm applied=%.3fm sights_up=%.2f zoom=%.4f",
-            asked_forward, stopped_forward, cam_y, sights_up, zoom))
+            "[HeadTracking] lean in: asked=%.3fm after_sight_stop=%.3fm applied=%.3fm sights_up=%.2f zoom=%.4f pose_share=%.2f",
+            asked_forward, stopped_forward, cam_y, sights_up, zoom, pose_share))
     end
 
     local eye_x, eye_y, eye_z = cam_x * camera_share, cam_y, cam_z * camera_share
