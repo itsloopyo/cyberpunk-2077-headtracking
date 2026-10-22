@@ -11,6 +11,7 @@ void LogWarning(const char* fmt, ...);
 
 namespace builds {
 
+extern const BuildProfile kGogProfile_20261019;
 extern const BuildProfile kGogProfile_20250827;
 
 namespace {
@@ -19,12 +20,13 @@ namespace {
 // its build date decides whether we tell the user their game is newer than this
 // mod knows about or older than it supports.
 const BuildProfile* const kKnownProfiles[] = {
+    &kGogProfile_20261019,
     &kGogProfile_20250827,
 };
 
 constexpr size_t kKnownProfileCount = sizeof(kKnownProfiles) / sizeof(kKnownProfiles[0]);
 
-const BuildProfile kNoProfile = { "none", { 0, 0, 0 }, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } };
+const BuildProfile kNoProfile = { "none", { 0, 0, 0 }, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } };
 
 bool         s_selected = false;
 SelectResult s_result   = SelectResult::NoImage;

@@ -80,6 +80,10 @@ struct OffsetTable {
     // from the call whose return address is below.
     uintptr_t CameraTransformFn;
     uintptr_t CrosshairRaycastCameraReturn;
+    // Byte offset of the pose inside the camera CameraPublishFn takes. A struct
+    // offset, but the camera class grew by 0x40 in game 2.5, so it is pinned per
+    // build: it is the `lea r8, [this + N]` handed to the pose builder.
+    uintptr_t CameraPoseOffset;
 };
 
 struct BuildProfile {

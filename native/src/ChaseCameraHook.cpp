@@ -22,10 +22,10 @@ void LogError(const char* fmt, ...);
 namespace {
 
 // The publish takes the camera in RCX. Its pose builder reads the pose from
-// this+0x4C0 - fixed-point world position at +0x00, orientation quaternion at
-// +0x10 - which is where every copy the engine hands out is made FROM.
-constexpr ptrdiff_t kPoseOffset = 0x4C0;
-constexpr ptrdiff_t kQuatOffset = kPoseOffset + 0x10;
+// this+CameraPoseOffset - fixed-point world position at +0x00, orientation
+// quaternion at +0x10 - which is where every copy the engine hands out is made
+// FROM.
+inline ptrdiff_t PoseOffset() { return static_cast<ptrdiff_t>(builds::ActiveProfile().Offsets.CameraPoseOffset); }
 
 // REDengine's WorldPosition: three int32 fixed-point axes, 1/131072 of a metre
 // each, which is what carries Night City's coordinates without losing precision
@@ -225,7 +225,7 @@ void Hook_CameraPublish(void* self) {
         const float delta = std::fabs(head[0]) + std::fabs(head[1]) + std::fabs(head[2]) +
                             std::fabs(1.0f - std::fabs(head[3]));
         __try {
-            uint8_t* pose = reinterpret_cast<uint8_t*>(self) + kPoseOffset;
+            uint8_t* pose = reinterpret_cast<uint8_t*>(self) + PoseOffset();
             float clean[4];
             if (IsUnitish(head) && delta > kNeutralPose && RotatePose(pose, head, clean)) {
                 TranslatePose(pose, clean);
@@ -243,7 +243,7 @@ void Hook_CameraPublish(void* self) {
         // The gate closed with our pose possibly still in the camera (End, a
         // menu, leaving the car). Hand it back once.
         __try {
-            RestoreCleanPose(reinterpret_cast<uint8_t*>(self) + kPoseOffset);
+            RestoreCleanPose(reinterpret_cast<uint8_t*>(self) + PoseOffset());
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             s_faults.fetch_add(1, std::memory_order_relaxed);
             s_mem.quatValid = false;
@@ -254,7 +254,7 @@ void Hook_CameraPublish(void* self) {
     if (self) {
         __try {
             const float* q = reinterpret_cast<const float*>(
-                reinterpret_cast<uint8_t*>(self) + kQuatOffset);
+                reinterpret_cast<uint8_t*>(self) + PoseOffset() + 0x10);
             if (IsUnitish(q)) {
                 s_worldOrientation[0] = q[0]; s_worldOrientation[1] = q[1];
                 s_worldOrientation[2] = q[2]; s_worldOrientation[3] = q[3];
