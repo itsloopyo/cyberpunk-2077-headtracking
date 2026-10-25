@@ -29,7 +29,7 @@ Everything is applied through TweakXL, so removing the mod restores stock behavi
 
 ## Requirements
 
-- [Cyberpunk 2077](https://store.steampowered.com/app/1091500/Cyberpunk_2077/) v2.x (Steam, GOG, or Epic).
+- [Cyberpunk 2077](https://store.steampowered.com/app/1091500/Cyberpunk_2077/) patch 2.5 (Steam, GOG, or Epic).
 - An OpenTrack-compatible head tracker: [OpenTrack](https://github.com/opentrack/opentrack) with a webcam or VR headset, or a phone app that speaks the OpenTrack UDP protocol (see [Phone](#phone) for which apps can send straight to the mod and which need OpenTrack in the chain).
 - Windows 10 or 11, 64-bit.
 
