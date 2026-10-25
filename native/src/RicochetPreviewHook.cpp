@@ -113,8 +113,12 @@ uint64_t __fastcall EffectExecuteHook(void* self, void* context, float value,
     return result;
 }
 
-// The head rotation only ever sits on the FIRST ray of a ricochet chain - the
-// one shot out of the tracked camera. Every later segment's direction is a
+// Every player hitscan round is one of these effects: each bullet, and each
+// shotgun pellet, runs its own top-level execute whose first ray leaves the
+// tracked camera with the bullet preset, so peeling that ray decouples the
+// round from the head. The power weapons' ricochet preview casts the same way.
+// The head rotation only ever sits on the FIRST ray of a chain - the one shot
+// out of the tracked camera. Every later segment's direction is a
 // reflection the engine derived from the previous segment and the surface it
 // hit, so it is already expressed in clean world space. Peeling those too
 // rotates each bounce by the head pose on top of the mirror, which is why a

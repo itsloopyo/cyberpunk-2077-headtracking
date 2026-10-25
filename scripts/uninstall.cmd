@@ -5,16 +5,15 @@
 :: Skeleton from cameraunlock-core/scripts/templates/uninstall.cmd. The CET
 :: mod folder and the RED4ext native plugin are removed by uninstall.ps1; we
 :: resolve GAME_PATH via the shared shim, forward to it, then remove the
-:: files it does not cover (MOD_EXTRA_FILES). CET, RED4ext and TweakXL are
+:: files it does not cover (MOD_EXTRA_FILES). CET and RED4ext are
 :: shared loaders: even with /force we never remove them, since other mods
 :: depend on them.
 :: ============================================
 ::
 :: Deliberately not a thin wrapper over cameraunlock-core's shared uninstall body.
 :: It dispatches to uninstall.ps1, which unmerges the mod's entries from CET's
-:: bindings.json and preserves user settings while removing the Lua payload. CET,
-:: RED4ext and TweakXL are shared frameworks and are left intact even with
-:: /force. See install.cmd for the full reasoning.
+:: bindings.json and preserves user settings while removing the Lua payload. CET
+:: and RED4ext are shared frameworks and are left intact even with /force. See install.cmd for the full reasoning.
 
 :: --- CONFIG BLOCK ---
 set "GAME_ID=cyberpunk-2077"
@@ -23,10 +22,10 @@ set "MOD_INTERNAL_NAME=HeadTracking"
 set "STATE_FILE=.headtracking-state.json"
 set "FRAMEWORK_TYPE=None"
 set "PRESERVE_FILES=bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\CameraUnlock.ini bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\config.json"
-:: Game-relative files deployed outside the CET mod folder. The TweakXL yaml
-:: rewrites the bullet records, so leaving it behind keeps altering gameplay
-:: after an uninstall. No LEGACY_DLLS: no shipped file has ever been renamed
-:: or dropped.
+:: Game-relative files outside the CET mod folder. Releases up to 1.4.6 shipped
+:: this TweakXL yaml, which rewrites the bullet records, so a copy left behind
+:: keeps altering gameplay after an uninstall. No LEGACY_DLLS: no shipped DLL
+:: has ever been renamed or dropped.
 set "MOD_EXTRA_FILES=r6\tweaks\HeadTracking_ProjectileBullets.yaml"
 :: --- END CONFIG BLOCK ---
 
@@ -205,11 +204,11 @@ for %%f in (%MOD_EXTRA_FILES%) do (
     )
 )
 
-:: CET, RED4ext and TweakXL are shared - never removed. /force is parsed for
+:: CET and RED4ext are shared - never removed. /force is parsed for
 :: launcher consistency but does not change behaviour here.
 if "!FORCE_FLAG!"=="1" (
     echo.
-    echo Cyber Engine Tweaks, RED4ext and TweakXL are shared modding frameworks - leaving intact even with /force ^(other mods may depend on them^).
+    echo Cyber Engine Tweaks and RED4ext are shared modding frameworks - leaving intact even with /force ^(other mods may depend on them^).
 )
 
 :: -------- Remove state file --------

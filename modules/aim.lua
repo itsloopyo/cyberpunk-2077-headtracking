@@ -74,8 +74,8 @@ local aim_state = {
     override_registered = false,
     -- Tracking input. Set via Aim:setUdp() from init.lua so the
     udp = nil,
-    -- OFF since the projectile restoration landed. Rounds now launch as
-    -- projectiles and AimProviderHook peels the head rotation out of EVERY one,
+    -- OFF: the native plugin peels the head rotation out of EVERY round
+    -- (RicochetPreviewHook for hitscan rays, AimProviderHook for projectiles),
     -- so this single-shot camera flick is a second compensation on top. It only
     -- fires on the first round of a trigger pull, which is exactly what that
     -- round double-peeled and landed mirrored on the far side of the reticle
@@ -111,7 +111,7 @@ end
 local AIM_COMPENSATION_MIN_DEGREES = 0.1
 
 --- Remove head rotation and translation from an engine-supplied forward vector,
---- so targeting previews and raycasts agree with the projectile aim point.
+--- so targeting previews and raycasts agree with where the round goes.
 ---
 --- Returns the input UNCHANGED (same object) when tracking is off, the player
 --- is in the vehicle chase camera, the vector is missing, or both rotation and

@@ -13,7 +13,6 @@ Cyberpunk 2077.
 |-----------|---------|---------|--------------|
 | Cyber Engine Tweaks | v1.38.0 | MIT | Bundled verbatim in the installer ZIP |
 | RED4ext | v1.31.0 | MIT | Bundled verbatim in the installer ZIP |
-| TweakXL | v1.11.4 | MIT | Bundled verbatim in the installer ZIP |
 | cameraunlock-core | 42b8da25a934cd781f5cf290ffae0ccc7c510399 | MIT | Compiled into `HeadTrackingAim.dll` |
 | OpenTrack | n/a | ISC | Not bundled; UDP protocol interoperability only |
 
@@ -93,43 +92,6 @@ SOFTWARE.
 
 ---
 
-## TweakXL
-
-Vendored at `vendor/tweakxl/`, shipped in the installer ZIP and used as the
-install-time source. Taken from the upstream release asset untouched; the
-upstream licence file ships beside it at `vendor/tweakxl/LICENSE`.
-
-- Upstream: https://github.com/psiberx/cp2077-tweak-xl
-- Version: `v1.11.4`
-- Commit: `f8da6be4fb7b8340d5744d822a85de1400f2cafb`
-- SHA-256: `13033a1f10cb1dbfa534964b22e3405aa33e8f29145f17164d318b021402883f`
-
-```
-MIT License
-
-Copyright (c) 2021 Pavel Siberx
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
----
-
 ## cameraunlock-core
 
 Git submodule at `cameraunlock-core/`, compiled into `HeadTrackingAim.dll`. Our own code,
@@ -185,9 +147,8 @@ reproduced here solely to demonstrate the mod, non-commercially, under CD PROJEK
 fan content guidelines. This project is not affiliated with, endorsed by, or supported by
 CD PROJEKT RED. Cyberpunk 2077 and CD PROJEKT RED are trademarks of CD PROJEKT S.A.
 
-The TweakDB record identifiers in `tweaks/` and the module-relative addresses in
-`native/src/builds/` are factual observations about the shipped game needed for
-interoperability. They contain no game code and no game content.
+The module-relative addresses in `native/src/builds/` are factual observations about
+the shipped game needed for interoperability. They contain no game code and no game content.
 
 ---
 

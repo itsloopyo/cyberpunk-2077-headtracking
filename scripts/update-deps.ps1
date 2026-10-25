@@ -53,16 +53,5 @@ Update-VendoredLoader `
     -AssetPattern '^red4ext-\d.*\.zip$' `
     -LicenseName 'LICENSE.txt' | Out-Null
 
-# TweakXL: applies tweaks/HeadTracking_ProjectileBullets.yaml, which is what makes
-# rounds launch as projectiles so the aim can decouple from the view. Without it
-# the mod loads but automatic fire stays glued to screen centre.
-Update-VendoredLoader `
-    -Name 'tweakxl' `
-    -OutputDir (Join-Path $projectDir 'vendor/tweakxl') `
-    -OutputFileName 'tweakxl.zip' `
-    -Owner 'psiberx' -Repo 'cp2077-tweak-xl' `
-    -VersionPrefix 'v1.11.' `
-    -AssetPattern '^TweakXL-.*\.zip$' | Out-Null
-
 Write-Host ""
-Write-Host "Vendored CET + RED4ext + TweakXL refreshed. Review and commit the changes under vendor/." -ForegroundColor Green
+Write-Host "Vendored CET + RED4ext refreshed. Review and commit the changes under vendor/." -ForegroundColor Green

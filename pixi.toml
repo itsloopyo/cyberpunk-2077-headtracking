@@ -105,8 +105,8 @@ test = { depends-on = ["test-unit"] }
 # no Linux task can produce a correct artifact. The previous wiring pointed
 # `package` / `release` / `validate-release` at scripts/*.sh - a second,
 # drifting copy of the build that emitted a single Lua-only
-# dist/HeadTracking-v<version>.zip with no native DLL, no vendored loaders, no
-# TweakXL yaml and no Nexus ZIP. A wrong artifact is worse than no artifact.
+# dist/HeadTracking-v<version>.zip with no native DLL, no vendored loaders and
+# no Nexus ZIP. A wrong artifact is worse than no artifact.
 build = { cmd = "echo 'build requires Windows (MSVC-built RED4ext plugin)' && exit 1" }
 build-release = { depends-on = ["build"] }
 deploy = { cmd = "echo 'deploy requires Windows (Cyberpunk 2077 is a Windows game)' && exit 1" }
@@ -115,7 +115,7 @@ uninstall = { cmd = "echo 'uninstall requires Windows' && exit 1" }
 validate-release = { cmd = "echo 'validate-release requires Windows' && exit 1" }
 package = { cmd = "echo 'package requires Windows (bundles an MSVC-built RED4ext plugin)' && exit 1" }
 release = { cmd = "echo 'release requires Windows' && exit 1" }
-update-deps = { cmd = "echo 'update-deps requires Windows (CET/RED4ext/TweakXL loaders)' && exit 1" }
+update-deps = { cmd = "echo 'update-deps requires Windows (CET/RED4ext loaders)' && exit 1" }
 check-fingerprint = { cmd = "echo 'check-fingerprint requires Windows (reads the installed game EXE)' && exit 1" }
 
 # Clean build artifacts

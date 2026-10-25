@@ -4,8 +4,8 @@
 :: ============================================
 :: Skeleton from cameraunlock-core/scripts/templates/install.cmd. No CET
 :: template exists: this mod deploys a Lua tree under
-:: bin\x64\plugins\cyber_engine_tweaks\mods\, a RED4ext native plugin and a
-:: TweakXL yaml, and it vendors three loaders (CET, RED4ext, TweakXL). All of
+:: bin\x64\plugins\cyber_engine_tweaks\mods\ and a RED4ext native plugin, and
+:: it vendors two loaders (CET, RED4ext). All of
 :: that lives in deploy.ps1, which we forward to once GAME_PATH is resolved,
 :: so there is no MOD_DLLS list here - deploy.ps1 and launcher-manifest.json
 :: are the authoritative file lists.
@@ -14,7 +14,7 @@
 :: Deliberately not a thin wrapper over cameraunlock-core's shared install bodies.
 :: The real delivery path is launcher-manifest.json (delivery_mode "manifest");
 :: this script is the fallback, and it dispatches to deploy.ps1 because what it
-:: deploys is not a file copy. Three vendored loaders (CET, RED4ext, TweakXL) are
+:: deploys is not a file copy. Two vendored loaders (CET, RED4ext) are
 :: extracted with an installed-version comparison and a replace prompt, the Lua
 :: tree lands under bin\x64\plugins\cyber_engine_tweaks\mods\, and mod
 :: settings are created by the mod at first launch. The script also takes a /upgrade-deps flag and probes the game
@@ -28,7 +28,7 @@ set "MOD_INTERNAL_NAME=HeadTracking"
 set "MOD_VERSION=1.4.6"
 set "MOD_CONTROLS=Controls:&echo   End       - Toggle head tracking on/off&echo   Page Up   - Cycle tracking mode&echo   Page Down - Toggle world/local yaw&echo   Insert    - Cycle aim mode"
 set "STATE_FILE=.headtracking-state.json"
-:: CET, RED4ext and TweakXL are shared modding frameworks that uninstall never
+:: CET and RED4ext are shared modding frameworks that uninstall never
 :: removes, so the state file records "None" - the uninstall template's
 :: framework dispatch has no CET/RED4ext case and must not try to remove one.
 set "FRAMEWORK_TYPE=None"

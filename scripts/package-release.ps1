@@ -195,7 +195,7 @@ if ($hasNative) {
 # (vendor/<slug>/<slug>.zip). The launcher extracts these; the legacy install.cmd
 # path (deploy.ps1) reads them from the same place. The ZIP is the offline,
 # self-contained source of truth - install never reaches the network.
-foreach ($loader in @('cet', 'red4ext', 'tweakxl')) {
+foreach ($loader in @('cet', 'red4ext')) {
     $loaderZip = Join-Path $projectRoot "vendor\$loader\$loader.zip"
     if (-not (Test-Path $loaderZip)) {
         Write-Fail "Missing vendored loader vendor\$loader\$loader.zip - run 'pixi run update-deps' first."
@@ -204,7 +204,7 @@ foreach ($loader in @('cet', 'red4ext', 'tweakxl')) {
     New-Item -ItemType Directory -Path $loaderDest -Force | Out-Null
     Copy-Item -Path $loaderZip -Destination (Join-Path $loaderDest "$loader.zip") -Force
 
-    # LICENSE ships beside the loader zip: CET, RED4ext and TweakXL are all MIT
+    # LICENSE ships beside the loader zip: CET and RED4ext are both MIT
     # and redistributing the binary without the licence text is a licence
     # violation, not a tidiness nit. README.md carries the upstream tag / SHA-256
     # so a user can verify the bytes they were shipped.
@@ -216,15 +216,6 @@ foreach ($loader in @('cet', 'red4ext', 'tweakxl')) {
         Copy-Item -Path $src -Destination (Join-Path $loaderDest $attribution) -Force
     }
 }
-
-# TweakDB tweaks. The projectile restoration lives here and is what makes
-# automatic fire decouple, so a ZIP without it installs a mod that silently
-# reverts to firing at screen centre.
-$tweakSrc = Join-Path $projectRoot "tweaks"
-if (-not (Test-Path $tweakSrc)) {
-    Write-Fail "Missing tweaks/ - the projectile restoration is required for aim decoupling."
-}
-Copy-Item -Path $tweakSrc -Destination (Join-Path $installerStaging "tweaks") -Recurse -Force
 
 # Scripts dir - identical to repo's scripts/ so deploy.ps1 resolves sourceDir correctly.
 $installerScriptsDir = Join-Path $installerStaging "scripts"
@@ -272,16 +263,6 @@ if ($hasNative) {
     $nexusRed4extDir = Join-Path $nexusStaging "red4ext\plugins"
     New-Item -ItemType Directory -Path $nexusRed4extDir -Force | Out-Null
     Copy-Item -Path $nativeDllPath -Destination (Join-Path $nexusRed4extDir "HeadTrackingAim.dll") -Force
-}
-
-# The projectile restoration must ship here too. Nexus users extract to the game
-# root and manage their own loaders, but this tweak is mod content, not a loader:
-# without it automatic fire silently reverts to landing at screen centre, which
-# reads as "the mod is broken" rather than "a file is missing".
-$nexusTweakDir = Join-Path $nexusStaging "r6\tweaks"
-New-Item -ItemType Directory -Path $nexusTweakDir -Force | Out-Null
-Get-ChildItem -Path (Join-Path $projectRoot "tweaks") -Filter *.yaml -File | ForEach-Object {
-    Copy-Item -Path $_.FullName -Destination (Join-Path $nexusTweakDir $_.Name) -Force
 }
 
 # No docs / scripts in the Nexus ZIP - Nexus extracts straight into the

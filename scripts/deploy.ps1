@@ -206,25 +206,16 @@ function Deploy-NativePlugin {
     return $true
 }
 
-function Deploy-Tweaks {
-    param(
-        [string]$SourceDir,
-        [string]$GameDir
-    )
+# Releases up to 1.4.6 shipped this TweakXL yaml, which turns player gunfire
+# into projectiles. Left behind it keeps changing gameplay after an update.
+function Remove-ProjectileTweak {
+    param([string]$GameDir)
 
-    $tweakSource = Join-Path $SourceDir "tweaks"
-    if (-not (Test-Path $tweakSource)) {
-        Write-Fail "tweaks/ not found at $tweakSource - the projectile restoration is missing."
-        return $false
+    $tweak = Join-Path $GameDir "r6\tweaks\HeadTracking_ProjectileBullets.yaml"
+    if (Test-Path -LiteralPath $tweak) {
+        Remove-Item -LiteralPath $tweak -Force
+        Write-Info "Removed the projectile tweak from an earlier release: $tweak"
     }
-
-    $tweakTarget = Join-Path $GameDir "r6\tweaks"
-    New-Item -ItemType Directory -Path $tweakTarget -Force | Out-Null
-    Get-ChildItem -Path $tweakSource -Filter *.yaml -File | ForEach-Object {
-        Copy-Item -Path $_.FullName -Destination (Join-Path $tweakTarget $_.Name) -Force
-        Write-Info "Deployed tweak: $($_.Name)"
-    }
-    return $true
 }
 
 # Version of an installed loader binary, from its Win32 version resource.
@@ -381,11 +372,6 @@ function Deploy-ToGame {
     Install-VendoredLoader -SourceDir $sourceDir -GameDir $GameDir -Slug 'cet' `
         -DetectRelPath 'bin\x64\plugins\cyber_engine_tweaks.asi' -DisplayName 'Cyber Engine Tweaks' | Out-Null
 
-    # TweakXL applies the projectile restoration. Automatic fire cannot decouple
-    # without it, so it is a hard requirement rather than an optional extra.
-    Install-VendoredLoader -SourceDir $sourceDir -GameDir $GameDir -Slug 'tweakxl' `
-        -DetectRelPath 'red4ext\plugins\TweakXL\TweakXL.dll' -DisplayName 'TweakXL' | Out-Null
-
     # Validate CET installation
     $cetDir = Validate-CETInstallation -GameDir $GameDir
     if (-not $cetDir) {
@@ -429,10 +415,10 @@ function Deploy-ToGame {
     Write-Host ""
     Write-Info "Checking for native aim compensation plugin..."
     $nativeDeployed = Deploy-NativePlugin -SourceDir $sourceDir -GameDir $GameDir
-    Deploy-Tweaks -SourceDir $sourceDir -GameDir $GameDir | Out-Null
+    Remove-ProjectileTweak -GameDir $GameDir
 
-    if ($nativeDeployed) { return "CET mod + native plugin + tweaks" }
-    return "CET mod + tweaks (native plugin not built)"
+    if ($nativeDeployed) { return "CET mod + native plugin" }
+    return "CET mod (native plugin not built)"
 }
 
 $outcomes = @{}

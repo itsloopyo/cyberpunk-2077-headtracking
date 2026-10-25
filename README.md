@@ -12,20 +12,7 @@ An unofficial head tracking mod for Cyberpunk 2077 that moves the view with your
 
 ## Gameplay Changes
 
-To decouple your shots from where your head is pointing, the mod switches **player** gunfire to the projectile attacks the game already ships, and uses them permanently rather than only during time dilation. This is a real gameplay change, so it is worth knowing what moves:
-
-- **Rounds have travel time.** At any normal engagement distance you will not notice this, but at long range you lead a moving target slightly.
-- **Bullets are physical objects.** They can be seen in flight, and they interact with the world rather than teleporting to the target.
-- **Tech weapons are untouched.** Weapons that charge through cover keep their own behavior.
-- **NPCs still use hitscan.** Only the player is converted, so there is no added cost from every enemy in a firefight spawning projectiles.
 - **Leaning moves your shots while you aim down sights.** With the sights up, a head lean moves your weapon and the point your rounds leave from, so you can lean out and shoot past cover. At the hip a lean moves only the view, as before.
-- **23 unique or quest weapons stay on hitscan** (MA70, AirDrop variants, Nova Doom Doom, and Saratoga Maelstrom among them) and will not decouple.
-
-Everything is applied through TweakXL, so removing the mod restores stock behavior completely.
-
-## Known Issues
-
-**A few weapons still shoot hitscan.** 23 unique and quest weapons (MA70, the AirDrop variants, Nova Doom Doom and Saratoga Maelstrom among them) use their own attack records and are not converted, so aim stays coupled to your head on those. Every standard weapon is covered.
 
 ## Requirements
 
@@ -48,7 +35,7 @@ Download [Lopari](https://lopari.app), choose **Cyberpunk 2077**, and click
 4. Configure your tracker to send OpenTrack UDP to `127.0.0.1:4242` (see [Setting Up OpenTrack](#setting-up-opentrack)).
 5. Launch Cyberpunk 2077.
 
-The installer never downloads anything: Cyber Engine Tweaks, RED4ext, and TweakXL are all bundled in the ZIP. If you already have one of them it is left alone, unless it is older than the bundled copy, in which case the installer says so and asks whether to replace it. Answering no is fine if you are deliberately holding an older game build.
+The installer never downloads anything: Cyber Engine Tweaks and RED4ext are both bundled in the ZIP. If you already have one of them it is left alone, unless it is older than the bundled copy, in which case the installer says so and asks whether to replace it. Answering no is fine if you are deliberately holding an older game build.
 
 If the installer cannot find your game, point it at the install root explicitly:
 
@@ -64,7 +51,7 @@ uninstall.cmd [GAME_PATH] [/y] [/force]
 ```
 
 - `/y` never prompts. An out-of-date loader is reported and left alone rather than replaced silently.
-- `/upgrade-deps` replaces an out-of-date CET, RED4ext, or TweakXL with the bundled version without asking.
+- `/upgrade-deps` replaces an out-of-date CET or RED4ext with the bundled version without asking.
 
 If your game lives somewhere Windows protects (Epic's default `C:\Program Files\Epic Games\` does), the installer will tell you it has no write access. Right-click `install.cmd` and choose **Run as administrator**.
 
@@ -79,15 +66,13 @@ $env:CYBERPUNK_2077_PATH = "D:\Games\Cyberpunk 2077"
 
 If you would rather place files by hand, or you grabbed the Nexus ZIP (which contains only the deploy tree and no loaders):
 
-1. Install [Cyber Engine Tweaks](https://github.com/maximegmd/CyberEngineTweaks/releases), [RED4ext](https://github.com/WopsS/RED4ext/releases), and [TweakXL](https://github.com/psiberx/cp2077-tweak-xl/releases) into your Cyberpunk 2077 folder. The installer ZIP also carries all three under `vendor/`, so you can extract those into the game root instead. Launch the game once so each loader initializes.
+1. Install [Cyber Engine Tweaks](https://github.com/maximegmd/CyberEngineTweaks/releases) and [RED4ext](https://github.com/WopsS/RED4ext/releases) into your Cyberpunk 2077 folder. The installer ZIP also carries both under `vendor/`, so you can extract those into the game root instead. Launch the game once so each loader initializes.
 2. Copy `init.lua` and the `modules/` directory into:
    `<Cyberpunk 2077>\bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\`
 3. Copy `HeadTrackingAim.dll` into:
    `<Cyberpunk 2077>\red4ext\plugins\`
-4. Copy `HeadTracking_ProjectileBullets.yaml` into:
-   `<Cyberpunk 2077>\r6\tweaks\`
 
-The Nexus ZIP is already laid out in this structure, so extracting it into the Cyberpunk 2077 folder does steps 2 through 4 in one go. Hotkeys need no setup: the keys in [Controls](#controls) are polled by `HeadTrackingAim.dll` and work as soon as the plugin loads.
+The Nexus ZIP is already laid out in this structure, so extracting it into the Cyberpunk 2077 folder does steps 2 and 3 in one go. Hotkeys need no setup: the keys in [Controls](#controls) are polled by `HeadTrackingAim.dll` and work as soon as the plugin loads.
 
 ## Setting Up OpenTrack
 
@@ -326,7 +311,7 @@ ChaseCameraTracking=true
 **Head tracking works but gunfire still follows your head after a game patch.**
 - The native plugin pins a few hooks to addresses derived from one specific game build. On a build it does not recognise it stays dormant rather than writing those hooks into whatever moved into their place, which would crash the game.
 - `<Cyberpunk 2077>\bin\x64\HeadTracking.log` says which case you are in. `[BuildRegistry] matched build profile ...` means the build is recognised. Otherwise it prints the running EXE's fingerprint, every build it knows about, and whether your game is newer than the mod (check the releases page for an update), older (let your store finish updating), or repacked.
-- Head tracking itself, the camera, and projectile aim decoupling do not depend on those hooks and keep working either way.
+- Head tracking itself and the camera do not depend on those hooks and keep working either way.
 
 **Which log to send when you report a problem.**
 - `<Cyberpunk 2077>\bin\x64\HeadTracking.log`. It sits next to `Cyberpunk2077.exe`, starts fresh every time the game launches, and the launch before it is kept alongside as `HeadTracking.prev.log`. Both halves of the mod write to it - the RED4ext plugin and the Cyber Engine Tweaks script. If the game crashed and you have already restarted it, the session you want is the `.prev` one.
@@ -368,11 +353,11 @@ Download the new release ZIP and run `install.cmd` again. Your settings are pres
 
 ## Uninstalling
 
-Run `uninstall.cmd`. This removes the mod's Lua tree under `bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\`, the `HeadTrackingAim.dll` native plugin, and the TweakXL yaml under `r6\tweaks\`, which restores stock hitscan gunfire.
+Run `uninstall.cmd`. This removes the mod's Lua tree under `bin\x64\plugins\cyber_engine_tweaks\mods\HeadTracking\` and the `HeadTrackingAim.dll` native plugin.
 
 It also takes the mod's three hotkeys back out of CET's shared `bindings.json`, leaving every other mod's bindings untouched.
 
-Cyber Engine Tweaks, RED4ext, and TweakXL are shared modding frameworks that your other mods likely depend on, so they are left in place even when you pass `uninstall.cmd /force`. Remove them by hand if you want the game fully vanilla.
+Cyber Engine Tweaks and RED4ext are shared modding frameworks that your other mods likely depend on, so they are left in place even when you pass `uninstall.cmd /force`. Remove them by hand if you want the game fully vanilla.
 
 ## Building from Source
 
@@ -402,7 +387,6 @@ Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICE
 - CD PROJEKT RED for Cyberpunk 2077.
 - [Cyber Engine Tweaks](https://github.com/maximegmd/CyberEngineTweaks) by maximegmd, hosting the Lua mod.
 - [RED4ext](https://github.com/WopsS/RED4ext) and [RED4ext.SDK](https://github.com/WopsS/RED4ext.SDK) by WopsS, loading the native plugin.
-- [TweakXL](https://github.com/psiberx/cp2077-tweak-xl) by psiberx, applying the projectile-bullet record changes.
 - [cp2077-cet-kit](https://github.com/psiberx/cp2077-cet-kit) by psiberx, whose GameUI module set the API convention our own `modules/GameUI.lua` follows (no code is taken from it).
 - [OpenTrack](https://github.com/opentrack/opentrack) for the head-tracking UDP protocol.
 - [Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut, for the in-game crosshair overlay, used through CET.

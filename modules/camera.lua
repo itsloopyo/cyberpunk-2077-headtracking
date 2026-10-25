@@ -443,8 +443,8 @@ end
 
 -- The player's skeleton root. The FPP camera's bone, the arms, the attachment
 -- slots the held weapon sits in and the hit representation all hang off it, so
--- offsetting it carries all of them together, and the projectile start point
--- with them: a round leaves from a fixed offset to the camera wherever the root
+-- offsetting it carries all of them together, and the point a round leaves
+-- from with them: a round leaves from a fixed offset to the camera wherever the root
 -- has moved it.
 local RIG_COMPONENT = "root"
 -- A component sitting on the camera bone at zero local offset and identity
