@@ -38,7 +38,7 @@ Update-VendoredLoader `
     -OutputDir (Join-Path $projectDir 'vendor/cet') `
     -OutputFileName 'cet.zip' `
     -Owner 'maximegmd' -Repo 'CyberEngineTweaks' `
-    -VersionPrefix 'v1.37.' `
+    -VersionPrefix 'v1.38.' `
     -AssetPattern '^cet_.*\.zip$' `
     -LicenseUrl 'https://raw.githubusercontent.com/maximegmd/CyberEngineTweaks/master/LICENSE' | Out-Null
 

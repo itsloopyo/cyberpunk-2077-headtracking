@@ -11,8 +11,8 @@ Cyberpunk 2077.
 
 | Component | Version | Licence | How it ships |
 |-----------|---------|---------|--------------|
-| Cyber Engine Tweaks | v1.37.1 | MIT | Bundled verbatim in the installer ZIP |
-| RED4ext | v1.30.0 | MIT | Bundled verbatim in the installer ZIP |
+| Cyber Engine Tweaks | v1.38.0 | MIT | Bundled verbatim in the installer ZIP |
+| RED4ext | v1.31.0 | MIT | Bundled verbatim in the installer ZIP |
 | TweakXL | v1.11.4 | MIT | Bundled verbatim in the installer ZIP |
 | cameraunlock-core | 42b8da25a934cd781f5cf290ffae0ccc7c510399 | MIT | Compiled into `HeadTrackingAim.dll` |
 | OpenTrack | n/a | ISC | Not bundled; UDP protocol interoperability only |
@@ -26,9 +26,9 @@ install-time source. Taken from the upstream release asset untouched; the
 upstream licence file ships beside it at `vendor/cet/LICENSE`.
 
 - Upstream: https://github.com/maximegmd/CyberEngineTweaks
-- Version: `v1.37.1`
-- Commit: `61bd6214f0f5f8748589c9e476538614a13908c0`
-- SHA-256: `1855017796a27f518199f5b7d7210ef1db7a5c5f0af468c68e04e6e666ad248c`
+- Version: `v1.38.0`
+- Commit: `ed706fb8518712ffedf6b566e52873b257bc49fb`
+- SHA-256: `6da2e91b07d5ea9dd4aa32145b2c2920a976abee481854976e2ae82169b612e1`
 
 ```
 MIT License
@@ -63,9 +63,9 @@ install-time source. Taken from the upstream release asset untouched; the
 upstream licence file ships beside it at `vendor/red4ext/LICENSE`.
 
 - Upstream: https://github.com/WopsS/RED4ext
-- Version: `v1.30.0`
-- Commit: `cf938c2b222f6aee2b456635d67f25ac326bbdd2`
-- SHA-256: `3a72225c9d2c46c99f4a4159d952b9d24366357c2423eb7ea255c84e9e11c0b0`
+- Version: `v1.31.0`
+- Commit: `9f135ac339b00c55a68d06ce7106e960dd82962a`
+- SHA-256: `b9ae4351f547f90af58dfbf7445d45c55cd5ba24fbee27fb16fb5d91e9df621e`
 
 ```
 MIT License
