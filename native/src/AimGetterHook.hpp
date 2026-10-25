@@ -22,3 +22,7 @@ void AimGetterHook_Stop(const RED4ext::v1::Sdk* sdk, RED4ext::v1::PluginHandle h
 void AimGetterHook_Tick();
 bool AimGetterHook_IsActive();
 bool AimGetterHook_CorrectPreviewDirection(float* direction);
+
+#ifdef HEADTRACKING_DEV_INPUT
+float AimGetterHook_DevCamForwardDot(const float* direction);
+#endif

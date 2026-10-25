@@ -34,6 +34,31 @@ thread_local uint32_t s_effectExecuteDepth = 0;
 thread_local uint32_t s_ricochetRaysThisEffect = 0;
 thread_local bool s_correctPhysicalRay = false;
 thread_local bool s_inRicochetRay = false;
+#ifdef HEADTRACKING_DEV_INPUT
+thread_local void* s_devRaySelf = nullptr;
+thread_local void* s_devEffectSelf = nullptr;
+std::atomic<uint64_t> s_devWindowMs{0};
+std::atomic<uint32_t> s_devWindowLines{0};
+bool DevProbeAllowed() {
+    const uint64_t now = GetTickCount64();
+    const uint64_t window = now / 1000;
+    if (s_devWindowMs.exchange(window, std::memory_order_relaxed) != window) {
+        s_devWindowLines.store(0, std::memory_order_relaxed);
+    }
+    return s_devWindowLines.fetch_add(1, std::memory_order_relaxed) < 40;
+}
+uint64_t DevRead64(const void* base, int offset) {
+    uint64_t v = 0;
+    __try { v = *reinterpret_cast<const uint64_t*>(reinterpret_cast<const uint8_t*>(base) + offset); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    return v;
+}
+uintptr_t DevVtableRva(const void* object) {
+    const uint64_t vtable = object ? DevRead64(object, 0) : 0;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    return vtable > base ? static_cast<uintptr_t>(vtable - base) : 0;
+}
+#endif
 
 // One-shot capture of the first ricochet chain that has more than one segment.
 // Segment 1's direction before and after the peel, plus segment 2's direction,
@@ -75,9 +100,16 @@ uint64_t __fastcall EffectExecuteHook(void* self, void* context, float value,
         s_firstRayCaptured = false;
     }
     ++s_effectExecuteDepth;
+#ifdef HEADTRACKING_DEV_INPUT
+    void* const previousEffect = s_devEffectSelf;
+    s_devEffectSelf = self;
+#endif
     const uint64_t result = s_effectExecuteOriginal(self, context, value, arg4,
                                                      arg5);
     --s_effectExecuteDepth;
+#ifdef HEADTRACKING_DEV_INPUT
+    s_devEffectSelf = previousEffect;
+#endif
     return result;
 }
 
@@ -96,14 +128,37 @@ uint64_t __fastcall PhysicalRayExecuteHook(void* self, void* context,
     if (ricochetRay) ++s_ricochetRaysThisEffect;
     s_inRicochetRay = ricochetRay;
     s_correctPhysicalRay = ricochetRay && s_ricochetRaysThisEffect == 1;
+#ifdef HEADTRACKING_DEV_INPUT
+    void* const previousRay = s_devRaySelf;
+    s_devRaySelf = self;
+#endif
     const uint64_t result = s_physicalRayExecuteOriginal(self, context, input);
     s_correctPhysicalRay = previousCorrect;
     s_inRicochetRay = previousRicochet;
+#ifdef HEADTRACKING_DEV_INPUT
+    s_devRaySelf = previousRay;
+#endif
     return result;
 }
 
 void* __fastcall RicochetNormaliseHook(float* input, float* output) {
     void* result = s_normaliseOriginal(input, output);
+#ifdef HEADTRACKING_DEV_INPUT
+    if (output && DevProbeAllowed()) {
+        const void* ray = s_devRaySelf;
+        const uint64_t filter = ray ? DevRead64(ray, 0xC8) : 0;
+        LogInfo("[RayProbe] effect=%p idx=%u fix=%d ray_vt=+0x%llX effect_vt=+0x%llX depth=%u ricochet=%d "
+                "query=%016llX filter=%016llX dir=(%+.4f,%+.4f,%+.4f) camdot=%+.4f lmb=%d",
+                s_devEffectSelf, s_ricochetRaysThisEffect, s_correctPhysicalRay ? 1 : 0,
+                static_cast<unsigned long long>(DevVtableRva(ray)),
+                static_cast<unsigned long long>(DevVtableRva(s_devEffectSelf)),
+                s_effectExecuteDepth, s_inRicochetRay ? 1 : 0,
+                static_cast<unsigned long long>(ray ? DevRead64(ray, 0xD8) : 0),
+                static_cast<unsigned long long>(filter ? DevRead64(reinterpret_cast<const void*>(filter), 0x50) : 0),
+                output[0], output[1], output[2], AimGetterHook_DevCamForwardDot(output),
+                (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? 1 : 0);
+    }
+#endif
     // The call site is shared by every PhysicalRay executor, not just the
     // ricochet ones, so nothing below may run on a ray we did not classify.
     if (!output || !s_inRicochetRay) return result;

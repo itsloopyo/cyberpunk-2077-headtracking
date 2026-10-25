@@ -765,3 +765,16 @@ bool AimGetterHook_CorrectPreviewDirection(float* direction) {
     if (!PeelWorldDirection(direction, head, camWorld)) return false;
     return ApplyPositionToWorldDirection(direction, head, camWorld);
 }
+
+#ifdef HEADTRACKING_DEV_INPUT
+float AimGetterHook_DevCamForwardDot(const float* direction) {
+    float camWorld[4];
+    if (!direction || !ReadCamWorld(camWorld)) return -2.0f;
+    const float fwdLocal[3] = {0.0f, 1.0f, 0.0f};
+    float camFwd[3];
+    RotateVec(camWorld, fwdLocal, camFwd);
+    const float len = std::sqrt(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]);
+    if (!(len > 1e-6f)) return -3.0f;
+    return (direction[0]*camFwd[0] + direction[1]*camFwd[1] + direction[2]*camFwd[2]) / len;
+}
+#endif
