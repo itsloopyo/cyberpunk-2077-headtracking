@@ -281,7 +281,9 @@ function Install-VendoredLoader {
         Write-Host "     An out-of-date loader will not initialise on a current game build," -ForegroundColor Yellow
         Write-Host "     and every mod that depends on it - including this one - stays dark." -ForegroundColor Yellow
 
-        if (-not ($UpgradeLoaders -or $AssumeYes)) {
+        # A launcher runs this with no console on stdin, where Read-Host throws
+        # "Invalid handle"; that run gets the unattended answer.
+        if (-not ($UpgradeLoaders -or $AssumeYes -or [Console]::IsInputRedirected)) {
             $answer = Read-Host "     Replace it with the bundled ${vendored}? [Y/n]"
             if ($answer -and $answer.Trim().ToLower().StartsWith('n')) {
                 Write-Info "Leaving $DisplayName $installed in place at your request"
