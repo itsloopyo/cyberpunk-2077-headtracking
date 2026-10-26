@@ -314,11 +314,11 @@ function BuiltinCrosshair.new(settings, camera)
     -- the game puts them (screen centre). Toggle via DiagShoveHitMarker.
     self._shove_hitmarker = true
 
-    -- Scale factor applied to the in-car bracket offset. A margin unit on the
-    -- DriverCombat bracket canvas is half a screen pixel (the dot's controller
-    -- root is 1:1), so the dot's dx/dy under-moves the brackets by 2x. Tuned
-    -- live to 2.0 via GetMod("HeadTracking").DiagBracketScale(n) and confirmed
-    -- 1:1; the tuner stays exposed in case a different UI scale needs it.
+    -- Scale factor applied to the in-car bracket offset. The dot's root is
+    -- centre-anchored and moves two HUD units per unit of margin; the
+    -- DriverCombat bracket canvas moves one, so the dot's margin under-moves
+    -- the brackets by 2x. Tuned live to 2.0 via
+    -- GetMod("HeadTracking").DiagBracketScale(n) and confirmed 1:1.
     self.bracket_scale = 2.0
 
     -- Smart-weapon target brackets: the pooled widgets we cancel our shove on,
@@ -2414,6 +2414,14 @@ function BuiltinCrosshair:tick(tracking_allowed, mounted)
     self._last_dx = dx
     self._last_dy = dy
     self._stat.ticks_with_offset = self._stat.ticks_with_offset + 1
+    local px_dx, px_dy = dx, dy
+    -- dx/dy are screen pixels, a crosshair root's margin is in HUD units. The
+    -- HUD is laid out at 3840x2160 and scaled to the screen (inverse UI scale
+    -- 1.5 at 2560x1440), and the root is centre-anchored, which moves it two
+    -- units per unit of left margin. Writing pixels was right at 1920x1080
+    -- only: at 2560x1440 the reticle went 1.33x as far as the aim point.
+    local units_per_px = Game.GetUISystem():GetInverseUIScale() * 0.5
+    dx, dy = dx * units_per_px, dy * units_per_px
     self:_writeOffset(dx, dy)
 
     -- Lock-on handling is per-widget now (see _engineDriving / _writeOne /
@@ -2436,7 +2444,7 @@ function BuiltinCrosshair:tick(tracking_allowed, mounted)
     if self._shove_nameplate then self:_writeNameplates(dx, dy) end
     -- Last: _writeHitMarkers raises on a failed widget write, and the reticle
     -- must not stop following the aim because a hit marker went bad.
-    self:_writeHitMarkersAtAim(dx, dy, valid)
+    self:_writeHitMarkersAtAim(px_dx, px_dy, valid)
 end
 
 --- Arm the smart-bracket probe for `seconds` of gameplay. Off by default.

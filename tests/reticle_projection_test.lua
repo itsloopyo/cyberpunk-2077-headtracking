@@ -213,6 +213,29 @@ assert_near(marker_margin.top, 160, "hit marker UI-scaled y")
 assert_near(marker_root_margin.left, 0, "hit marker root reset x")
 assert_near(marker_root_margin.top, 0, "hit marker root reset y")
 
+-- The crosshair root is written in HUD units, the hit marker is handed pixels.
+targeting.GetDefaultCrosshairData = function()
+    return { x = 1, y = 2, z = 3, w = 1 },
+           { x = 0, y = 1, z = 0, w = 0 }
+end
+local crosshair_margin = { left = 0, top = 0 }
+local crosshair_root = {
+    SetMargin = function(_, value) crosshair_margin = value end,
+    GetMargin = function() return crosshair_margin end,
+    GetNumChildren = function() return 0 end,
+}
+local ticking = BuiltinCrosshair.new({}, {})
+ticking.controllers = {
+    { ctrl = { GetRootWidget = function() return crosshair_root end }, class = "CrosshairGameController_Basic" },
+}
+ticking._entries_dirty = true
+ticking.hit_markers = driver.hit_markers
+ticking:tick(true, false)
+assert_near(crosshair_margin.left, 70, "crosshair root margin x is pixels x inverse UI scale / 2")
+assert_near(crosshair_margin.top, 48, "crosshair root margin y is pixels x inverse UI scale / 2")
+assert_near(marker_margin.left, 140, "hit marker still takes pixels x")
+assert_near(marker_margin.top, 96, "hit marker still takes pixels y")
+
 os.clock = saved_clock
 
 print("== reticle projection OK ==")
