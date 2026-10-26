@@ -185,7 +185,7 @@ The outside chase camera tracks your head too. Turn it off with "Chase Camera Tr
 - The near scene follows your head; the distant scene stays fixed on the screen. Third-person driving renders through more than one view, and only one of them currently carries the head rotation.
 - The game's camera motion blur smears the whole world, because it works out how fast static geometry is moving from a camera that has not been rotated. **Turn Motion Blur off** in Graphics.
 
-6DOF translation reaches the chase camera too, by a different route. On foot the offset goes into the first-person camera's local position; here it is published to the native plugin, which shifts the chase camera's own world position by it, turned by the camera's orientation from before the head rotation was composed in, so leaning goes with the vehicle rather than with where your head is pointing. The lean there gets the same 10 cm check against the level, from the chase camera's own position. `position_enabled` switches translation off for both cameras.
+6DOF translation reaches the chase camera too, by a different route. On foot the offset goes into the first-person camera's local position; here it is published to the native plugin, which shifts the chase camera's own world position by it, turned by the camera's orientation from before the head rotation was composed in, so leaning goes with the vehicle rather than with where your head is pointing. The lean there gets the same 10 cm check against the level, from the chase camera's own position. The tracking mode (`Page Up` / `Ctrl+Shift+G`) switches translation off for both cameras.
 
 Head yaw there pans and tilts about the camera's own axes, so it behaves like local yaw mode whichever yaw mode you have selected.
 
@@ -330,9 +330,9 @@ ChaseCameraTracking=true
 - If `HeadTracking.log` shows `Failed to bind UDP port 4242`, another app is holding the port (a second head-tracking mod, or a leftover game process). Close it and tracking comes back on its own within about half a second. The receiver retries the port every 500ms in the background and logs `Bound UDP port 4242` when it gets in, so no game restart is needed.
 
 **Jittery or unstable tracking.**
-- Raise the smoothing parameter that matches your tracker: `remote_smoothing` for a phone or other device on the network, `local_smoothing` for a tracker running on this PC. 0.3 to 0.5 is a heavy but usable setting.
+- Raise the smoothing setting that matches your tracker: `RemoteSmoothing` for a phone or other device on the network, `LocalSmoothing` for a tracker running on this PC. 0.3 to 0.5 is a heavy but usable setting.
 - If a phone tracker is sending straight to port `4242` and it does not filter heavily on-device, relay it through OpenTrack with a low-pass filter instead.
-- High-FPS displays show micro-jitter more readily. `local_smoothing` defaults to 0.0, so if a local tracker looks jittery, raise it.
+- High-FPS displays show micro-jitter more readily. `LocalSmoothing` defaults to 0.0, so if a local tracker looks jittery, raise it.
 
 **The weapon is off to one side when I aim down sights.**
 - Your head is turned: the weapon stays on your aim and you are looking past it. Turn back to it, or move your aim to where you are looking.
