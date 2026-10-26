@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.5.0] - 2026-10-26
+
+### Added
+
+- decouple hitscan gunfire natively and drop TweakXL
+
+### Fixed
+
+- add build profile for game 2.5
+- deploy no longer prompts without a console
+- unknown-build log says gunfire follows the view
+- hip reticle overshot the aim point above 1080p
+
+### Other
+
+- dev: log each PhysicalRay the bullet path casts
+
 ## [1.4.6] - 2026-10-21
 
 ### Added
