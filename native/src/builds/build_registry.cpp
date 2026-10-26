@@ -80,8 +80,8 @@ void LogMismatch(const PeFingerprint& running, SelectResult result) {
     default:
         break;
     }
-    LogWarning("[BuildRegistry] The RVA-pinned hooks stay DORMANT. Head tracking, the view camera and");
-    LogWarning("[BuildRegistry] projectile aim decoupling do not depend on them and still run.");
+    LogWarning("[BuildRegistry] The RVA-pinned hooks stay DORMANT, so gunfire follows the view centre.");
+    LogWarning("[BuildRegistry] Head tracking and the view camera do not depend on them and still run.");
 }
 
 }  // namespace
