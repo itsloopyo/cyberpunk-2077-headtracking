@@ -460,6 +460,15 @@ local CAMERA_BONE_COMPONENT = "EnvTriggerActivator"
 -- filter's nearest hit matched the per-group minimum in all of 144 directions,
 -- at the 7.5us one group costs.
 local LEAN_GROUPS = { "Static", "Terrain", "Dynamic", "Vehicle" }
+-- Seated in a car the eye is inside the car's own chassis hull, so a Vehicle
+-- cast from it hits at zero distance in every direction and the lean is cut to
+-- nothing (measured from a driver's seat: vehicle_chassis at 0.000 m along all
+-- six camera axes). PhotoModeCamera holds the cabin as it is drawn and other
+-- vehicles' bodies, so it stands in for Vehicle while mounted. From the same
+-- seat it hit the side glass 0.485 m left, the windscreen 0.890 m ahead, the
+-- headliner 0.165 m up and the headrest 0.129 m back, and nothing at the eye.
+-- On a bike's seat it hit only the bike 0.223 m below the eye.
+local MOUNTED_LEAN_GROUPS = { "Static", "Terrain", "Dynamic", "PhotoModeCamera" }
 -- A clean eye that moves further than this between two frames has been
 -- teleported or cut to, and the allowance left by the old room's wall goes.
 local LEAN_CUT_DISTANCE = 1.0
@@ -515,18 +524,23 @@ end
 -- Built on first use: QueryFilter is a game type. CET returns AddGroup's out
 -- param as a fresh filter holding that group alone, so the groups are merged by
 -- their masks. Any failure here throws: without the filter there is no clamp.
-local lean_filter = nil
-local function leanFilter()
-    if lean_filter == nil then
-        local f = QueryFilter.ZERO()
-        for i = 1, #LEAN_GROUPS do
-            local g = QueryFilter.AddGroup(cname(LEAN_GROUPS[i]))
+local lean_filters = {}
+local function leanFilter(groups)
+    local f = lean_filters[groups]
+    if f == nil then
+        f = QueryFilter.ZERO()
+        for i = 1, #groups do
+            local g = QueryFilter.AddGroup(cname(groups[i]))
+            local zero = g.mask1 - g.mask1
+            if g.mask1 == zero and g.mask2 == zero then
+                error("collision group " .. groups[i] .. " has no mask bits: the lean clamp would not see it")
+            end
             f.mask1 = or64(f.mask1, g.mask1)
             f.mask2 = or64(f.mask2, g.mask2)
         end
-        lean_filter = f
+        lean_filters[groups] = f
     end
-    return lean_filter
+    return f
 end
 
 local function _callSpatialQueries()
@@ -553,28 +567,31 @@ end
 -- Reused across casts: the raycast takes them by value.
 local cast_from, cast_to = nil, nil
 
---- The engine's line cast for the lean sweep: nearest hit over LEAN_GROUPS.
-local function leanCast(sx, sy, sz, dx, dy, dz, length)
-    local okS, sq = pcall(_callSpatialQueries)
-    if not okS or not sq then return false end
-    if cast_from == nil then
-        cast_from = Vector4.new(0, 0, 0, 1.0)
-        cast_to = Vector4.new(0, 0, 0, 1.0)
+--- The engine's line cast for the lean sweep: nearest hit over these groups.
+local function leanCast(groups)
+    return function(sx, sy, sz, dx, dy, dz, length)
+        local okS, sq = pcall(_callSpatialQueries)
+        if not okS or not sq then return false end
+        if cast_from == nil then
+            cast_from = Vector4.new(0, 0, 0, 1.0)
+            cast_to = Vector4.new(0, 0, 0, 1.0)
+        end
+        cast_from.x, cast_from.y, cast_from.z = sx, sy, sz
+        cast_to.x, cast_to.y, cast_to.z = sx + dx * length, sy + dy * length, sz + dz * length
+        local ok, hit, res = pcall(_callRaycast, sq, cast_from, cast_to, leanFilter(groups))
+        if not ok then return false end
+        if not hit then return true, false, 0, 0, 0, 0 end
+        local p, n = res.position, res.normal
+        local along = (p.x - sx) * dx + (p.y - sy) * dy + (p.z - sz) * dz
+        return true, true, along, n.x, n.y, n.z
     end
-    cast_from.x, cast_from.y, cast_from.z = sx, sy, sz
-    cast_to.x, cast_to.y, cast_to.z = sx + dx * length, sy + dy * length, sz + dz * length
-    local ok, hit, res = pcall(_callRaycast, sq, cast_from, cast_to, leanFilter())
-    if not ok then return false end
-    if not hit then return true, false, 0, 0, 0, 0 end
-    local p, n = res.position, res.normal
-    local along = (p.x - sx) * dx + (p.y - sy) * dy + (p.z - sz) * dz
-    return true, true, along, n.x, n.y, n.z
 end
 
 --- The engine half of the lean clamp (modules/lean_clamp.lua owns the policy):
 --- a sphere of the skin's radius swept from the clean eye along the lean, out
 --- of line casts (modules/lean_line_sweep.lua).
-local leanQuery = LeanLineSweep.query(leanCast, LEAN_SKIN)
+local leanQuery = LeanLineSweep.query(leanCast(LEAN_GROUPS), LEAN_SKIN)
+local mountedLeanQuery = LeanLineSweep.query(leanCast(MOUNTED_LEAN_GROUPS), LEAN_SKIN)
 
 local function _readZoomTerms(cam)
     return cam.zoom, cam.zoomOverrideWeight, cam.zoomOverrideValue
@@ -1120,7 +1137,8 @@ end
 
 --- Cut a lean (x, y, z, in the camera bone's frame) down to what the level
 --- leaves room for, measured from the clean eye. Returns the scale to apply.
-function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime)
+--- @param mounted boolean Seated in a vehicle, which then bounds the lean by its cabin
+function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime, mounted)
     local rig_world = axesToWorld(rig_m, self.rig_shift.x, self.rig_shift.y, self.rig_shift.z)
     local eye = { x = bone_m.W.x - rig_world.x, y = bone_m.W.y - rig_world.y, z = bone_m.W.z - rig_world.z }
     -- The bone's axes carry the weapon turn the rig took last frame; the lean
@@ -1130,12 +1148,12 @@ function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime)
         local d = WeaponView.qrot(WeaponView.qconj(turn), { x = x, y = y, z = z })
         x, y, z = d.x, d.y, d.z
     end
-    return self:_clampAt(eye, axesToWorld(bone_m, x, y, z), deltaTime)
+    return self:_clampAt(eye, axesToWorld(bone_m, x, y, z), deltaTime, mounted)
 end
 
 --- Cut a world-space lean `desired` from the clean eye `eye` down to what the
 --- level leaves room for. Returns the scale to apply to the lean.
-function Camera:_clampAt(eye, desired, deltaTime)
+function Camera:_clampAt(eye, desired, deltaTime, mounted)
     local last = self.lean_last_eye
     if last then
         local dx, dy, dz = eye.x - last.x, eye.y - last.y, eye.z - last.z
@@ -1146,7 +1164,7 @@ function Camera:_clampAt(eye, desired, deltaTime)
     self.lean_last_eye = eye
 
     local want = math.sqrt(dot3(desired, desired))
-    local out = self.lean_clamp:apply(eye, desired, deltaTime, leanQuery)
+    local out = self.lean_clamp:apply(eye, desired, deltaTime, mounted and mountedLeanQuery or leanQuery)
     local got = math.sqrt(dot3(out, out))
     local scale = want > 0 and got / want or 1.0
 
@@ -1156,8 +1174,8 @@ function Camera:_clampAt(eye, desired, deltaTime)
     if contact ~= self.lean_was_contact or failed ~= self.lean_was_failed
             or (want > 0.01 and now - self.lean_last_log >= LEAN_LOG_INTERVAL_S) then
         hlog(string.format(
-            "[HeadTracking] lean clamp: contact=%s query_failed=%s asked=%.3fm allowed=%.3fm",
-            tostring(contact), tostring(failed), want, got))
+            "[HeadTracking] lean clamp: contact=%s query_failed=%s asked=%.3fm allowed=%.3fm mounted=%s",
+            tostring(contact), tostring(failed), want, got, mounted and "true" or "false"))
         self.lean_was_contact = contact
         self.lean_was_failed = failed
         self.lean_last_log = now
@@ -1592,7 +1610,8 @@ end
 --- @param rig_share number Fraction of the lateral lean carried by the rig root
 --- @param sights_up number 0 at the hip, 1 with the sights up
 --- @param pose_share number Share of the whole lean that reaches the view: 1, or the stock sights fade
-function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, sights_up, pose_share)
+--- @param mounted boolean Seated in a vehicle
+function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, sights_up, pose_share, mounted)
     local c = self.cached_settings
     if not c.position_enabled then
         if self.pos_applied or self.rig_applied then
@@ -1663,7 +1682,7 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, si
     self._rig_missing_logged = false
     local rig_m = rig:GetLocalToWorld()
     local bone_m = bone:GetLocalToWorld()
-    local room = self:_clampLean(bone_m, rig_m, cam_x, cam_y, cam_z, deltaTime)
+    local room = self:_clampLean(bone_m, rig_m, cam_x, cam_y, cam_z, deltaTime, mounted)
     cam_x, cam_y, cam_z = cam_x * room, cam_y * room, cam_z * room
 
     local now = os.clock()
@@ -1750,7 +1769,7 @@ function Camera:applyChaseCamPosition(rx, ry, rz, deltaTime)
     end
     self._chase_pose_missing_logged = false
     local wx, wy, wz = quatRotate(qi, qj, qk, qr, cam_x, cam_y, cam_z)
-    local room = self:_clampAt({ x = px, y = py, z = pz }, { x = wx, y = wy, z = wz }, deltaTime)
+    local room = self:_clampAt({ x = px, y = py, z = pz }, { x = wx, y = wy, z = wz }, deltaTime, false)
 
     self.pos_local.x = cam_x * room
     self.pos_local.y = cam_y * room

@@ -716,7 +716,7 @@ local function onUpdateImpl(deltaTime)
             -- eases out instead.
             local rig_share = mounted and 0.0 or (1.0 - ads_scale)
             camera:applyPosition(pose_x, pose_y, pose_z, deltaTime, ads_scale, rig_share, sights_up,
-                stock_share)
+                stock_share, mounted)
             camera:applyWeaponView(mounted)
         end
         perf:recordCameraUpdate()

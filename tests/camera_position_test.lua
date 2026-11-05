@@ -331,12 +331,22 @@ end
 --- The level, as the raycast stub sees it: nil for open space, or a wall plane
 --- given by a point on it and its normal. Every group answers the same.
 local wall = nil
+-- A vehicle's chassis hull around the eye, as the eye seated in it sees it: the
+-- Vehicle group answers at zero distance in every direction.
+local hull = false
 local raycasts = 0
+-- The groups in the last cast's filter, by their mask2 bits.
+local last_mask = nil
 -- The chase camera's clean pose as the native hook publishes it, or nil for
 -- none published yet.
 local chase_pose = nil
 -- The weapon in hand: its item type, and whether it carries a scope.
 local held = nil
+
+-- Static | Terrain | Dynamic | Vehicle on foot; PhotoModeCamera in place of
+-- Vehicle when seated in one.
+local ON_FOOT_MASK = 4 + 128 + 8 + 16
+local MOUNTED_MASK = 4 + 128 + 8 + 134217728
 
 local function raycast(from, to)
     raycasts = raycasts + 1
@@ -352,7 +362,9 @@ end
 
 local function stub_cet()
     wall = nil
+    hull = false
     raycasts = 0
+    last_mask = nil
     chase_pose = { p = v3(100, 200, 10), q = { i = 0, j = 0, k = 0, r = 1 } }
     held = { kind = "Wea_Handgun", scoped = false }
     GameObject = {
@@ -389,7 +401,7 @@ local function stub_cet()
             return assert(by_name[name], "no stub component " .. tostring(name))
         end,
     }
-    local group_bits = { Static = 4, Terrain = 128, Dynamic = 8, Vehicle = 16 }
+    local group_bits = { Static = 4, Terrain = 128, Dynamic = 8, Vehicle = 16, PhotoModeCamera = 134217728 }
     QueryFilter = {
         ZERO = function() return { mask1 = 0, mask2 = 0 } end,
         AddGroup = function(name)
@@ -407,7 +419,13 @@ local function stub_cet()
         GetSpatialQueriesSystem = function()
             return {
                 SyncRaycastByQueryFilter = function(_, from, to, filter)
-                    assert(filter.mask2 == 4 + 128 + 8 + 16, "the lean casts against all four groups at once")
+                    assert(filter.mask2 == ON_FOOT_MASK or filter.mask2 == MOUNTED_MASK,
+                        "the lean casts one merged filter, got mask2 " .. tostring(filter.mask2))
+                    last_mask = filter.mask2
+                    if hull and filter.mask2 % 32 >= 16 then
+                        raycasts = raycasts + 1
+                        return true, { position = v3(from.x, from.y, from.z), normal = v3(0, 0, 1) }
+                    end
                     return raycast(from, to)
                 end,
             }
@@ -822,6 +840,54 @@ do
     hip(cam, 20, 0, 0, DT)
     BONE_AXES.W = saved
     assert_near(written[#written].x, -0.20, "the first frame after a teleport takes the full lean")
+end
+
+do
+    -- Seated in a car the eye is inside the car's own chassis hull, and a cast
+    -- from it in the Vehicle group hits at zero distance whichever way it goes.
+    -- The on-foot filter casts Vehicle (a parked car beside the player is a
+    -- wall), so with the hull at the eye it cuts the lean to nothing: the
+    -- rotation-only first-person driving players saw before the mounted filter.
+    local lean_dir = to_world(BONE_AXES, v3(-1, 0, 0))
+    local function glass()
+        return { p = v3(BONE_AXES.W.x + lean_dir.x * 0.485, BONE_AXES.W.y + lean_dir.y * 0.485,
+                        BONE_AXES.W.z + lean_dir.z * 0.485),
+                 n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
+    end
+
+    local written = stub_cet()
+    local cam = bare_camera()
+    hull = true
+    cam:applyPosition(20, 0, 0, DT, 1.0, 0.0, 0.0, 1.0, false)
+    assert_true(last_mask == ON_FOOT_MASK, "on foot the lean casts against Vehicle")
+    assert_near(written[#written].x, 0, "a hull at the eye stops the lean dead")
+
+    -- Mounted, the cabin bounds the lean instead: the side glass measured
+    -- 0.485 m left of a driver's eye, so a 0.20 m lean is untouched.
+    written = stub_cet()
+    cam = bare_camera()
+    hull = true
+    wall = glass()
+    cam:applyPosition(20, 0, 0, DT, 1.0, 0.0, 0.0, 1.0, true)
+    assert_true(last_mask == MOUNTED_MASK, "mounted, PhotoModeCamera stands in for Vehicle")
+    assert_near(written[#written].x, -0.20, "mounted, the lean reaches the camera")
+    assert_true(not cam.lean_clamp:inContact(), "and nothing is in the way")
+
+    -- And the glass still stops it: a lean past it holds the eye a skin off.
+    written = stub_cet()
+    cam = bare_camera({ position_limit_x = 0.60 })
+    hull = true
+    wall = glass()
+    cam:applyPosition(55, 0, 0, DT, 1.0, 0.0, 0.0, 1.0, true)
+    assert_near(standoff(eye_after(written)), 0.10, "mounted, the side glass holds the eye a skin off", 1e-9)
+    assert_true(cam.lean_clamp:inContact(), "contact with the glass is reported")
+
+    -- The chase camera's eye is outside the car, where Vehicle is a wall again.
+    written = stub_cet()
+    cam = bare_camera()
+    cam:applyPosition(20, 0, 0, DT, 1.0, 0.0, 0.0, 1.0, true)
+    cam:applyChaseCamPosition(-20, 0, 0, DT)
+    assert_true(last_mask == ON_FOOT_MASK, "the chase camera keeps the Vehicle filter while mounted")
 end
 
 do
