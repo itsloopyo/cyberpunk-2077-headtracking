@@ -372,6 +372,14 @@ function Camera.new(settings)
     self.view_last_log = -WEAPON_VIEW_LOG_INTERVAL_S
 
     self.lean_clamp = LeanClamp.new(LEAN_SKIN, LEAN_RELEASE_SMOOTHING)
+    self.lean_axis_clamps = {
+        LeanClamp.new(LEAN_SKIN, LEAN_RELEASE_SMOOTHING),
+        LeanClamp.new(LEAN_SKIN, LEAN_RELEASE_SMOOTHING),
+        LeanClamp.new(LEAN_SKIN, LEAN_RELEASE_SMOOTHING),
+    }
+    self.lean_split = false
+    self.lean_split_clear_s = 0
+    self.lean_contact = false
     self.lean_last_eye = nil
     self.lean_was_contact = false
     self.lean_was_failed = false
@@ -472,6 +480,9 @@ local MOUNTED_LEAN_GROUPS = { "Static", "Terrain", "Dynamic", "PhotoModeCamera" 
 -- A clean eye that moves further than this between two frames has been
 -- teleported or cut to, and the allowance left by the old room's wall goes.
 local LEAN_CUT_DISTANCE = 1.0
+-- How long the per-axis clamp has to see nothing in the way before the lean goes
+-- back to one sweep.
+local LEAN_SPLIT_HOLD_S = 0.5
 -- Wall-clock seconds between clamp samples in the log while a lean is held.
 local LEAN_LOG_INTERVAL_S = 10.0
 
@@ -1109,7 +1120,7 @@ end
 function Camera:_clearPositionState()
     self.pos_local.x, self.pos_local.y, self.pos_local.z = 0, 0, 0
     self.rig_local.x, self.rig_local.y, self.rig_local.z = 0, 0, 0
-    self.lean_clamp:reset()
+    self:_resetLeanClamps()
     self.lean_last_eye = nil
     self.pos_smooth.x, self.pos_smooth.y, self.pos_smooth.z = 0, 0, 0
     self.pos_raw.x, self.pos_raw.y, self.pos_raw.z = 0, 0, 0
@@ -1136,7 +1147,8 @@ function Camera:_releaseRig(player)
 end
 
 --- Cut a lean (x, y, z, in the camera bone's frame) down to what the level
---- leaves room for, measured from the clean eye. Returns the scale to apply.
+--- leaves room for, measured from the clean eye. Returns the scale to apply to
+--- each of the three components.
 --- @param mounted boolean Seated in a vehicle, which then bounds the lean by its cabin
 function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime, mounted)
     local rig_world = axesToWorld(rig_m, self.rig_shift.x, self.rig_shift.y, self.rig_shift.z)
@@ -1144,43 +1156,110 @@ function Camera:_clampLean(bone_m, rig_m, x, y, z, deltaTime, mounted)
     -- The bone's axes carry the weapon turn the rig took last frame; the lean
     -- is measured in the bone's frame without it.
     local turn = self.view_turn
-    if turn then
-        local d = WeaponView.qrot(WeaponView.qconj(turn), { x = x, y = y, z = z })
-        x, y, z = d.x, d.y, d.z
+    local function axis(ax, ay, az)
+        local d = { x = ax, y = ay, z = az }
+        if turn then d = WeaponView.qrot(WeaponView.qconj(turn), d) end
+        return axesToWorld(bone_m, d.x, d.y, d.z)
     end
-    return self:_clampAt(eye, axesToWorld(bone_m, x, y, z), deltaTime, mounted)
+    return self:_clampAt(eye, { axis(1, 0, 0), axis(0, 1, 0), axis(0, 0, 1) }, x, y, z, deltaTime, mounted)
 end
 
---- Cut a world-space lean `desired` from the clean eye `eye` down to what the
---- level leaves room for. Returns the scale to apply to the lean.
-function Camera:_clampAt(eye, desired, deltaTime, mounted)
+function Camera:_resetLeanClamps()
+    self.lean_clamp:reset()
+    for i = 1, 3 do self.lean_axis_clamps[i]:reset() end
+    self.lean_split = false
+    self.lean_split_clear_s = 0
+    self.lean_contact = false
+end
+
+--- Cut a lean from the clean eye `eye` down to what the level leaves room for.
+--- The lean is x, y, z along the three world unit vectors in `axes`. Returns the
+--- scale to apply to each component.
+function Camera:_clampAt(eye, axes, x, y, z, deltaTime, mounted)
     local last = self.lean_last_eye
     if last then
         local dx, dy, dz = eye.x - last.x, eye.y - last.y, eye.z - last.z
         if dx * dx + dy * dy + dz * dz > LEAN_CUT_DISTANCE * LEAN_CUT_DISTANCE then
-            self.lean_clamp:reset()
+            self:_resetLeanClamps()
         end
     end
     self.lean_last_eye = eye
 
+    local query = mounted and mountedLeanQuery or leanQuery
+    local comps = { x, y, z }
+    local desired = { x = 0, y = 0, z = 0 }
+    for i = 1, 3 do
+        local a, c = axes[i], comps[i]
+        desired.x, desired.y, desired.z = desired.x + a.x * c, desired.y + a.y * c, desired.z + a.z * c
+    end
     local want = math.sqrt(dot3(desired, desired))
-    local out = self.lean_clamp:apply(eye, desired, deltaTime, mounted and mountedLeanQuery or leanQuery)
-    local got = math.sqrt(dot3(out, out))
-    local scale = want > 0 and got / want or 1.0
+    local scales = { 1.0, 1.0, 1.0 }
+    local got, contact, failed
 
-    local contact = self.lean_clamp:inContact()
-    local failed = self.lean_clamp:lastQueryFailed()
+    if not self.lean_split then
+        local out = self.lean_clamp:apply(eye, desired, deltaTime, query)
+        contact = self.lean_clamp:inContact()
+        failed = self.lean_clamp:lastQueryFailed()
+        got = math.sqrt(dot3(out, out))
+        if contact then
+            -- One factor on the whole lean lets a blocked axis take the free ones
+            -- down with it: seated in a car with the head resting up and back,
+            -- the headliner and headrest cut a sideways lean to nothing. So the
+            -- lean goes one axis at a time instead, each leg swept from where
+            -- the last one stopped, which keeps the whole path the eye takes
+            -- clear and leaves each axis the room it has.
+            self.lean_split = true
+            self.lean_clamp:reset()
+        end
+    end
+
+    if self.lean_split then
+        local p = { x = eye.x, y = eye.y, z = eye.z }
+        contact, failed = false, false
+        for i = 1, 3 do
+            local a, c = axes[i], comps[i]
+            local clamp = self.lean_axis_clamps[i]
+            local leg = { x = a.x * c, y = a.y * c, z = a.z * c }
+            local out = clamp:apply(p, leg, deltaTime, query)
+            local leg_len = math.sqrt(dot3(leg, leg))
+            if leg_len > 0 then scales[i] = math.sqrt(dot3(out, out)) / leg_len end
+            p = { x = p.x + out.x, y = p.y + out.y, z = p.z + out.z }
+            contact = contact or clamp:inContact()
+            failed = failed or clamp:lastQueryFailed()
+        end
+        local moved = { x = p.x - eye.x, y = p.y - eye.y, z = p.z - eye.z }
+        got = math.sqrt(dot3(moved, moved))
+        -- Back to one sweep only once nothing has been in the way for a while:
+        -- a diagonal that grazes something the axis path misses would otherwise
+        -- flip the mode every frame and pay for four sweeps each time.
+        if contact then
+            self.lean_split_clear_s = 0
+        else
+            self.lean_split_clear_s = self.lean_split_clear_s + deltaTime
+            if self.lean_split_clear_s >= LEAN_SPLIT_HOLD_S then
+                self:_resetLeanClamps()
+            end
+        end
+    end
+
     local now = os.clock()
     if contact ~= self.lean_was_contact or failed ~= self.lean_was_failed
             or (want > 0.01 and now - self.lean_last_log >= LEAN_LOG_INTERVAL_S) then
         hlog(string.format(
-            "[HeadTracking] lean clamp: contact=%s query_failed=%s asked=%.3fm allowed=%.3fm mounted=%s",
-            tostring(contact), tostring(failed), want, got, mounted and "true" or "false"))
+            "[HeadTracking] lean clamp: contact=%s query_failed=%s asked=%.3fm allowed=%.3fm per_axis=%.2f/%.2f/%.2f split=%s mounted=%s",
+            tostring(contact), tostring(failed), want, got, scales[1], scales[2], scales[3],
+            tostring(self.lean_split), mounted and "true" or "false"))
         self.lean_was_contact = contact
         self.lean_was_failed = failed
         self.lean_last_log = now
     end
-    return scale
+    self.lean_contact = contact
+    return scales[1], scales[2], scales[3]
+end
+
+--- True when the last frame's lean was held short of what the tracker asked.
+function Camera:leanInContact()
+    return self.lean_contact == true
 end
 
 --- The camera's local orientation as a plain quaternion with the counter-turn
@@ -1682,8 +1761,13 @@ function Camera:applyPosition(rx, ry, rz, deltaTime, camera_share, rig_share, si
     self._rig_missing_logged = false
     local rig_m = rig:GetLocalToWorld()
     local bone_m = bone:GetLocalToWorld()
-    local room = self:_clampLean(bone_m, rig_m, cam_x, cam_y, cam_z, deltaTime, mounted)
-    cam_x, cam_y, cam_z = cam_x * room, cam_y * room, cam_z * room
+    -- The sweep has to see the lean the eye actually takes. Mounted with the
+    -- sights up the shares add to less than one, and a leg swept at the whole
+    -- sideways lean says nothing about the path at a part of it.
+    local carried = camera_share + rig_share
+    local room_x, room_y, room_z = self:_clampLean(bone_m, rig_m, cam_x * carried, cam_y, cam_z * carried,
+        deltaTime, mounted)
+    cam_x, cam_y, cam_z = cam_x * room_x, cam_y * room_y, cam_z * room_z
 
     local now = os.clock()
     if math.abs(asked_forward) > 0.01 and now - self.forward_last_log >= LEAN_LOG_INTERVAL_S then
@@ -1768,12 +1852,16 @@ function Camera:applyChaseCamPosition(rx, ry, rz, deltaTime)
         return
     end
     self._chase_pose_missing_logged = false
-    local wx, wy, wz = quatRotate(qi, qj, qk, qr, cam_x, cam_y, cam_z)
-    local room = self:_clampAt({ x = px, y = py, z = pz }, { x = wx, y = wy, z = wz }, deltaTime, false)
+    local function axis(ax, ay, az)
+        local wx, wy, wz = quatRotate(qi, qj, qk, qr, ax, ay, az)
+        return { x = wx, y = wy, z = wz }
+    end
+    local room_x, room_y, room_z = self:_clampAt({ x = px, y = py, z = pz },
+        { axis(1, 0, 0), axis(0, 1, 0), axis(0, 0, 1) }, cam_x, cam_y, cam_z, deltaTime, false)
 
-    self.pos_local.x = cam_x * room
-    self.pos_local.y = cam_y * room
-    self.pos_local.z = cam_z * room
+    self.pos_local.x = cam_x * room_x
+    self.pos_local.y = cam_y * room_y
+    self.pos_local.z = cam_z * room_z
 end
 
 function Camera:getAppliedPosition()

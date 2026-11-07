@@ -60,6 +60,9 @@ local function bare_camera(overrides)
     cam.rig_applied = false
     cam.rig_written = { x = 0, y = 0, z = 0 }
     cam.lean_clamp = LeanClamp.new(0.10, 0.9)
+    cam.lean_axis_clamps = { LeanClamp.new(0.10, 0.9), LeanClamp.new(0.10, 0.9), LeanClamp.new(0.10, 0.9) }
+    cam.lean_split = false
+    cam.lean_split_clear_s = 0
     cam.lean_last_eye = nil
     cam.lean_was_contact = false
     cam.lean_was_failed = false
@@ -519,7 +522,7 @@ do
     wall = { p = v3(100, 200.15, 10), n = v3(0, -1, 0) }
     cam:applyChaseCamPosition(-20, 0, 0, DT)
     assert_near(cam.pos_local.x, 0.05, "held a skin off a wall along the camera's own right", 1e-9)
-    assert_true(cam.lean_clamp:inContact(), "contact is reported")
+    assert_true(cam:leanInContact(), "contact is reported")
 
     wall = nil
     chase_pose = nil
@@ -763,7 +766,7 @@ do
     hip(cam, 20, 0, 0, DT)
     assert_near(written[#written].x, -0.20, "open space leaves the lean alone")
     assert_true(raycasts > 0, "the level was queried")
-    assert_true(not cam.lean_clamp:inContact(), "and no contact is reported")
+    assert_true(not cam:leanInContact(), "and no contact is reported")
 end
 
 do
@@ -779,7 +782,7 @@ do
         cam:applyPosition(20, 0, 0, DT, shares[1], shares[2], 1.0 - shares[1], 1.0)
         local label = string.format("camera %.1f / rig %.1f", shares[1], shares[2])
         assert_near(standoff(eye_after(written, rig_written)), 0.10, label .. ": held a skin off the wall", 1e-9)
-        assert_true(cam.lean_clamp:inContact(), label .. ": contact is reported")
+        assert_true(cam:leanInContact(), label .. ": contact is reported")
     end
 end
 
@@ -833,7 +836,7 @@ do
                     BONE_AXES.W.z + lean_dir.z * 0.15),
              n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
     hip(cam, 20, 0, 0, DT)
-    assert_true(cam.lean_clamp:inContact(), "held off the wall before the teleport")
+    assert_true(cam:leanInContact(), "held off the wall before the teleport")
     wall = nil
     local saved = BONE_AXES.W
     BONE_AXES.W = v3(saved.x + 50, saved.y, saved.z)
@@ -871,7 +874,7 @@ do
     cam:applyPosition(20, 0, 0, DT, 1.0, 0.0, 0.0, 1.0, true)
     assert_true(last_mask == MOUNTED_MASK, "mounted, PhotoModeCamera stands in for Vehicle")
     assert_near(written[#written].x, -0.20, "mounted, the lean reaches the camera")
-    assert_true(not cam.lean_clamp:inContact(), "and nothing is in the way")
+    assert_true(not cam:leanInContact(), "and nothing is in the way")
 
     -- And the glass still stops it: a lean past it holds the eye a skin off.
     written = stub_cet()
@@ -880,7 +883,7 @@ do
     wall = glass()
     cam:applyPosition(55, 0, 0, DT, 1.0, 0.0, 0.0, 1.0, true)
     assert_near(standoff(eye_after(written)), 0.10, "mounted, the side glass holds the eye a skin off", 1e-9)
-    assert_true(cam.lean_clamp:inContact(), "contact with the glass is reported")
+    assert_true(cam:leanInContact(), "contact with the glass is reported")
 
     -- The chase camera's eye is outside the car, where Vehicle is a wall again.
     written = stub_cet()
@@ -888,6 +891,63 @@ do
     cam:applyPosition(20, 0, 0, DT, 1.0, 0.0, 0.0, 1.0, true)
     cam:applyChaseCamPosition(-20, 0, 0, DT)
     assert_true(last_mask == ON_FOOT_MASK, "the chase camera keeps the Vehicle filter while mounted")
+end
+
+do
+    -- Seated with the head resting high and back, the headliner 0.165 m above
+    -- the eye blocks the vertical part of the lean. One factor over the whole
+    -- lean cut the sideways and backward parts with it, to nothing; each axis
+    -- now keeps the room it has.
+    local up = to_world(BONE_AXES, v3(0, 0, 1))
+    local written = stub_cet()
+    local cam = bare_camera()
+    wall = { p = v3(BONE_AXES.W.x + up.x * 0.165, BONE_AXES.W.y + up.y * 0.165, BONE_AXES.W.z + up.z * 0.165),
+             n = v3(-up.x, -up.y, -up.z) }
+    cam:applyPosition(20, 20, 10, DT, 1.0, 0.0, 0.0, 1.0, true)
+    local w = written[#written]
+    assert_near(w.x, -0.20, "the sideways lean is whole under the headliner", 1e-9)
+    assert_near(w.y, -0.10, "the lean back is whole under the headliner", 1e-9)
+    assert_near(w.z, 0.065, "the lean up stops a skin under the headliner", 1e-9)
+    assert_near(standoff(eye_after(written)), 0.10, "held a skin off the headliner", 1e-9)
+    assert_true(cam:leanInContact(), "contact with the headliner is reported")
+
+    -- Back out in the open the lean goes whole again, and the clamp returns to
+    -- one sweep once every axis has released.
+    wall = nil
+    for _ = 1, 240 do cam:applyPosition(20, 20, 10, DT, 1.0, 0.0, 0.0, 1.0, true) end
+    w = written[#written]
+    assert_near(w.z, 0.20, "the lean up comes back once the headliner is gone", 1e-9)
+    assert_true(not cam.lean_split, "and the clamp is back to one sweep")
+    assert_true(not cam:leanInContact(), "with no contact reported")
+end
+
+do
+    -- The first leg held by a wall leaves the later legs whole: leaning into
+    -- the side glass while resting up and back.
+    local left = to_world(BONE_AXES, v3(-1, 0, 0))
+    local written = stub_cet()
+    local cam = bare_camera()
+    wall = { p = v3(BONE_AXES.W.x + left.x * 0.25, BONE_AXES.W.y + left.y * 0.25, BONE_AXES.W.z + left.z * 0.25),
+             n = v3(-left.x, -left.y, -left.z) }
+    cam:applyPosition(20, 20, 10, DT, 1.0, 0.0, 0.0, 1.0, true)
+    local w = written[#written]
+    assert_near(w.x, -0.15, "the sideways lean stops a skin off the glass", 1e-9)
+    assert_near(w.y, -0.10, "the lean back is whole beside the glass", 1e-9)
+    assert_near(w.z, 0.20, "the lean up is whole beside the glass", 1e-9)
+end
+
+do
+    -- Mounted with the sights up only part of the sideways lean reaches the eye
+    -- (the camera's share, the rig carries none in a seat). The clamp is handed
+    -- that part, so a wall the whole lean would reach leaves it alone.
+    local left = to_world(BONE_AXES, v3(-1, 0, 0))
+    local written = stub_cet()
+    local cam = bare_camera()
+    wall = { p = v3(BONE_AXES.W.x + left.x * 0.25, BONE_AXES.W.y + left.y * 0.25, BONE_AXES.W.z + left.z * 0.25),
+             n = v3(-left.x, -left.y, -left.z) }
+    cam:applyPosition(20, 0, 0, DT, 0.5, 0.0, 1.0, 1.0, true)
+    assert_near(written[#written].x, -0.10, "half the lean reaches the eye, untouched", 1e-9)
+    assert_true(not cam:leanInContact(), "and nothing is in the way of it")
 end
 
 do
@@ -907,7 +967,7 @@ do
              n = v3(-lean_dir.x, -lean_dir.y, -lean_dir.z) }
     cam.cached_settings.position_enabled = true
     cam:applyPosition(20, 0, 0, DT, 1.0, 0.0, 0.0, 1.0)
-    assert_true(cam.lean_clamp:inContact(), "a constructed camera clamps the lean")
+    assert_true(cam:leanInContact(), "a constructed camera clamps the lean")
 end
 
 -- ------------------------------------------------------------ weapon view
