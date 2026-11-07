@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1] - 2026-11-07
+
+### Fixed
+
+- lean works in car first person
+- a lean blocked on one axis no longer cuts the others in a car
+
 ## [1.5.0] - 2026-10-26
 
 ### Added
